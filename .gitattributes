@@ -1,0 +1,31 @@
+# ============================================================
+#  换行符与文件类型约定
+#
+#  为什么要有这个文件：不写的话，换行符完全交给每个 clone 者自己的
+#  core.autocrlf 决定。而本仓库里有两类**对换行敏感**的文件：
+#
+#    · *.bat —— cmd.exe 按当前 ANSI 代码页逐字节读取，LF 会导致解析错位。
+#               典型症状：echo 首字母被吃掉、报错「xxx 不是内部或外部命令」、
+#               以及最坑的「后半段静默不执行」。所以必须恒为 CRLF。
+#    · gradlew（无扩展名的 shell 脚本）—— Linux / macOS 上要能直接
+#               ./gradlew 执行，必须是 LF。
+# ============================================================
+
+# 其余文本文件按平台自动转换
+* text=auto
+
+# 批处理脚本：无论谁、在什么系统上 clone，都保持 CRLF
+*.bat text eol=crlf
+
+# Shell 脚本：保持 LF
+gradlew    text eol=lf
+*.sh       text eol=lf
+
+# 二进制：禁止 git 做换行转换，也不要尝试 diff
+*.png  binary
+*.jpg  binary
+*.jar  binary
+*.apk  binary
+*.zip  binary
+*.dex  binary
+gradle-wrapper.jar binary

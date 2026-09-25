@@ -1,0 +1,107 @@
+plugins {
+    id 'com.android.application'
+}
+
+// ============================================================
+//  正式签名凭据：从「本机文件」或「环境变量」读，绝不写进仓库。
+//
+//  优先级：bd2-android/gradle.local.properties（已在 .gitignore 里）> 环境变量
+//  没配齐就不注册 release 签名配置 —— release 产出未签名包，这是有意的。
+//  示例见同目录 gradle.local.properties.example。
+//
+//  注：Groovy 要求 plugins {} 必须是脚本里第一个语句块，
+//     所以这段只能放在它后面。
+// ============================================================
+def localProps = new Properties()
+def localPropsFile = rootProject.file('gradle.local.properties')
+if (localPropsFile.exists()) {
+    localPropsFile.withInputStream { localProps.load(it) }
+}
+
+def envOrProp = { String key -> localProps.getProperty(key) ?: System.getenv(key) }
+def releaseStore = envOrProp('RELEASE_STORE_FILE')
+def releaseStorePwd = envOrProp('RELEASE_STORE_PASSWORD')
+def releaseAlias = envOrProp('RELEASE_KEY_ALIAS')
+def releaseAliasPwd = envOrProp('RELEASE_KEY_PASSWORD')
+def hasReleaseSigning = releaseStore && releaseStorePwd && releaseAlias && releaseAliasPwd
+
+android {
+    namespace 'com.kkk.bd2viewer'
+    compileSdk 34
+
+    defaultConfig {
+        // 想换成自己的域名，改 namespace 与 applicationId，
+        // 并把 java 源码目录 com/kkk/bd2viewer 一起改名。
+        applicationId 'com.kkk.bd2viewer'
+        minSdk 26            // 需要 NotificationChannel 与 SAF 的现代行为
+        targetSdk 34
+        versionCode 1
+        versionName '1.0'
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    signingConfigs {
+        // 故意不配置 debug 签名。
+        // AGP 会自动用 ~/.android/debug.keystore（不存在时自动生成），于是：
+        //   · 任何人 clone 下来就能 assembleDebug，不需要任何额外文件；
+        //   · 仓库里不需要放密钥库（以前提交过一份 debug.keystore，已移除）；
+        //   · 每个人拿到的调试签名都不一样 —— 这是对的，共用一份调试密钥
+        //     反而意味着谁都能签一个「能覆盖安装到你机器上」的包。
+        if (hasReleaseSigning) {
+            release {
+                storeFile rootProject.file(releaseStore)
+                storePassword releaseStorePwd
+                keyAlias releaseAlias
+                keyPassword releaseAliasPwd
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            minifyEnabled false
+        }
+        release {
+            minifyEnabled false        // 见 app/proguard-rules.pro 里的说明：开 R8 前必须先补 keep 规则
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    // 前端资源放在 assets/web 下，压缩不影响 AssetManager 读取。
+    // 当前 assets 里没有 png（贴图是用户的本地文件，不打包），这条是给将来加图标留的保险。
+    androidResources {
+        noCompress 'png'
+    }
+
+    lint {
+        // 不因为 lint 报错中断构建 —— 这个工程靠 _test/ 里的真实浏览器用例把关，
+        // lint 的价值主要在于提醒。想要严格模式就把它改成 true。
+        abortOnError false
+        checkReleaseBuilds false
+    }
+
+    packaging {
+        jniLibs { useLegacyPackaging false }
+        resources { excludes += ['META-INF/*'] }
+    }
+}
+
+// 把前端改动同步进 assets，构建前自动跑。
+// 相对路径按「当前工程目录 app/」解析：app/../.. 才是仓库根，
+// 也就是说 bd2-local-viewer 与 bd2-android 必须并列（见 README 的目录结构）。
+//
+// 注意这里只做「原样拷贝」。真正的内联打包是 _tools/bundle.mjs，
+// 它必须显式跑一次（或在 tools/build_apk.bat 里跑）才会更新 app.bundle.html。
+tasks.register('syncWeb', Sync) {
+    from '../../bd2-local-viewer/public'
+    into 'src/main/assets/web'
+}
+
+tasks.named('preBuild') { dependsOn 'syncWeb' }

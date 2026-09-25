@@ -1,0 +1,25 @@
+# ============================================================
+#  本地签名配置示例
+#
+#  用法：
+#     cp gradle.local.properties.example gradle.local.properties
+#     然后填入你自己的密钥库信息。
+#
+#  gradle.local.properties 已被 .gitignore 忽略，**不会被提交**。
+#  也可以用同名环境变量代替（见 app/build.gradle 里的 envOrProp）。
+#
+#  生成密钥库（一次性）：
+#     keytool -genkeypair -v -keystore my-release.jks \
+#             -alias bd2viewer -keyalg RSA -keysize 2048 -validity 10000
+#
+#  警告：
+#    · 千万不要把密钥库和口令提交到任何仓库；
+#    · 千万不要把口令写进 app/build.gradle 或 gradle.properties；
+#    · 密钥库文件丢了就再也无法给你的 App 发升级包，请自行备份。
+# ============================================================
+
+# 密钥库文件路径。相对路径按 bd2-android/ 解析。
+RELEASE_STORE_FILE=my-release.jks
+RELEASE_STORE_PASSWORD=
+RELEASE_KEY_ALIAS=bd2viewer
+RELEASE_KEY_PASSWORD=

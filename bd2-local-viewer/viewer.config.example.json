@@ -1,0 +1,21 @@
+{
+  "_说明": [
+    "把这个文件复制成 viewer.config.json 再改（viewer.config.json 已被 .gitignore 忽略）。",
+    "roots 里每一项是一个「允许被读取的目录」，服务只会读这里声明过的路径。",
+    "id 是前端用来记住排序/筛选的键，建议用 ASCII；label 随便写，显示在顶部下拉框里。",
+    "Windows 路径写在 JSON 里要双反斜杠，例如 E:\\\\Games\\\\BrownDust2\\\\mods",
+    "也可以直接用正斜杠：E:/Games/BrownDust2/mods，更省事。"
+  ],
+
+  "host": "127.0.0.1",
+  "port": 8137,
+  "maxDepth": 5,
+
+  "roots": [
+    {
+      "id": "my-mods",
+      "label": "我的 Spine 资产目录",
+      "path": "E:/path/to/your/spine/assets"
+    }
+  ]
+}

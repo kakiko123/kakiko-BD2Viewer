@@ -1,0 +1,1545 @@
+:root {
+  --g900: #111827;
+  --g850: #182030;
+  --g800: #1f2937;
+  --g750: #263244;
+  --g700: #374151;
+  --g600: #4b5563;
+  --g500: #6b7280;
+  --g400: #9ca3af;
+  --g300: #d1d5db;
+  --indigo: #4f46e5;
+  --indigo-l: #6366f1;
+  --indigo-300: #a5b4fc;
+  --text: #f3f4f6;
+  --danger: #ef4444;
+  --ok: #34d399;
+  --radius: 6px;
+  /* 动效：统一的曲线与时长。UI 动效一律 <300ms，进场/退出用 ease-out。 */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --dur-press: 120ms;    /* 按压反馈 */
+  --dur-quick: 160ms;    /* 小控件状态切换 */
+  --dur-move: 200ms;     /* 屏幕上 A→B 的位移 */
+}
+
+* { box-sizing: border-box; }
+
+html {
+  /* 触屏点按不再闪一层灰色高亮（那是「网页感」最响的信号），
+     代价是每个可点元素必须自己给 :active 反馈。 */
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;   /* 横屏时不要放大正文字号 */
+}
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;        /* 应用外壳自己滚动，不要下拉刷新/整页橡皮筋 */
+}
+
+body {
+  background: var(--g900);
+  color: var(--text);
+  font: 14px/1.5 "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+}
+
+.hidden { display: none !important; }
+
+/* 必须放在组件规则之前也不够，用 !important 兜住所有 display 覆盖 */
+[hidden] { display: none !important; }
+
+/* ------------------------------------------------------------ 布局 */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;   /* 老浏览器兜底 */
+  height: 100dvh;  /* 地址栏收起/展开时跟着变，底部按钮不会被压到屏幕外 */
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 14px;
+  background: var(--g850);
+  border-bottom: 1px solid #000;
+  flex: none;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+.logo { font-size: 17px; }
+
+.badge {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(99, 102, 241, .22);
+  color: var(--indigo-300);
+  border: 1px solid rgba(99, 102, 241, .4);
+}
+
+.nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* APK 模式顶部的目录/权限提示条 */
+.storage-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 7px 12px;
+  background: #1b2230;
+  border-bottom: 1px solid #000;
+  font-size: 12px;
+  color: #b9c4d6;
+}
+.storage-bar[hidden] { display: none; }
+.storage-bar .sb-path {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  color: #e6edf7;
+  word-break: break-all;
+}
+.storage-bar .sb-tip {
+  flex: 1 1 100%;
+  color: #ffc48a;
+  line-height: 1.5;
+}
+.storage-bar .btn.tiny {
+  padding: 3px 8px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--g800);
+  flex: none;
+}
+
+.side-left { width: 268px; border-right: 1px solid #000; }
+.side-right { width: 320px; border-left: 1px solid #000; }
+
+.stage {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+  background: var(--g900);
+}
+
+/* ------------------------------------------------------------ 通用控件 */
+
+.btn {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, .08);
+  background: var(--g700);
+  color: var(--text);
+  padding: 6px 11px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 13px;
+  font-family: inherit;
+  transition: background var(--dur-press) var(--ease-out),
+              border-color var(--dur-press) var(--ease-out),
+              transform var(--dur-press) var(--ease-out);
+  white-space: nowrap;
+  /* 声明「这里不会双击缩放」：点击不必等 300ms 的二次点击判定 */
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+/* 触屏上没有真正的 hover：不门控的话点一下就会「粘」在 hover 态上 */
+@media (hover: hover) and (pointer: fine) {
+  .btn:hover { background: var(--g600); }
+  .btn.primary:hover { background: var(--indigo-l); }
+}
+/* 按压反馈在 pointerdown 那一刻就给（不用等 click） */
+.btn:active { transform: scale(.97); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn:disabled:active { transform: none; }
+.btn.primary { background: var(--indigo); border-color: var(--indigo); }
+.btn.tiny { padding: 3px 8px; font-size: 12px; }
+
+.select, .text-input {
+  background: var(--g700);
+  color: var(--text);
+  border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 13px;
+  outline: none;
+  max-width: 100%;
+}
+.select:focus, .text-input:focus { border-color: var(--indigo-l); }
+.select.full { width: 100%; }
+.tiny-input { width: 92px; }
+.text-input { width: 100%; }
+
+.color-input {
+  width: 40px;
+  height: 30px;
+  padding: 1px;
+  background: var(--g700);
+  border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+input[type="range"] {
+  accent-color: var(--indigo-l);
+  cursor: pointer;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.row + .row { margin-top: 6px; }
+.row.small { font-size: 12px; color: var(--g300); }
+.row.small + .row.small { margin-top: 4px; }
+.grow { flex: 1; min-width: 0; }
+.lbl { color: var(--g400); font-size: 12px; white-space: nowrap; }
+.val { font-size: 12px; color: var(--g300); width: 46px; text-align: right; }
+.muted { color: var(--g400); }
+.small { font-size: 12px; }
+.link { color: var(--indigo-300); text-decoration: underline; cursor: pointer; }
+.count { color: var(--g400); font-size: 12px; }
+
+/* ------------------------------------------------------------ 左侧栏 */
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 8px 0;
+  flex: none;
+}
+.tab {
+  flex: 1;
+  appearance: none;
+  border: none;
+  background: rgba(255, 255, 255, .06);
+  color: var(--g300);
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 13px;
+  font-family: inherit;
+}
+.tab.active { background: var(--g600); color: #fff; }
+
+.pane {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 10px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.current-item {
+  background: rgba(255, 255, 255, .04);
+  border: 1px solid rgba(255, 255, 255, .07);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+.ci-name { font-weight: 600; font-size: 13px; word-break: break-all; }
+.ci-sub { color: var(--g400); font-size: 11px; word-break: break-all; margin-top: 2px; }
+
+.group {
+  border-top: 1px solid rgba(255, 255, 255, .07);
+  padding-top: 10px;
+  margin-top: 6px;
+}
+.group h4 {
+  margin: 0 0 7px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--indigo-300);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.list {
+  overflow-y: auto;
+  border-radius: var(--radius);
+  background: rgba(0, 0, 0, .18);
+  border: 1px solid rgba(255, 255, 255, .05);
+}
+
+.anim-list { max-height: 30vh; }
+.layer-list { flex: 1; min-height: 120px; }
+
+.list-item {
+  padding: 5px 9px;
+  cursor: pointer;
+  font-size: 13px;
+  border-bottom: 1px solid rgba(255, 255, 255, .03);
+  word-break: break-all;
+}
+.list-item:last-child { border-bottom: none; }
+.list-item:hover { background: rgba(255, 255, 255, .06); }
+.list-item.active { background: var(--indigo); color: #fff; }
+
+.layer-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 9px;
+  cursor: pointer;
+  font-size: 12.5px;
+  border-bottom: 1px solid rgba(255, 255, 255, .03);
+}
+.layer-row:hover { background: rgba(255, 255, 255, .06); }
+.layer-row.selected { background: rgba(79, 70, 229, .35); }
+.layer-row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.layer-row.hidden-layer .name { color: var(--g500); text-decoration: line-through; }
+
+.hint-box {
+  background: rgba(99, 102, 241, .12);
+  border: 1px solid rgba(99, 102, 241, .3);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--g300);
+  margin-bottom: 8px;
+  line-height: 1.6;
+}
+
+.progress-note {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--indigo-300);
+  background: rgba(99, 102, 241, .12);
+  border-radius: var(--radius);
+  padding: 6px 9px;
+}
+
+/* ------------------------------------------------------------ 舞台 */
+
+.stage-inner {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #000;
+}
+
+.bg-layer {
+  position: absolute;
+  inset: 0;
+  background: #1f2937;
+  z-index: 0;
+}
+.bg-layer img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  user-select: none;
+}
+
+.player-host {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: hidden;
+}
+
+.player-host canvas { display: block; }
+
+.overlay-canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.layer-toast {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(17, 24, 39, .88);
+  border: 1px solid var(--g700);
+  border-radius: 999px;
+  padding: 6px 16px;
+  font-size: 12.5px;
+  z-index: 5;
+  pointer-events: none;
+  backdrop-filter: blur(4px);
+}
+.layer-toast b { color: var(--indigo-300); }
+
+.spinner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(17, 24, 39, .72);
+  z-index: 6;
+  font-size: 13px;
+}
+.spinner .dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--indigo-l);
+  animation: pulse 1s infinite ease-in-out;
+}
+@keyframes pulse {
+  0%, 100% { opacity: .25; transform: scale(.8); }
+  50% { opacity: 1; transform: scale(1.25); }
+}
+
+.error-box {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 78%;
+  background: rgba(127, 29, 29, .94);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  padding: 9px 13px;
+  font-size: 12.5px;
+  z-index: 7;
+  white-space: pre-wrap;
+  word-break: break-all;
+  cursor: pointer;   /* 点一下就关 */
+}
+
+.empty-state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--g400);
+  z-index: 4;
+  pointer-events: none;
+}
+.empty-icon { font-size: 34px; opacity: .55; }
+.empty-sub { font-size: 12px; opacity: .7; }
+
+.seek {
+  flex: none;
+  width: 100%;
+  margin-top: 6px;
+  accent-color: var(--indigo-l);
+}
+
+/* ------------------------------------------------------------ 右侧资产列表 */
+
+.side-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 10px 10px 6px;
+  font-weight: 600;
+  font-size: 13px;
+  flex: none;
+}
+
+.side-right > .text-input { flex: none; margin: 0 10px; width: calc(100% - 20px); }
+.filters { padding: 6px 10px; justify-content: space-between; flex: none; }
+
+.asset-list { flex: 1; min-height: 0; margin: 6px 10px 10px; }
+
+.asset-group-title {
+  padding: 6px 9px 4px;
+  font-size: 11px;
+  color: var(--g500);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  /* 必须不透明：半透明底会让滚动到标题下面的资产名透出来，
+     看起来就是「字体重叠」（2026-09-24 用户截图实测） */
+  background: #263244;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.asset-item { padding: 6px 9px; cursor: pointer; border-bottom: 1px solid rgba(255, 255, 255, .03); }
+.asset-item:hover { background: rgba(255, 255, 255, .06); }
+.asset-item.active { background: var(--indigo); }
+.asset-item .ai-name { font-size: 12.5px; word-break: break-all; }
+.asset-item .ai-sub { font-size: 11px; color: var(--g400); word-break: break-all; margin-top: 1px; }
+.asset-item.active .ai-sub { color: rgba(255, 255, 255, .75); }
+.asset-item.bad { opacity: .62; }
+.asset-item .ai-warn { color: #fca5a5; font-size: 11px; margin-top: 2px; }
+
+/* ------------------------------------------------------------ 弹窗 */
+
+.modal-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(17, 24, 39, .72);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 16px;
+}
+
+.modal {
+  background: var(--g850);
+  border: 1px solid var(--g700);
+  border-radius: 10px;
+  width: 100%;
+  max-width: 560px;
+  max-height: 84vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, .5);
+}
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--g700);
+}
+.modal-head h3 { margin: 0; font-size: 15px; }
+.modal-body { padding: 14px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.modal-foot {
+  padding: 10px 14px;
+  border-top: 1px solid var(--g700);
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.icon-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--g400);
+  font-size: 15px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.icon-btn:hover { background: var(--g700); color: #fff; }
+
+.dropzone {
+  border: 2px dashed var(--g600);
+  border-radius: 8px;
+  padding: 22px;
+  text-align: center;
+  color: var(--g400);
+  font-size: 13px;
+  transition: border-color .12s, background .12s;
+}
+.dropzone.over { border-color: var(--indigo-l); background: rgba(99, 102, 241, .12); color: var(--text); }
+
+table.keys { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.keys td { padding: 5px 8px; border-bottom: 1px solid rgba(255, 255, 255, .06); }
+table.keys td:first-child {
+  color: var(--indigo-300);
+  font-family: ui-monospace, Consolas, monospace;
+  white-space: nowrap;
+  width: 40%;
+}
+
+/* ------------------------------------------------- 删除 / 批量选择 */
+
+/* 危险动作（删除）在视觉上必须先声夺人：这是不可逆的操作，
+   颜色是唯一在点下去之前能提醒用户的东西。 */
+.btn.danger {
+  background: transparent;
+  border-color: rgba(239, 68, 68, .62);
+  color: #fca5a5;
+}
+@media (hover: hover) and (pointer: fine) {
+  .btn.danger:hover { background: rgba(239, 68, 68, .16); border-color: var(--danger); color: #fff; }
+}
+/* 填满整行的按钮：菜单里只有两三个选项，撑满是给手指用的 */
+.btn.block { display: block; width: 100%; text-align: center; min-height: 42px; font-size: 14px; }
+
+/* 批量选择操作条。默认不占位，进入选择模式才展开。 */
+.gal-selbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+  border-radius: 9px;
+  background: var(--g850);
+  border: 1px solid rgba(99, 102, 241, .3);
+}
+.gal-selbar-spacer { flex: 1; }
+.gal-selbar .row.small span { font-size: 12.5px; }
+
+/* 卡片上的选择圈：平时完全不存在（不占位、不可见），
+   进入选择模式才让出一点位置 —— 不做动画，避免和拖动的 FLIP 抢 GPU。 */
+.card-check {
+  display: none;
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  z-index: 3;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, .55);
+  background: rgba(10, 14, 22, .6);
+  pointer-events: none;
+}
+.card-check::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: transparent;
+}
+body.card-select .card-check { display: block; }
+body.card-select .card { cursor: pointer; }
+body.card-select .card.sel { border-color: var(--indigo); box-shadow: 0 0 0 2px var(--indigo); }
+body.card-select .card.sel .card-check { border-color: var(--indigo); background: var(--indigo); }
+body.card-select .card.sel .card-check::after { background: #fff; }
+/* 选择模式下拖动把手没有意义（拖不了），藏掉免得误导 */
+body.card-select .card-drag { display: none; }
+
+/* 长按菜单里的资产名 */
+.menu-title { font-size: 14px; font-weight: 600; word-break: break-all; }
+
+/* 确认弹窗：警告文案 + 待删清单 */
+.danger-note {
+  margin: 0;
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: rgba(239, 68, 68, .12);
+  border: 1px solid rgba(239, 68, 68, .38);
+  color: #fecaca;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.danger-note b { color: #fff; }
+.confirm-list {
+  max-height: 38vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--g700);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--g900);
+}
+.confirm-row { font-size: 12px; }
+.confirm-row .cr-name { font-weight: 600; word-break: break-all; }
+.confirm-row .cr-files {
+  color: var(--g400);
+  word-break: break-all;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px;
+  margin-top: 1px;
+}
+.modal.narrow { max-width: 420px; }
+
+/* ============================================================ 手机布局（APK）
+   竖屏只有一列：舞台铺满，左右两栏改成从底部升起的抽屉，用底部标签切换。
+   这些规则全部挂在 body.is-touch 上 —— 该类只在 APK（有 BD2Native）时添加，
+   桌面版无论窗口多窄都不会受影响。
+   ------------------------------------------------------------------------ */
+
+.mnow, .mquick, .mtabs { display: none; }
+.sheet-scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); z-index: 35; }
+
+body.is-touch .nav { padding: 6px 10px; gap: 8px; }
+body.is-touch .brand { font-size: 13px; }
+body.is-touch .badge { display: none; }
+body.is-touch .nav-actions .btn,
+body.is-touch .nav-actions .select { min-height: 38px; font-size: 13px; }
+
+body.is-touch .storage-bar { font-size: 11.5px; padding: 6px 10px; }
+body.is-touch .storage-bar .btn.tiny { min-height: 34px; padding: 5px 12px; font-size: 12.5px; }
+/* 手机首页不放目录条：内容搬进「设置 → 文件目录」，首页只留舞台 */
+body.is-touch .storage-bar { display: none !important; }
+
+body.is-touch .body { position: relative; }
+body.is-touch .stage { padding: 6px; }
+
+/* 当前资产名：手机上左侧栏收进抽屉了，舞台下面补一行 */
+body.is-touch .mnow {
+  display: block;
+  flex: none;
+  padding: 5px 12px;
+  font-size: 12.5px;
+  color: var(--g400);
+  background: var(--g900);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 快捷播放条 */
+body.is-touch .mquick {
+  display: flex;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--g850);
+  border-top: 1px solid #000;
+  flex: none;
+}
+body.is-touch .mquick .btn { flex: 1; min-height: 46px; font-size: 15px; }
+
+/* 底部标签 */
+body.is-touch .mtabs {
+  display: flex;
+  gap: 6px;
+  padding: 6px 10px calc(6px + env(safe-area-inset-bottom, 0px));
+  background: var(--g850);
+  border-top: 1px solid rgba(255, 255, 255, .08);
+  flex: none;
+  position: relative;
+  z-index: 45;
+}
+.mtab {
+  flex: 1;
+  appearance: none;
+  border: none;
+  border-radius: 8px;
+  background: var(--g750);
+  color: var(--g300);
+  min-height: 48px;
+  font-size: 14px;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.mtab.active { background: var(--indigo); color: #fff; }
+
+/* 两栏 → 底部抽屉 */
+body.is-touch .side {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: auto !important;
+  height: 66%;
+  max-height: 66%;
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 14px 14px 0 0;
+  box-shadow: 0 -10px 30px rgba(0, 0, 0, .5);
+  transform: translateY(103%);
+  transition: transform .2s ease-out;
+  z-index: 40;
+  overflow: hidden;
+}
+body.is-touch .side.open { transform: translateY(0); }
+body.is-touch .side::before {
+  content: '';
+  position: absolute;
+  top: 7px;
+  left: 50%;
+  margin-left: -20px;
+  width: 40px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, .28);
+}
+body.is-touch .side-left .tabs { display: none; }
+body.is-touch .pane { padding: 18px 12px 26px; }
+
+/* 触摸目标放大：Android 无障碍建议最小 48px，这里按钮取 44~48 */
+body.is-touch .btn { min-height: 44px; padding: 8px 12px; font-size: 14px; }
+body.is-touch .nav-actions .btn { min-height: 38px; padding: 6px 10px; }
+body.is-touch .select,
+body.is-touch .text-input { min-height: 42px; font-size: 15px; }
+body.is-touch .list-item { padding: 11px 12px; font-size: 14.5px; }
+body.is-touch .asset-item { padding: 11px 12px; }
+body.is-touch .asset-item .ai-name { font-size: 14px; }
+body.is-touch .asset-item .ai-sub { font-size: 12px; }
+body.is-touch .layer-row { padding: 9px 12px; font-size: 13.5px; }
+body.is-touch input[type=range] { height: 36px; }
+body.is-touch .seek { margin-top: 4px; }
+body.is-touch .row { gap: 8px; }
+body.is-touch .modal { max-height: 90vh; }
+body.is-touch .modal-body { gap: 12px; }
+
+/* ------------------------------------------------------------ 滚动条 */
+
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .16); border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, .3); }
+
+/* ------------------------------------------------------------ 窄屏 */
+
+@media (max-width: 1180px) {
+  .side-right { width: 250px; }
+  .side-left { width: 236px; }
+}
+@media (max-width: 900px) {
+  /* 手机 / 窄屏：舞台在上、控制在中、资产列表在下，整页滚动。
+     注意不能给三块都设 max-height 之和 > 100vh，否则内容被裁掉且无法滚动。 */
+  .body { flex-direction: column; overflow-y: auto; }
+  .stage { order: 1; flex: none; height: 50vh; min-height: 240px; }
+  .side { width: 100%; border: none; flex: none; max-height: none; }
+  .side-left { order: 2; }
+  .side-right { order: 3; border-top: 1px solid #000; }
+  .pane { overflow: visible; flex: none; }
+  .anim-list { max-height: 42vh; }
+  .layer-list { flex: none; min-height: 160px; max-height: 42vh; }
+  .asset-list { flex: none; min-height: 180px; max-height: 54vh; }
+  .nav-actions .btn { padding: 5px 9px; font-size: 12px; }
+}
+@media (max-width: 620px) {
+  .nav { padding: 6px 8px; gap: 6px; }
+  .brand { font-size: 13px; }
+  .badge { display: none; }
+  .stage { height: 44vh; min-height: 190px; padding: 4px; }
+  .side-left .group h4 { font-size: 12px; }
+}
+
+/* APK / 触屏模式：手机上没有键盘，所有按键提示换成触摸说法 */
+.touch-only { display: none; }
+body.is-touch .kb-only { display: none; }
+body.is-touch .touch-only { display: inline; }
+
+/* ------------------------------------------------------------ 平铺浏览（主界面）
+   主界面不直接播动画，而是一张张卡片平铺；点卡片进播放页。
+   播放顺序有三种来源（见 app.js 的 loadSort / orderedList）：
+     · 手动 —— 拖动卡片调整（长按卡片，或按住左上角 ⠿ 立刻拖）
+     · 名称 —— 按文件名升/降序
+     · 日期 —— 按文件改动时间升/降序
+   排序结果同时决定左列表和播放页 ◀▶ 的走向，不只是画面顺序。 */
+
+.gallery {
+  flex: 1;
+  min-width: 0;
+  display: none;
+  flex-direction: column;
+  background: var(--g900);
+  padding: 8px;
+  min-height: 0;
+}
+body.view-grid .gallery { display: flex; }
+body.view-grid .stage { display: none; }
+/* 平铺页不播动画：当前资产名 / 快捷播放条一并收起（进度条在 .stage 里，跟着一起隐藏） */
+/* 平铺首页不是播放页：舞台下方的资产名、快捷播放条，以及底部那四个标签
+   （资产 / 播放 / 图层 / 设置）整条都不该出现，抽屉也没地方打开。
+   注意「设置」因此少了一个入口 —— 由顶栏那颗补上，
+   见 app.js 的 syncTouchSettingsEntry()。 */
+body.view-grid .mnow,
+body.view-grid .mquick,
+body.view-grid .mtabs { display: none !important; }
+
+/* 标题行。窄屏自动折成两行：上行标题+提示，下行排序控件。 */
+.gal-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding: 2px 2px 8px;
+  flex: none;
+}
+.gal-head-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.gal-head-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;          /* 窄屏上宁可折行，也不要顶出屏幕 */
+  justify-content: flex-end;
+  gap: 6px;
+  flex: none;
+  max-width: 100%;          /* 折行时按容器宽度收窄（否则 flex:none 会取 max-content 撑破） */
+  min-width: 0;
+  margin-left: auto;
+}
+.gal-title { font-weight: 600; font-size: 13px; white-space: nowrap; }
+.gal-thumb { font-size: 12px; color: var(--indigo-300); white-space: nowrap; }
+.gal-hint { flex: 1; min-width: 0; font-size: 12px; color: var(--g500); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 排序切换（手动 / 名称 / 日期）。
+   滑块指示器靠 transform 平移 —— 只动 transform，不触发布局。
+   这个控件一天要被点几十次，所以动效刻意压到很短（160ms），只是让状态变化可读。 */
+.gal-sort {
+  --i: 0;                /* 当前选中项的下标，JS 更新 */
+  --gs-w: 46px;          /* 每格宽度（三个按钮等宽，滑块才能按格平移） */
+  --gs-pad: 3px;
+  position: relative;
+  display: flex;
+  flex: none;
+  padding: var(--gs-pad);
+  border-radius: 9px;
+  background: var(--g850);
+  border: 1px solid rgba(255, 255, 255, .08);
+}
+.gs-pill {
+  position: absolute;
+  top: var(--gs-pad);
+  left: var(--gs-pad);
+  width: var(--gs-w);
+  height: calc(100% - var(--gs-pad) * 2);
+  border-radius: 6px;
+  background: var(--indigo);
+  transform: translate3d(calc(var(--i) * var(--gs-w)), 0, 0);
+  transition: transform var(--dur-quick) var(--ease-out);
+}
+.gs-btn {
+  position: relative;
+  z-index: 1;
+  appearance: none;
+  width: var(--gs-w);
+  padding: 5px 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--g400);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  transition: color var(--dur-quick) var(--ease-out);
+}
+.gs-btn[aria-pressed="true"] { color: #fff; font-weight: 600; }
+@media (hover: hover) and (pointer: fine) {
+  .gs-btn:hover { color: var(--text); }
+}
+
+/* 升降序切换。手动模式下点它 = 反转当前顺序，所以三种模式都能用。 */
+.gs-dir {
+  appearance: none;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--g850);
+  border: 1px solid rgba(255, 255, 255, .08);
+  color: var(--g300);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  transition: background var(--dur-press) var(--ease-out),
+              color var(--dur-press) var(--ease-out),
+              transform var(--dur-press) var(--ease-out);
+}
+@media (hover: hover) and (pointer: fine) {
+  .gs-dir:hover { background: var(--g750); color: #fff; }
+}
+.gs-dir:active { transform: scale(.94); }
+
+.gal-grid {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  /* 关键：卡片带 overflow:hidden，作为网格项时「自动最小尺寸」会算成 0，
+     于是 auto 行高塌成 2px（只剩边框），卡片互相重叠。用 max-content 让行高
+     直接取该行内容高度（缩略图 + 文字），卡片再拉伸填满行，行内高度统一。 */
+  grid-auto-rows: max-content;
+  gap: 10px;
+  align-content: start;
+  padding: 2px;
+}
+
+.card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--g800);
+  border: 1px solid rgba(255, 255, 255, .07);
+  border-radius: 10px;
+  overflow: hidden;
+  cursor: pointer;
+  /* 卡片是控件不是正文：长按不应该选中标题文字 / 弹分享菜单，
+     否则会跟「长按抬起卡片」打架。正文该能选的地方（播放页标题）没动。 */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  transition: border-color var(--dur-press) var(--ease-out),
+              box-shadow var(--dur-press) var(--ease-out);
+}
+@media (hover: hover) and (pointer: fine) {
+  .card:hover { border-color: rgba(255, 255, 255, .2); }
+}
+/* 点按反馈：立刻变边框（不用等 click），又不和「长按抬起」打架 */
+.card:active { border-color: rgba(255, 255, 255, .3); }
+.card.active { border-color: var(--indigo); box-shadow: 0 0 0 1px var(--indigo); }
+.card.bad { opacity: .62; }
+
+/* 拖动中的卡片：脱离子网格、固定定位到视口，靠 transform 跟手。
+   transition 必须关掉，否则跟手会有一帧延迟（手感发飘）。 */
+.card.dragging {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 60;
+  margin: 0;
+  pointer-events: none;      /* 否则 elementFromPoint 只能摸到自己，落点算不准 */
+  cursor: grabbing;
+  transition: none;
+  will-change: transform;
+  border-color: var(--indigo-l);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, .6), 0 0 0 1px rgba(99, 102, 241, .7);
+}
+/* 松手回位：只在这 200ms 里给 transform 过渡（FLIP 的收尾） */
+.card.settling { transition: transform var(--dur-move) var(--ease-out); }
+
+/* 拖动时留在网格里的空位：位置就是落点，其他卡片围着它流开 */
+.card-ph {
+  border-radius: 10px;
+  border: 1px dashed rgba(99, 102, 241, .55);
+  background: rgba(79, 70, 229, .10);
+}
+
+body.card-dragging { cursor: grabbing; }
+/* 拖动期间不要让浏览器顺手把页面也滚了（自动滚动由 JS 的 rAF 循环负责） */
+body.card-dragging .gal-grid { overscroll-behavior: none; }
+
+.card-thumb {
+  position: relative;
+  width: 100%;
+  min-height: 110px;
+  aspect-ratio: 16 / 11;
+  background: #0b0f18;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.card-thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.card-thumb.pending::after {
+  content: '生成缩略图…';
+  font-size: 11px;
+  color: var(--g500);
+  animation: pulse 1.4s infinite ease-in-out;
+}
+/* 坏文件/超时：明确告诉用户这张生成不了，队列会跳过它继续 */
+.card-thumb.failed::after {
+  content: '无法生成缩略图';
+  font-size: 11px;
+  color: var(--g500);
+}
+
+.card-info { padding: 6px 8px 8px; }
+.card-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-all;
+}
+.card-sub { font-size: 11px; color: var(--g400); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* 拖动把手：伸手就往左上角摸，所以放左上。
+   touch-action: none —— 从把手起手一定是拖动，不可能变成滚动，所以按下即拖、不用长按等待。
+   卡片其它地方是 touch-action: manipulation（允许滚动），靠长按 180ms 进入拖动。 */
+.card-drag {
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  z-index: 2;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: rgba(10, 14, 22, .66);
+  border: 1px solid rgba(255, 255, 255, .16);
+  color: var(--g300);
+  font-size: 14px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  /* 把手是二段提示：平时半透明，给卡片缩略图让路；
+     一按下就实心高亮 —— 反馈在 pointerdown 那一刻给，不等 click。 */
+  opacity: .55;
+  transition: opacity var(--dur-quick) var(--ease-out),
+              background var(--dur-press) var(--ease-out),
+              color var(--dur-press) var(--ease-out);
+}
+@media (hover: hover) and (pointer: fine) {
+  .card:hover .card-drag { opacity: 1; }
+}
+.card-drag:active { cursor: grabbing; background: rgba(79, 70, 229, .85); color: #fff; opacity: 1; }
+/* 拖动中的卡片：把手跟着一起动，没必要留着 */
+.card.dragging .card-drag { opacity: 0; }
+
+.card-fs {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  z-index: 2;
+  appearance: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: rgba(10, 14, 22, .66);
+  border: 1px solid rgba(255, 255, 255, .16);
+  color: var(--g300);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  transition: background var(--dur-press) var(--ease-out),
+              color var(--dur-press) var(--ease-out),
+              transform var(--dur-press) var(--ease-out);
+}
+.card-fs:active { transform: scale(.9); }
+@media (hover: hover) and (pointer: fine) {
+  .card-fs:hover { background: var(--indigo); color: #fff; }
+}
+
+/* 触屏：卡片再小一点，两列排得下；把手/全屏钮放大到好按 */
+body.is-touch .gallery { padding: 6px; }
+body.is-touch .gal-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+body.is-touch .gal-head { gap: 6px 8px; }
+body.is-touch .gal-head-main { flex: 1 1 100%; }        /* 标题占满一行，控件换到第二行 */
+body.is-touch .gal-head-tools { margin-left: 0; }
+body.is-touch .gal-hint { display: none; }              /* 手机上提示文案省掉，把宽度让给排序控件 */
+body.is-touch .card { border-radius: 8px; }
+body.is-touch .card-drag, body.is-touch .card-fs { width: 34px; height: 34px; font-size: 15px; }
+/* 手指按住不动就是在「抬起」卡片，把手不需要常驻可见 —— 手机上默认淡一点，长按后整张卡浮起 */
+body.is-touch .card-drag { opacity: .4; }
+/* 排序控件在手机上放大到 34px 高（鼠标 27px 够用，手指不够） */
+body.is-touch .gal-sort { --gs-w: 54px; --gs-pad: 4px; }
+body.is-touch .gs-btn { padding: 8px 0; font-size: 13px; }
+body.is-touch .gs-dir { width: 34px; height: 34px; font-size: 14px; }
+
+/* 播放页左上角「回到平铺」图标 */
+body.is-touch:not(.view-grid) .grid-fab { display: flex; }
+.grid-fab { left: 10px; right: auto; }
+
+/* 系统开了「减少动态效果」：去掉位移/缩放，只保留帮助理解的透明度与颜色变化。
+   拖动排序本身照常工作，只是落位的飞入动画变成瞬移。 */
+@media (prefers-reduced-motion: reduce) {
+  .card,
+  .btn,
+  .card-drag,
+  .card-fs,
+  .gs-btn,
+  .gs-dir {
+    transition-property: background-color, border-color, color, opacity !important;
+  }
+  .gs-pill { transition: none; }
+  .card.settling { transition: none; }
+  .card.dragging { box-shadow: 0 6px 18px rgba(0, 0, 0, .5), 0 0 0 1px rgba(99, 102, 241, .7); }
+}
+
+/* ------------------------------------------------------------ 全屏（沉浸）模式
+   屏幕上只剩舞台：顶栏 / 状态条 / 侧栏 / 进度条 / 底部标签全部收起，
+   顶部留一条半透明操作条（☰ 文件列表、◀▶ 切换资产、✕ 退出），
+   底部留一条动画切换条（◀▶ 切动画），静置几秒后一起淡出。 */
+
+/* 画面右上角的 ⛶ 全屏图标：只在触屏模式的常规布局里出现 */
+.fs-fab {
+  display: none;
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 8;
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, .18);
+  border-radius: 10px;
+  background: rgba(18, 22, 32, .62);
+  color: var(--g300);
+  width: 40px;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+body.is-touch .fs-fab { display: flex; }
+body.is-touch .fs-fab:active { background: rgba(40, 48, 66, .85); }
+body.is-immersive .fs-fab { display: none !important; }
+
+/* 播放页左右两侧：切上一个 / 下一个**动画**（切资产在底部那条 ◀◀/▶▶ 上）。
+   显示条件故意分成两层，各自只写一处（见 ARCHITECTURE.md 的「不变量 R1 可见性归属」）：
+     · 随**模式**变化的条件（沉不沉浸）在这里的 CSS 里；
+     · 随**数据**变化的条件（当前资产有没有第二个动画可切）由 JS 挂 body 上的 .stage-nav-avail。
+   父级 .stage 是 flex 列：上面是画布、下面是进度条，所以纵向中心要扣掉进度条那一行，
+   不然箭头会比画面中心低一截。 */
+.stage { --seek-h: 28px; }         /* 进度条那一行的高度（range 约 22px + margin-top 6px） */
+.stage-nav {
+  display: none;
+  position: absolute;
+  top: calc((100% - var(--seek-h)) / 2);
+  transform: translateY(-50%);
+  z-index: 8;
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, .18);
+  border-radius: 50%;
+  background: rgba(18, 22, 32, .62);
+  color: var(--g300);
+  width: 44px;
+  height: 44px;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  touch-action: manipulation;
+  user-select: none;
+}
+@media (hover: hover) and (pointer: fine) {
+  .stage-nav:hover { background: rgba(40, 48, 66, .85); color: #fff; }
+}
+.stage-nav:active { background: rgba(40, 48, 66, .95); }
+.stage-nav.prev { left: 10px; }
+.stage-nav.next { right: 10px; }
+body.stage-nav-avail:not(.view-grid) .stage-nav { display: flex; }
+/* 沉浸模式顶部条里已经有同一对「切资产」按钮，这里不重复占位 */
+body.is-immersive .stage-nav { display: none !important; }
+
+.fsbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: calc(8px + env(safe-area-inset-top, 0px)) 12px 10px;
+  background: linear-gradient(180deg, rgba(0, 0, 0, .78), rgba(0, 0, 0, 0));
+  transition: opacity .3s ease;
+}
+.fsbar.dim { opacity: .1; }
+
+/* 底部动画切换条：◀ 动画名 ▶ */
+.fs-anim-bar {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, .16);
+  background: rgba(10, 12, 18, .72);
+  backdrop-filter: blur(4px);
+  transition: opacity .3s ease;
+  max-width: 94vw;
+}
+.fs-anim-bar.dim { opacity: .1; }
+
+.fs-btn {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, .24);
+  border-radius: 10px;
+  background: rgba(18, 22, 32, .72);
+  color: var(--text);
+  min-width: 46px;
+  min-height: 46px;
+  padding: 0 13px;
+  font: 17px/1 inherit;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.fs-btn.tiny { min-width: 42px; min-height: 42px; font-size: 14px; padding: 0 9px; }
+
+.fs-mid { flex: 1; min-width: 0; display: flex; }
+.fs-file-row { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.fs-file {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--g400);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+}
+.fs-anim-name {
+  font-size: 14px;
+  font-weight: 600;
+  max-width: 44vw;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 全局轻提示（保存顺序 / 删除资产 / 切资产都走它，不限于全屏） */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(30px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 90;
+  max-width: 82vw;
+  padding: 10px 16px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, .14);
+  background: rgba(10, 12, 18, .85);
+  font-size: 14px;
+  text-align: center;
+  pointer-events: none;
+}
+/* 手机上底部还压着「快捷播放条 + 四个标签」，默认的 30px 会被它们盖住 */
+body.is-touch .toast {
+  bottom: calc(150px + env(safe-area-inset-bottom, 0px));
+}
+
+body.is-immersive .nav,
+body.is-immersive .storage-bar,
+body.is-immersive .mnow,
+body.is-immersive .mquick,
+body.is-immersive .mtabs,
+body.is-immersive .seek,
+body.is-immersive .side-left { display: none !important; }
+
+/* 隐藏界面（只看画面）：顶栏和底部动画条一起收起，
+   点一下画面临时唤出 4 秒，方便再点一次图标恢复。 */
+body.is-cleanui:not(.fs-reveal) .fsbar,
+body.is-cleanui:not(.fs-reveal) .fs-anim-bar { display: none !important; }
+#fsHide .eye-off { display: none; }            /* 常规：图标带斜杠 = 点它隐藏界面 */
+body.is-cleanui #fsHide .eye-off { display: inline; }   /* 隐藏态：斜杠消失 = 点它恢复 */
+
+/* 全屏时舞台必须铺满整屏：窄屏媒体查询给 .stage 的固定 50vh/44vh 在这里全部作废，
+   否则手机竖屏全屏后内容只占上面一小块，下面一片空（2026-09-23 用户截图实测）。 */
+body.is-immersive .body {
+  flex-direction: row;   /* 900px 断点改成了 column + 整页滚动，全屏不需要 */
+  overflow: hidden;
+  display: flex;
+}
+body.is-immersive .stage {
+  flex: 1 !important;
+  height: auto !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+}
+body.is-immersive .stage-inner { border-radius: 0; height: 100%; }
+
+/* 可收起的文件侧栏：全屏时从右侧滑出，点文件后自动收起 */
+body.is-immersive .side-right {
+  display: flex !important;
+  position: fixed !important;
+  top: 0;
+  bottom: 0;
+  left: auto;   /* is-touch 的底部抽屉写了 left:0，不顶掉它面板会被钉在屏幕左边 */
+  right: 0;
+  width: min(78vw, 340px) !important;
+  height: auto !important;
+  max-height: none !important;
+  border-left: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 0;
+  box-shadow: -12px 0 34px rgba(0, 0, 0, .55);
+  transform: translateX(103%) !important;
+  transition: transform .22s ease-out;
+  z-index: 70;
+}
+body.is-immersive .side-right.fs-open { transform: translateX(0) !important; }
+body.is-immersive .side-right::before { display: none; }
+body.is-immersive .sheet-scrim { z-index: 65; }
+
+/* ------------------------------------------------------------ 按分辨率做针对性适配
+   前端 boot 时会读物理分辨率 / 屏幕比例，往 body 上打标记类：
+     .scr-narrow  短边 < 400 或视口 < 420（竖屏手机）
+     .scr-tall    长:短 >= 1.95（现代全面屏 20:9 / 21:9）
+   布局关键差异以检测类 + 媒体查询双保险驱动，旋转 / 分屏时 resize 自动重估。 */
+
+/* 竖屏手机：右侧窄条只能显示半截文件名，全屏的文件面板改成从底部升起的全宽面板 */
+@media (max-width: 640px), (orientation: portrait) and (max-width: 900px) {
+  body.is-immersive .side-right {
+    top: auto;
+    left: 0;
+    right: 0;
+    width: 100% !important;
+    /* !important 顶掉上面 immersive 规则里的 height:auto !important：
+       抽屉高度必须封顶，否则被列表内容撑到一万多 px（2026-09-23 实测翻车） */
+    height: min(64vh, 520px) !important;
+    max-height: 64vh !important;
+    border-left: none;
+    border-radius: 14px 14px 0 0;
+    transform: translateY(104%) !important;
+    transition: transform .2s ease-out;
+  }
+  body.is-immersive .side-right.fs-open { transform: translateY(0) !important; }
+  body.is-immersive .side-right::before { display: block; }
+}
+
+/* 竖屏手机：顶部/底部操作区占掉大半屏，抽屉加高一点才放得下几行列表 */
+@media (max-width: 640px), (orientation: portrait) {
+  body.is-touch .side { height: 74%; max-height: 74%; }
+}
+
+/* 全面屏/竖屏手机：全屏顶栏收窄，别让文件名把资产切换挤下屏 */
+body.scr-narrow .fsbar { gap: 8px; }
+@media (max-width: 640px) {
+  body .fsbar { gap: 8px; padding: calc(6px + env(safe-area-inset-top, 0px)) 8px 8px; }
+  body .fs-btn { min-width: 42px; min-height: 42px; padding: 0 10px; font-size: 15px; }
+  body .fs-btn.tiny { min-width: 38px; min-height: 38px; }
+  body .fs-file { font-size: 11px; }
+  body .fs-anim-name { font-size: 13px; max-width: 52vw; }
+  body .fs-mid { min-width: 0; }
+  body .fs-anim-bar { gap: 8px; padding: 7px 10px; bottom: calc(10px + env(safe-area-inset-bottom, 0px)); }
+}
+/* 长屏机型顶部多为挖孔/刘海区，顶栏再让一截（safe-area 之外多加 6px） */
+body.scr-tall .fsbar { padding-top: calc(12px + env(safe-area-inset-top, 0px)); }
+
+/* 手机端资产列表：文件名最多两行，副行单行省略，不再出现「每行断两字」的换行 */
+body.is-touch .asset-item { min-width: 0; }
+body.is-touch .asset-item .ai-name {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+body.is-touch .asset-item .ai-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* 手机抽屉里的列表必须被抽屉自身裁剪、在抽屉内部滚动。
+   2026-09-23 实测：≤900px 媒体查询给的 .pane{overflow:visible} +
+   .asset-list{min-height:180px;max-height:54vh} 会把列表顶出抽屉底边，
+   资产名直接叠到底部快捷条上。这里全部作废，滚动权交给 pane。 */
+body.is-touch .pane {
+  overflow-y: auto !important;
+  flex: 1 1 0 !important;
+  min-height: 0 !important;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+body.is-touch .anim-list,
+body.is-touch .layer-list {
+  flex: 0 0 auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow: visible !important;
+}
+
+/* 右侧资产抽屉不是 .pane 结构（没有别的东西分担滚动），滚动权必须留给列表自己。
+   2026-09-24 实测：把 .asset-list 也改成 flex:0 0 auto + overflow:visible 后，
+   列表被内容撑高、超出抽屉被裁剪，手指怎么划都翻不动。 */
+body.is-touch .side-right .asset-list {
+  flex: 1 1 0 !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+/* 顶栏在窄屏上被挤成三四行：压回「品牌一行 + 操作一行（横向滚动）」 */
+@media (max-width: 640px) {
+  body.is-touch .nav { flex-wrap: nowrap; padding: 5px 8px; gap: 6px; }
+  body.is-touch .brand { flex: none; }
+  body.is-touch .brand > span:not(.logo) { display: none; }   /* 只留 🎬，文字标题让位给按钮 */
+  body.is-touch .nav-actions {
+    flex: 1;
+    min-width: 0;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    justify-content: flex-start;
+    -webkit-overflow-scrolling: touch;
+  }
+  body.is-touch .nav-actions .btn,
+  body.is-touch .nav-actions .select { flex: none; min-height: 36px; padding: 5px 10px; font-size: 12.5px; }
+  body.is-touch .nav-actions .select { max-width: 42vw; }
+}
+
+/* 底部标签：文字一律单行，标签名改短（见 index.html），不再折成两行 */
+.mtab { white-space: nowrap; font-size: 13.5px; }
+
+/* 目录状态条收起提示文字后，路径单行省略，不再三行铺满 */
+body.is-touch .storage-bar .sb-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+body.is-touch .storage-bar.collapsed .sb-tip { display: none; }
+body.is-touch .storage-bar .sb-toggle {
+  color: var(--indigo-300);
+  cursor: pointer;
+  flex: none;
+  user-select: none;
+}
+
+/* ------------------------------------------------------------ 手机首页占比
+   ≤900px 断点给 .stage 钉了 50vh/44vh 固定高度，而触屏模式下左右两栏
+   都改成了 absolute 抽屉（不占流式空间），结果舞台下面到快捷条之间
+   剩一大块谁也不填的空白（2026-09-24 用户截图实测）。
+   触屏非全屏时让舞台吃掉 .body 的全部剩余高度，进度条贴着快捷条。 */
+@media (max-width: 900px) {
+  body.is-touch .body { flex-direction: column; overflow: hidden; }
+  body.is-touch .stage {
+    flex: 1 1 auto !important;
+    height: auto !important;
+    min-height: 0 !important;
+  }
+}
+
+/* 设置弹窗里的「文件目录」块：路径可换行，按钮自动折行 */
+#setStoragePath { font-family: ui-monospace, Menlo, Consolas, monospace; color: #e6edf7; }
+#setStorageActions { margin-top: 2px; }

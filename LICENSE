@@ -1,0 +1,39 @@
+MIT License
+
+Copyright (c) 2026 kakiko123
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+===============================================================================
+注意事项 / IMPORTANT
+
+1. 本项目使用 MIT 许可，但**不适用于仓库里的第三方组件**：
+   - `spine-player.js` / `spine-player.css` 适用 Spine Runtimes License Agreement
+     （要求每个使用者自行持有 Spine Editor 授权，且分发必须附带该许可原文）；
+   - `jszip.min.js` 适用 MIT 或 GPLv3 双许可（本项目按 MIT 使用）。
+   详见 THIRD-PARTY-NOTICES.md —— 那个文件是许可要求的一部分，不可删除。
+
+2. **本项目基于 Jelosus2/BD2-L2D-Viewer 构建**（MIT，Copyright (c) 2025 Jelosus2）：
+   https://github.com/Jelosus2/BD2-L2D-Viewer
+   功能形态与交互设计沿用该项目，源码为独立重写（上游 Vue 3 + TypeScript，本项目原生 JS），
+   未复制其源码。完整的继承/改动说明见 THIRD-PARTY-NOTICES.md §3。
+
+3. 版权人已填写（kakiko123）。若要转让或改署名，改第 3 行的
+   `Copyright (c) 2026 kakiko123` 即可；年份按首次公开发布的年份填写。
+===============================================================================
