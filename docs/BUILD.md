@@ -169,7 +169,7 @@ adb logcat -s BD2Main BD2JS BD2Bridge BD2Scan BD2Host
 | 2 | `Unsupported class file major version` / `invalid source release: 17` | JDK 版本不是 17（常见：用了 JDK 21 或 8） | 装 JDK 17，在 `local.properties` 里指定 `org.gradle.java.home` |
 | 3 | 依赖下载不下来 / 一直卡住 | 网络到 `google()` / `mavenCentral()` 不通 | **不要把代理写进 `gradle.properties`**（那会跟着仓库公开）。写到 `~/.gradle/gradle.properties` 或命令行传 `-Dhttp.proxyHost=...` |
 | 4 | 装到手机上还是旧界面 | 没跑 `bundle.mjs`（见 §3） | 跑一遍完整流程；用 `tools/verify_apk.py` 确认 sha1 |
-| 5 | 桌面版起来是空的 | 没配 `viewer.config.json` | 见 README §6.1 |
+| 5 | 桌面版起来是空的 | 没配 `viewer.config.json` | 见 [TECHNICAL.md §5](TECHNICAL.md#5-桌面版配置文件) |
 | 6 | 测试超时 | 没起服务，或端口被占 | 用 `node _test/run_all.mjs`，它自己负责起服务 |
 | 7 | 测试失败，报资产列表为空 | 测试需要真实资产（`id=bd2-mods` 的 root） | 见 `docs/DEVELOPMENT.md` §3 |
 | 8 | `gradlew: Permission denied` | clone 后丢掉了可执行位 | `chmod +x bd2-android/gradlew` |

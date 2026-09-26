@@ -125,3 +125,5 @@ docs/screenshots/
 # 如果你希望仓库里不留生成物，取消下面一行的注释。
 # ------------------------------------------------------------
 # bd2-local-viewer/public/app.bundle.html
+# local helper - machine specific absolute paths, keep out of the repo
+push_to_github.bat

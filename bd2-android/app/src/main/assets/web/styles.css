@@ -478,7 +478,33 @@ input[type="range"] {
   flex: none;
 }
 
-.side-right > .text-input { flex: none; margin: 0 10px; width: calc(100% - 20px); }
+/* 搜索框外壳：输入框 + 清空键叠在一起（清空键绝对定位在右端）。
+   原来输入框是 .side-right 的直接子元素，加了外壳之后那条 `>` 选择器就匹配不到了 ——
+   所以这里把同样的外边距/宽度规则改挂在 .search-box 上（一个真相只留一处）。 */
+.search-box { flex: none; position: relative; margin: 0 10px; width: calc(100% - 20px); }
+.search-box > .text-input { width: 100%; margin: 0; padding-right: 32px; }
+.search-box .search-clear {
+  position: absolute;
+  right: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 26px;
+  height: 26px;
+  line-height: 1;
+  font-size: 12px;
+  color: var(--g400);
+  background: transparent;
+  border: 0;
+}
+@media (hover: hover) and (pointer: fine) {
+  .search-box .search-clear:hover { color: var(--g200); }
+}
+
+/* 平铺页头部那份搜索框：和抽屉里那份结构相同（所以复用 .search-box 的内部规则），
+   但不是满宽块，而是 gal-head 里的一格 —— 关键是**不能主动撑大**（grow:0），
+   否则英文下会把后面的排序控件挤换行，中英文头部高度就差一截。
+   基准 180，被挤时能缩到 100，最多 220。手机上另起一行占满。 */
+.gal-search { flex: 0 1 180px; width: auto; min-width: 100px; max-width: 220px; margin: 0; }
 .filters { padding: 6px 10px; justify-content: space-between; flex: none; }
 
 .asset-list { flex: 1; min-height: 0; margin: 6px 10px 10px; }
@@ -642,6 +668,12 @@ body.card-select .card.sel .card-check { border-color: var(--indigo); background
 body.card-select .card.sel .card-check::after { background: #fff; }
 /* 选择模式下拖动把手没有意义（拖不了），藏掉免得误导 */
 body.card-select .card-drag { display: none; }
+
+/* 按名称 / 日期排序时同理：那两个顺序是算出来的，拖动无处可存，把手也藏掉。
+   类名由 applySortUI() 挂（随**数据**变 → JS 挂类名，见 ARCHITECTURE R1）。
+   注意：只藏把手，卡片本身的 pointerdown 仍然进 startCardDrag ——
+   那里还要负责触屏长按弹菜单（跟排序模式无关）。 */
+body.sort-locked .card-drag { display: none; }
 
 /* 长按菜单里的资产名 */
 .menu-title { font-size: 14px; font-weight: 600; word-break: break-all; }
@@ -1091,6 +1123,16 @@ body.card-dragging .gal-grid { overscroll-behavior: none; }
   word-break: break-all;
 }
 .card-sub { font-size: 11px; color: var(--g400); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 搜索结果里，命中的是内部资源文件（不是卡片上显示的名字）时补的这一行。
+   用主题色区分于普通副标题 —— 它解释的是「为什么这条在结果里」，不是资产属性。 */
+.card-hit {
+  font-size: 11px;
+  margin-top: 3px;
+  color: #a5b4fc;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 /* 拖动把手：伸手就往左上角摸，所以放左上。
    touch-action: none —— 从把手起手一定是拖动，不可能变成滚动，所以按下即拖、不用长按等待。
@@ -1164,6 +1206,7 @@ body.is-touch .gal-head { gap: 6px 8px; }
 body.is-touch .gal-head-main { flex: 1 1 100%; }        /* 标题占满一行，控件换到第二行 */
 body.is-touch .gal-head-tools { margin-left: 0; }
 body.is-touch .gal-hint { display: none; }              /* 手机上提示文案省掉，把宽度让给排序控件 */
+body.is-touch .gal-search { flex: 1 1 100%; max-width: none; }  /* 手机上搜索框独占一行 */
 body.is-touch .card { border-radius: 8px; }
 body.is-touch .card-drag, body.is-touch .card-fs { width: 34px; height: 34px; font-size: 15px; }
 /* 手指按住不动就是在「抬起」卡片，把手不需要常驻可见 —— 手机上默认淡一点，长按后整张卡浮起 */

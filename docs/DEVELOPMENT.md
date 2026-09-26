@@ -205,6 +205,8 @@ Node 的输出在重定向到文件时是**块缓冲**。前台跑一个长任�
 | 文档 | 内容 |
 |---|---|
 | [`bd2-local-viewer/ARCHITECTURE.md`](../bd2-local-viewer/ARCHITECTURE.md) | 分层调用链、病根复盘、10 条不变量、验证矩阵 |
+| [`docs/TECHNICAL.md`](TECHNICAL.md) | 技术栈、项目结构、环境要求、主要实现思路、桌面版配置 |
 | [`docs/BUILD.md`](BUILD.md) | 构建、Release 签名、R8、clone 后跑不起来的排查清单 |
-| [`README.md`](../README.md) | 面向使用者的完整说明 |
+| [`docs/KNOWN-ISSUES.md`](KNOWN-ISSUES.md) | 已知而未处理的问题 |
+| [`README.md`](../README.md) | 面向使用者的说明（快速开始 / 用法 / 路线图） |
 | [`THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md) | 第三方许可（Spine 许可要求它随分发走） |

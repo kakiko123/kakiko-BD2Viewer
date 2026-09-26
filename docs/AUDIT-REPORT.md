@@ -1,4 +1,4 @@
-# BD2 L2D Viewer — 开源发布前最终复盘报告
+# kakiko-BD2Viewer — 开源发布前最终复盘报告
 
 审计日期：2026-09-25
 审计范围：全仓库（`bd2-local-viewer/` + `bd2-android/` + 文档 + 构建配置）

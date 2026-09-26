@@ -108,7 +108,12 @@ try {
   /* 首屏探针：从 document-start 就开始盯 body 的类名与 .stage 的 display。
      这一条守的是「启动不许先画一屏播放页再跳资产页」——
      之所以要盯得这么早，是因为那个闪变只存在于「脚本跑起来之前 / 扫描结束之前」，
-     等 __bd2viewer 可用时早就切过去了。实测旧版 +0ms 时 .stage=flex、+2753ms 才变 none。 */
+     等 __bd2viewer 可用时早就切过去了。实测旧版 +0ms 时 .stage=flex、+2753ms 才变 none。
+
+     ⚠️ 「第一帧」必须等到 body 的子节点也解析出来才算：
+     document.body 在 `<body>` 标签出现时就有了，但 `<main class="stage">` 在其之后，
+     所以在 body 一出现就快照，会拿到 stageAtFirst=null（曾经因此假失败）。
+     判据改成「body 有类名 **且** .stage 已存在」，此时才是真正的可绘制状态。 */
   await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `
     (function () {
       var P = window.__firstPaint = { first: null, stageAtFirst: null, timeline: [] }
@@ -117,7 +122,8 @@ try {
         var cls = document.body.className || ''
         var st = document.querySelector('.stage')
         var d = st ? getComputedStyle(st).display : null
-        if (P.first === null) { P.first = cls; P.stageAtFirst = d }
+        // 只认「body 已带类名 且 .stage 已解析出来」的那一次为第一帧
+        if (P.first === null && cls && st) { P.first = cls; P.stageAtFirst = d }
         var last = P.timeline[P.timeline.length - 1]
         if (!last || last.cls !== cls) {
           P.timeline.push({ t: Math.round(performance.now()), cls: cls, stage: d })
@@ -299,18 +305,33 @@ try {
     !!sheet.d.now && sheet.d.now === sheet.d.name, `mNow=「${sheet.d.now}」 currentName=「${sheet.d.name}」`)
 
   // 画面真的渲染出来了（走 /spine/<rootId>/<rel>）
-  const px = await cdp.evaluate(`
-    const cv = __bd2viewer.player.canvas
-    const t = document.createElement('canvas')
-    const W = Math.min(cv.width, 600), H = Math.min(cv.height, 600)
-    t.width = W; t.height = H
-    const c = t.getContext('2d')
-    c.drawImage(cv, 0, 0, W, H)
-    const d = c.getImageData(0, 0, W, H).data
-    let opaque = 0
-    for (let i = 3; i < d.length; i += 4) if (d[i] > 8) opaque++
-    return { cover: +(opaque / (W * H)).toFixed(4), w: cv.width, h: cv.height }
-  `)
+  //
+  // ⚠️ 这里**不能只等固定时长**。canvas 尺寸是「舞台尺寸变化 → 换算 → resize」
+  // 异步链条的末端，主线程被别的事占住（例如 applyLang() 里的 refreshLists()
+  // 重画 179 张卡片）时会明显延后。曾经因此拿到 <canvas> 的默认 300×150、
+  // 覆盖 0 而误判成「渲染挂了」。改成等**条件成立**：画布尺寸已同步且画面有内容。
+  const px = await (async () => {
+    const deadline = Date.now() + 8000
+    let last = null
+    while (Date.now() < deadline) {
+      last = await cdp.evaluate(`
+        const cv = __bd2viewer.player.canvas
+        const t = document.createElement('canvas')
+        const W = Math.min(cv.width, 600), H = Math.min(cv.height, 600)
+        t.width = W; t.height = H
+        const c = t.getContext('2d')
+        c.drawImage(cv, 0, 0, W, H)
+        const d = c.getImageData(0, 0, W, H).data
+        let opaque = 0
+        for (let i = 3; i < d.length; i += 4) if (d[i] > 8) opaque++
+        return { cover: +(opaque / (W * H)).toFixed(4), w: cv.width, h: cv.height }
+      `)
+      // 尺寸同步过（不是默认的 300×150）且画面有内容 → 就是最终结果
+      if (last.w > 300 && last.cover > 0.02) break
+      await new Promise(r => setTimeout(r, 150))
+    }
+    return last
+  })()
   check('② 模型通过 /spine 路径渲染出画面', px.cover > 0.02, `覆盖 ${px.cover} canvas=${px.w}×${px.h}`)
 
   // 切动画仍然正常
@@ -1243,29 +1264,37 @@ try {
     const mt = byDate.map(k => (byKey.get(k) || {}).mtime || 0)
     const dateDesc = mt.every((m, i) => i === 0 || mt[i - 1] >= m)
 
-    // 排序状态下开始拖动 → 自动转手动，手动顺序 = 刚才屏幕上那份顺序
+    // 排序状态下拖动 → 应当**被拒绝**（2026-09-25 起：名称/日期是算出来的顺序，
+    // 拖动无处可存，所以直接不给拖）。改验证三件事：
+    //   ① 排序方式没有变（还是 date）
+    //   ② 没有悄悄写手动顺序（bd2.order 保持原样）
+    //   ③ 屏幕上卡片位置没动
+    // 同时确认「⠿ 手柄被藏起来」——UI 上就不该出现一个拖不动的手柄。
     const grid = document.getElementById('galGrid')
     const src = grid.querySelectorAll('.card')[0]
     const handle = src.querySelector('.card-drag')
-    const hr = handle.getBoundingClientRect()
+    const handleHidden = !handle || getComputedStyle(handle).display === 'none'
+    // 手柄藏了就从卡片本身起手 —— 用鼠标（pointerType 默认就是 ''）走「移动 4px 即开拖」这条路径，
+    // 与真实用户在排序模式下按住卡片乱拖的处境一致。
+    const hr = src.getBoundingClientRect()
     const target = grid.querySelectorAll('.card')[1].getBoundingClientRect()
-    const ev = (type, x, y) => handle.dispatchEvent(new PointerEvent(type,
+    const ev = (type, x, y) => src.dispatchEvent(new PointerEvent(type,
       { clientX: x, clientY: y, bubbles: true, pointerId: 3, isPrimary: true }))
-    const dx = target.left + target.width * 0.75
-    const dy = target.top + target.height * 0.75
+    const orderBefore = localStorage.getItem('bd2.order.' + document.getElementById('rootSelect').value)
+    const keysBefore = keysOf()
     const dateFirstBefore = byDate[0]
-    ev('pointerdown', hr.left + 10, hr.top + 10)
-    ev('pointermove', dx, dy)
-    // 拖动一开始就应该把「当前排序方式排出来的全量顺序」固化成手动顺序；
-    // 这一句必须在 pointerup 之前读 —— 松手后写进去的是屏幕上的（已过滤）那份。
-    const seededLen = v.order.length
-    const turnedManual = v.sort.mode === 'manual'
-    ev('pointerup', dx, dy)
+    ev('pointerdown', hr.left + hr.width / 2, hr.top + hr.height / 2)
+    ev('pointermove', target.left + target.width * 0.75, target.top + target.height * 0.75)
+    const sortDuringDrag = v.sort.mode
+    const liftedDuringDrag = grid.querySelectorAll('.card.dragging').length
+    ev('pointerup', target.left + target.width * 0.75, target.top + target.height * 0.75)
     await new Promise(r => setTimeout(r, 600))
     const afterDrag = {
-      sort: v.sort, first: keysOf()[0], seededLen, turnedManual,
-      coversAll: seededLen >= v.allKeys.length - 1,
-      allCount: v.allKeys.length, committedLen: v.order.length,
+      sort: v.sort, first: keysOf()[0],
+      handleHidden, sortDuringDrag, liftedDuringDrag,
+      orderUntouched: orderBefore === localStorage.getItem('bd2.order.' + document.getElementById('rootSelect').value),
+      layoutUntouched: keysBefore.join('|') === keysOf().join('|'),
+      orderLen: v.order.length,
     }
 
     await tapMode('name')                                // 切回名称：仍按名称排
@@ -1300,17 +1329,24 @@ try {
   check('⑳ 按日期排序：mtime 单调，「新的在前」为默认',
     sortTest.dateOk === true && sortTest.dateDesc === true,
     `按日期有序=${sortTest.dateOk} 新的在前=${sortTest.dateDesc} 首=${sortTest.mtFirst} 末=${sortTest.mtLast}`)
-  check('⑳ 排序状态下拖动 → 自动转手动，且手动顺序继承刚看到的顺序',
-    sortTest.afterDrag.turnedManual === true && sortTest.afterDrag.coversAll === true &&
-    sortTest.afterDrag.first !== sortTest.dateFirstBefore,
-    `转手动=${sortTest.afterDrag.turnedManual} 固化条数=${sortTest.afterDrag.seededLen}/` +
-    `${sortTest.afterDrag.allCount} 首张 ${sortTest.dateFirstBefore} → ${sortTest.afterDrag.first}`)
+  check('⑳ 排序状态下拖不动：手柄藏起、排序不变、手动顺序不被偷偷改写',
+    sortTest.afterDrag.handleHidden === true &&
+    sortTest.afterDrag.sortDuringDrag === 'date' &&
+    sortTest.afterDrag.liftedDuringDrag === 0 &&
+    sortTest.afterDrag.sort.mode === 'date' &&
+    sortTest.afterDrag.orderUntouched === true &&
+    sortTest.afterDrag.layoutUntouched === true,
+    `手柄隐藏=${sortTest.afterDrag.handleHidden} 拖中排序=${sortTest.afterDrag.sortDuringDrag} ` +
+    `拖中抬起卡片=${sortTest.afterDrag.liftedDuringDrag} 排序后=${sortTest.afterDrag.sort.mode} ` +
+    `手动顺序未动=${sortTest.afterDrag.orderUntouched} 布局未动=${sortTest.afterDrag.layoutUntouched}`)
   check('⑳ 排序偏好写进 localStorage 并可切回（名称）',
     /"mode":"name"/.test(sortTest.sortRaw || '') && sortTest.backMatchesName === true,
     `存储=${sortTest.sortRaw} 切回名称一致=${sortTest.backMatchesName}`)
 
   // ㉑ 窄屏（手机宽度）：标题行折行后不能横向溢出，排序控件仍然可点。
-  // 新加的排序控件就在顶栏这一行，是最容易撑破布局的地方。
+  // 新加的搜索框在窄屏下独占一行（is-touch 下 flex:1 1 100%），所以
+  // gal-head 现在折成三行（标题 / 搜索 / 控件），不是原来的两行 ——
+  // 搜索在手机上是主功能，独占一行便于点按，这是设计意图。
   await cdp.send('Emulation.setDeviceMetricsOverride',
     { width: 360, height: 780, deviceScaleFactor: 2, mobile: true })
   await new Promise(r => setTimeout(r, 600))
@@ -1333,8 +1369,8 @@ try {
     }
   `)
   await cdp.send('Emulation.clearDeviceMetricsOverride')
-  check('㉑ 360px 窄屏：标题行折成两行，没有横向溢出',
-    narrow.overflowX <= 1 && narrow.toolsInside === true && narrow.rows === 2,
+  check('㉑ 360px 窄屏：标题行折成三行（标题/搜索/控件），没有横向溢出',
+    narrow.overflowX <= 1 && narrow.toolsInside === true && narrow.rows === 3,
     `溢出=${narrow.overflowX}px 标题行数=${narrow.rows} 控件在屏内=${narrow.toolsInside}`)
   check('㉑ 窄屏下排序控件完整可用（三个按钮都在，且够大能点）',
     narrow.modes === 3 && narrow.btnW >= 48 && narrow.btnH >= 32,
@@ -1355,15 +1391,22 @@ try {
       return orig.apply(this, arguments)
     }
     // 重建缩略图：所有卡片重新排队，json 骨架的这批全部在预校验处快速失败。
-    // 结束条件用「成功+失败 ≥ 总卡数」（单调），不能用 running——
-    // 队列在两张卡之间有 ~80ms 间隙，running 会瞬间变 false。
+    // 结束条件分两步：
+    //   ① 单调量「本次生成 done + 失败卡片数 ≥ 总卡数」——主条件，不受间隙影响；
+    //   ② 主条件满足后**再确认一次 running 已经停**——因为队列在两张卡之间有
+    //      ~80ms 间隙，只测一次 running 会随机抓到 false/true（曾经因此假失败）。
+    // 两步都满足才退出，然后留出落盘时间再采样。
     await __bd2viewer.rebuildThumbs()
     const deadline = Date.now() + 240000
     while (Date.now() < deadline) {
       const s = __bd2viewer.thumbStats
       const total = document.querySelectorAll('#galGrid .card').length
       const failed = document.querySelectorAll('#galGrid .card-thumb.failed').length
-      if (s.done + failed >= total) break
+      if (s.done + failed >= total) {
+        // ② 连续两次采样都 running=false，才算真的停了
+        await new Promise(r => setTimeout(r, 200))
+        if (__bd2viewer.thumbStats.running === false) break
+      }
       await new Promise(r => setTimeout(r, 400))
     }
     const cards = [...document.querySelectorAll('#galGrid .card')]
@@ -1372,12 +1415,16 @@ try {
     await new Promise(r => setTimeout(r, 1500))
     return { failed: cards.filter(c => c.querySelector('.card-thumb.failed')).length,
              ok: cards.filter(c => c.querySelector('.card-thumb img')).length,
+             cards: cards.length,
              running: __bd2viewer.thumbStats.running,
              done: __bd2viewer.thumbStats.done }
   `, 210000)
   check('⑰ 坏 JSON 的卡片标成「无法生成」（不再永远转圈）',
-    badThumb.failed >= 100 && badThumb.running === false,
-    `失败=${badThumb.failed} 成功=${badThumb.ok} 队列已停=${!badThumb.running}`)
+    // 只断言**单调量**：失败卡片数足够多，且「本次生成 + 失败」覆盖了全部卡片
+    // （说明队列走完了，没有卡在某一张上永远转圈）。
+    // 不拿 running 当断言条件 —— 队列两卡之间的间隙会让它随机为 false。
+    badThumb.failed >= 100 && badThumb.done + badThumb.failed >= badThumb.cards,
+    `失败=${badThumb.failed} 成功=${badThumb.ok} 已处理=${badThumb.done + badThumb.failed}/${badThumb.cards} 队列在跑=${badThumb.running}`)
   check('⑰ 队列跳过坏文件继续生成（.skel 资产照样出图）',
     badThumb.ok >= 5 && badThumb.done >= 5,
     `成功卡片=${badThumb.ok} 本次生成=${badThumb.done}`)
@@ -1854,6 +1901,238 @@ try {
   check('㉓ 一次只剥一层：全屏播放页按返回先退全屏，人还在播放页',
     backTest.fsPlayerOn === true && backTest.oneLayerOnly === true && backTest.thenPlayerBack === true,
     `全屏播放→退全屏仍在播放页=${backTest.oneLayerOnly} 再按才回资产页=${backTest.thenPlayerBack}`)
+
+  /* ㉔ 语言切换（ARCHITECTURE R11）--------------------------------------
+     守三件事：
+     a) 切到英文后**界面上不许再残留中文**（这是最容易漏的 —— 加新文案时忘了包 t()）；
+     b) 切回中文后原文必须一字不差地回来（中文侧「恒等返回」不能有损耗）；
+     c) 首次启动才弹语言询问框，选过之后不再弹。
+     注意：这里只扫「可见文案」（textContent / title / placeholder / option 文本），
+     扫不到 console 与内部 Error，那些本来就允许留中文。 */
+  const langTest = await cdp.evaluate(`
+    const v = __bd2viewer
+    const wait = ms => new Promise(r => setTimeout(r, ms))
+    const el = id => document.getElementById(id)
+    const out = {}
+
+    // 收集当前界面上所有可见文案，供「有没有中文残留」用
+    const CN = /[\\u4e00-\\u9fff]/
+    function visibleTexts() {
+      const acc = []
+      const push = (s, where) => { if (s && CN.test(s)) acc.push(where + ': ' + s.trim().slice(0, 60)) }
+      // 只扫真正会显示给用户的节点。
+      // 带 data-i18n-keep 的是「数据型文本」——目录名（用户/系统给的）和语言自称
+      // （英文界面下「中文」本来就该写中文），它们由 markKeepText() 标记，跳过。
+      for (const n of document.querySelectorAll(
+        'button, .btn, label, h1, h2, h3, h4, .muted.small, .sheet-tab, .mtab, .gs-btn, .sb-tip, .none-tip, option')) {
+        if (n.closest('[hidden]')) continue
+        if (n.dataset.i18nKeep !== undefined) continue
+        if (n.offsetParent === null && n.tagName !== 'OPTION') continue
+        push(n.textContent, n.tagName + (n.id ? '#' + n.id : ''))
+      }
+      for (const n of document.querySelectorAll('[title]')) {
+        if (n.closest('[hidden]')) continue
+        if (n.dataset.i18nKeep !== undefined) continue
+        push(n.getAttribute('title'), 'title@' + n.tagName + (n.id ? '#' + n.id : ''))
+      }
+      for (const n of document.querySelectorAll('[placeholder]')) {
+        if (n.closest('[hidden]')) continue
+        if (n.dataset.i18nKeep !== undefined) continue
+        push(n.getAttribute('placeholder'), 'ph@' + n.tagName + (n.id ? '#' + n.id : ''))
+      }
+      return acc
+    }
+
+    // ---- 起点：中文 ----
+    v.setLang('zh')
+    await wait(250)
+    out.zhLang = v.lang
+    out.zhHtmlLang = document.documentElement.lang
+    out.zhT = v.t('资产')
+    out.zhParams = v.t('已选 {n} 个', { n: 3 })
+    out.zhAssets = (el('assetCount') || {}).textContent || ''
+
+    // ---- 切英文 ----
+    v.setLang('en')
+    await wait(400)
+    out.enLang = v.lang
+    out.enHtmlLang = document.documentElement.lang
+    out.enT = v.t('资产')
+    out.enParams = v.t('已选 {n} 个', { n: 3 })
+    out.enAssets = (el('assetCount') || {}).textContent || ''
+    // 查不到的 key 必须原样返回，不能显示成 undefined / key
+    out.enUnknown = v.t('这条压根没在翻译表里')
+    out.enLeftover = visibleTexts()
+
+    // 只读文案口径：切语言不该动过滤状态
+    out.enFilters = JSON.stringify(v.filters)
+
+    // ---- 切回中文：原文要一字不差 ----
+    v.setLang('zh')
+    await wait(400)
+    out.zhBack = v.t('资产')
+    out.zhBackAssets = (el('assetCount') || {}).textContent || ''
+    out.zhLeftoverInEn = null
+
+    // ---- 首次询问：选过之后不该再弹 ----
+    out.pickedAfterSet = v.langPicked
+    localStorage.removeItem('bd2.lang')
+    out.pickedWhenCleared = v.langPicked
+    localStorage.setItem('bd2.lang', v.lang)
+
+    // ---- 落盘 ----
+    out.stored = localStorage.getItem('bd2.lang')
+    return out
+  `)
+
+  check('㉔ 切英文：所有可见文案都不再残留中文',
+    langTest.enLang === 'en' && langTest.enHtmlLang === 'en' && langTest.enLeftover.length === 0,
+    `${langTest.enLeftover.length} 处残留` +
+    (langTest.enLeftover.length ? ' → ' + langTest.enLeftover.slice(0, 8).join(' | ') : ''))
+  check('㉔ 切英文：<html lang> 跟着改（防冷启动闪中文）',
+    langTest.enHtmlLang === 'en' && langTest.zhHtmlLang === 'zh-CN',
+    `zh→${langTest.zhHtmlLang} en→${langTest.enHtmlLang}`)
+  check('㉔ 翻译生效且带变量的文案能替换 {n}',
+    langTest.zhT === '资产' && langTest.enT === 'Assets' &&
+    langTest.zhParams === '已选 3 个' && langTest.enParams === '3 selected',
+    `zh:${langTest.zhT}/${langTest.zhParams} en:${langTest.enT}/${langTest.enParams}`)
+  check('㉔ 查不到的 key 原样返回中文（不显示 key、不崩）',
+    langTest.enUnknown === '这条压根没在翻译表里',
+    `得到=${langTest.enUnknown}`)
+  check('㉔ 切回中文：原文一字不差地回来（中文侧零损耗）',
+    langTest.zhBack === '资产' && langTest.zhAssets === langTest.zhBackAssets,
+    `资产=${langTest.zhBack} 计数 zh="${langTest.zhAssets}" → en="${langTest.enAssets}" → zh="${langTest.zhBackAssets}"`)
+  check('㉔ 语言偏好落盘，且选过之后不再弹询问框',
+    langTest.stored === 'zh' && langTest.pickedAfterSet === true &&
+    langTest.pickedWhenCleared === false,
+    `存储=${langTest.stored} 选过后=${langTest.pickedAfterSet} 清掉后=${langTest.pickedWhenCleared}`)
+  check('㉔ 切语言只动文案，不动过滤状态',
+    langTest.enFilters === JSON.stringify({ q: '', onlyOk: true }),
+    `filters=${langTest.enFilters}`)
+
+  /* ㉕ 搜索能搜到「资产内部资源文件」------------------------------------
+     需求原话：输入 .atlas / .png / .skel 的真实文件名，要能反查出它属于哪套资产。
+     守四件事：
+     a) 搜内部资源文件名能命中（不只是目录名 / 文件名）；
+     b) 命中理由能说清「为什么它在结果里」（searchHits ←→ 卡片上的 🔍 行）；
+     c) 仍然守 R2（控件是入口、filters 是事实来源）与 R3（唯一口径 filteredItems）；
+     d) 只显示可播放 / 清空 都还成立。 */
+  const searchTest = await cdp.evaluate(`
+    const v = __bd2viewer
+    const wait = ms => new Promise(r => setTimeout(r, ms))
+    const el = id => document.getElementById(id)
+    const out = {}
+
+    v.setLang('zh')
+    v.setView('grid')
+    await wait(300)
+
+    // 先找一个「目录名和文件名里都没有、只出现在内部资源文件里」的关键词。
+    // 取第二张贴图的文件名（去掉扩展名），它一般不会出现在目录名里。
+    const items = v.state.items.filter(i => i.ok && (i.relImages || []).length >= 2)
+    let probe = null
+    for (const it of items) {
+      const dirLow = ((it.folder || '') + ' ' + (it.base || '') + ' ' + (it.group || '')).toLowerCase()
+      for (const img of (it.relImages || [])) {
+        const leaf = String(img).split('/').pop().replace(/\\.[^.]+$/, '')
+        if (leaf.length < 4) continue
+        if (dirLow.includes(leaf.toLowerCase())) continue
+        probe = { key: it.key || it.id || it.relAtlas, query: leaf, img: String(img) }
+        break
+      }
+      if (probe) break
+    }
+    out.probe = probe
+    if (!probe) return out
+
+    // ① 清空状态下全量
+    el('assetFilter').value = ''
+    el('assetFilter').dispatchEvent(new Event('input', { bubbles: true }))
+    await wait(250)
+    out.total = v.visibleKeys.length
+
+    // ② 用内部资源文件名搜
+    const q = probe.query.toLowerCase()
+    el('assetFilter').value = q
+    el('assetFilter').dispatchEvent(new Event('input', { bubbles: true }))
+    await wait(300)
+    out.hitCount = v.visibleKeys.length
+    out.inResult = v.visibleKeys.includes(probe.key)
+    out.filtersQ = v.filters.q
+    // 命中理由表：应当恰好指向我们搜的那个文件
+    const hits = v.searchHits
+    out.hitReason = hits[probe.key] || null
+    // hitReason() 展示的是**文件名**（两种分隔符都切），而 probe.img 是 relImages
+    // 里的原始串（Windows 上可能带反斜杠前缀），所以比较前要取同样的 basename。
+    //
+    // ⚠️ 这里不能写正则 /[/\\\\]/：这段代码整体在模板字符串里，反斜杠会先被
+    // 外层模板串解一层……转义层级极易写错，实测直接炸成
+    // SyntaxError: Invalid regular expression: missing /（整个 ㉕ 组连带失联）。
+    // 用 indexOf + slice 表达「最后一个分隔符之后的部分」，零转义歧义。
+    // （注：本段注释里千万别出现反引号 —— 那会把外层模板串提前闭合。）
+    const sImg = String(probe.img)
+    const cut = Math.max(sImg.lastIndexOf('/'), sImg.lastIndexOf('\\\\'))
+    out.probeBase = cut >= 0 ? sImg.slice(cut + 1) : sImg
+    out.hitReasonMatches = out.hitReason === out.probeBase
+    // 卡片上那行 🔍 提示
+    const card = document.querySelector('#galGrid .card[data-key="' + CSS.escape(probe.key) + '"]')
+    out.cardHitShown = !!(card && card.querySelector('.card-hit') && !card.querySelector('.card-hit').hidden)
+    out.cardHitText = card && card.querySelector('.card-hit') ? card.querySelector('.card-hit').textContent : ''
+    // 左列表副标题也要带 🔍
+    const li = [...document.querySelectorAll('#assetList .asset-item')]
+      .find(e => (e.querySelector('.ai-sub') || {}).textContent?.includes('🔍'))
+    out.listHitShown = !!li
+    // 计数文案
+    out.countText = (el('assetCount') || {}).textContent || ''
+    // 清空键出现
+    out.clearVisible = !!(el('assetFilterClear') && !el('assetFilterClear').hidden)
+
+    // ③ 「只显示可播放」仍然是唯一口径：过滤后不许出现坏资产
+    out.anyBad = v.visibleKeys.some(k => {
+      const it = v.state.items.find(x => (x.key || x.id || x.relAtlas) === k)
+      return it && !it.ok
+    })
+
+    // ④ 清空键一键复原
+    el('assetFilterClear').click()
+    await wait(300)
+    out.afterClear = v.visibleKeys.length
+    out.clearHiddenAfter = !!(el('assetFilterClear') && el('assetFilterClear').hidden)
+
+    // ⑤ 搜一个肯定不存在的东西 → 空结果，且不崩
+    el('assetFilter').value = 'zzz_这个关键词不存在_qqq'
+    el('assetFilter').dispatchEvent(new Event('input', { bubbles: true }))
+    await wait(250)
+    out.emptyCount = v.visibleKeys.length
+    out.emptyNote = el('assetList') ? (el('assetList').textContent || '').includes('没有匹配') : false
+
+    el('assetFilter').value = ''
+    el('assetFilter').dispatchEvent(new Event('input', { bubbles: true }))
+    await wait(250)
+    return out
+  `, 60000)
+
+  check('㉕ 搜索能命中「资产内部资源文件」（不止目录名 / 文件名）',
+    !!searchTest.probe && searchTest.hitCount > 0 && searchTest.inResult === true &&
+    searchTest.hitCount < searchTest.total,
+    searchTest.probe
+      ? `搜「${searchTest.probe.query}」→ ${searchTest.hitCount}/${searchTest.total} 命中，目标在里面=${searchTest.inResult}`
+      : '没找到合适的探针资产（跳过）')
+  check('㉕ 命中理由说得清：searchHits 指向那个文件，卡片与左列表都显示 🔍',
+    searchTest.hitReasonMatches === true && searchTest.cardHitShown === true &&
+    searchTest.cardHitText.includes('🔍') && searchTest.listHitShown === true,
+    `理由=${searchTest.hitReason} 卡片行=${JSON.stringify(searchTest.cardHitText)} 左列表=${searchTest.listHitShown}`)
+  check('㉕ 过滤仍走唯一口径：条件进 filters、结果里没有坏资产',
+    searchTest.filtersQ === (searchTest.probe?.query || '').toLowerCase() &&
+    searchTest.anyBad === false,
+    `filters.q=${searchTest.filtersQ} 有坏资产=${searchTest.anyBad}`)
+  check('㉕ 搜索态给出计数与清空键，点清空键一键复原',
+    /匹配/.test(searchTest.countText || '') && searchTest.clearVisible === true &&
+    searchTest.afterClear === searchTest.total && searchTest.clearHiddenAfter === true,
+    `计数="${searchTest.countText}" 清空键=${searchTest.clearVisible} → 复原 ${searchTest.afterClear}/${searchTest.total}`)
+  check('㉕ 搜不到时是空结果 + 「没有匹配」提示（不崩、不复位成全部）',
+    searchTest.emptyCount === 0 && searchTest.emptyNote === true,
+    `结果数=${searchTest.emptyCount} 提示=${searchTest.emptyNote}`)
 
 } catch (e) {
   check('测试执行', false, e.message)

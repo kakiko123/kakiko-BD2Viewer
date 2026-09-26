@@ -58,7 +58,11 @@ try {
   // （bundle.mjs 自报的「残留外链」是 1/1，那两条是 favicon / manifest 之类的良性外链，
   //  这里用 DOM 实测，而不是只看它的自报数字。）
   await cdp.goto(TARGET)
-  await cdp.waitFor(`window.__bd2viewer && __bd2viewer.state.items.length > 0`, 60000, 'bundle boot')
+  // 等到「数据到位 **且** 卡片墙已渲染」才算落定。
+  // 只等 items.length > 0 是不够的：渲染卡片墙是扫描之后另一步，
+  // 早采样会拿到 cards=0（曾因此假失败，而同一轮的 bundle_check 却是 PASS 的）。
+  await cdp.waitFor(`window.__bd2viewer && __bd2viewer.state.items.length > 0
+                     && document.querySelectorAll('#galGrid .card').length > 0`, 60000, 'bundle boot')
 
   const external = await cdp.evaluate(`
     return {

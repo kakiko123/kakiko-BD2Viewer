@@ -56,6 +56,473 @@ const S = {
 
 let cancelled = false
 
+/* ------------------------------------------------------------------ 多语言
+ *
+ * 设计取向：**中文原文就是 key**，不发明一套抽象标识符。
+ *
+ *   t('删除这个资产？')                      → 英文时查表；查不到就原样返回中文
+ *   t('已删除 {n} 个资产', { n: 3 })          → 带参数，中英模板都用 {n} 占位
+ *
+ * 为什么这么做：
+ *   ① 中文侧零回归 —— 中文模式下 t() 恒等于「返回原文」，界面与加翻译前逐字节一致。
+ *      这条很重要：这个项目的中文文案是长期打磨过的（措辞、标点、术语），
+ *      任何「先把中文改写成 key、再翻译回来」的方案都会在途中走样。
+ *   ② 查不到不会炸 —— 新加一句中文忘了翻译，英文界面显示中文原文，功能照常，
+ *      而不是显示 `asset.delete.confirm` 这种给开发者看的东西。
+ *   ③ 翻译表和代码在同一屏里对得上 —— 改文案和改翻译是一件事，不会被拆到两个文件里
+ *      越走越远（这个项目已经被「同一件事的真相存在两处」坑过三次）。
+ *
+ * 代价：英文表里要照抄一遍中文原文当 key。这是**故意**的取舍 ——
+ * 换来的是中文侧物理上不可能被这次改动影响。
+ */
+
+const I18N_EN = {
+  /* ---- 顶栏 / 导航 ---- */
+  '本地复刻版': 'Local Edition',
+  '选择资产根目录': 'Choose asset root folder',
+  '添加目录': 'Add Folder',
+  '把任意本地文件夹加为根目录': 'Add any local folder as a root',
+  '重新扫描': 'Rescan',
+  '上传文件': 'Upload Files',
+  '拖入 .json/.skel + .atlas + .png': 'Drop .json/.skel + .atlas + .png',
+  '平铺浏览': 'Grid',
+  '回到平铺浏览': 'Back to grid',
+  '全屏': 'Fullscreen',
+  '全屏观看（音量键/↑↓ 切动画，☰ 换文件）': 'Fullscreen (volume keys / ↑↓ switch animation, ☰ switch file)',
+  '全屏观看（音量键切动画）': 'Fullscreen (volume keys switch animation)',
+  '快捷键': 'Shortcuts',
+  '设置': 'Settings',
+
+  /* ---- 左栏：控制 ---- */
+  '控制': 'Controls',
+  '图层': 'Layers',
+  '未载入': 'Not loaded',
+  '在右侧列表里选一个资产': 'Pick an asset from the list on the right',
+  '动画': 'Animations',
+  '过滤动画…': 'Filter animations…',
+  '皮肤 (Skin)': 'Skin',
+  '播放': 'Play',
+  '暂停': 'Pause',
+  '后退一帧': 'Step back one frame',
+  '前进一帧': 'Step forward one frame',
+  '循环播放': 'Loop',
+  '速度': 'Speed',
+  '视图': 'View',
+  '放大 +': 'Zoom In +',
+  '缩小 −': 'Zoom Out −',
+  '重置视图': 'Reset View',
+  '适配窗口': 'Fit to Window',
+  '截图 / 导出时使用当前镜头': 'Use current camera for screenshots / exports',
+  '背景': 'Background',
+  '选背景图': 'Choose Image',
+  '清除': 'Clear',
+  '截图 / 导出': 'Screenshot / Export',
+  '透明背景': 'Transparent background',
+  '截图 PNG': 'Screenshot PNG',
+  '2K 截图': '2K Screenshot',
+  '导出 WebM 视频': 'Export WebM Video',
+  '导出帧序列 (ZIP)': 'Export Frame Sequence (ZIP)',
+  '视频按「时长 × 帧率」逐帧录制（最高 60 fps），背景色/背景图会烘进画面；浏览器限制 WebM 不带透明通道，「透明背景」只对 PNG 截图与帧序列生效。需要更高帧率请用帧序列导出。':
+    'Video is recorded frame by frame at duration × frame rate (up to 60 fps); background color/image is baked in. Browsers cannot write alpha into WebM, so "Transparent background" only affects PNG screenshots and frame sequences. Use frame sequence export for higher frame rates.',
+
+  /* ---- 左栏：图层 ---- */
+  '开启「图层选择」后可直接点模型选层。': 'Turn on "Layer Selection" to pick layers by clicking the model.',
+  '隐藏选中层，': 'hide the selected layer, ',
+  '恢复上一次，': 'restore the previous one, ',
+  '全部还原。': 'restore all.',
+  '选中后在下方图层列表里直接隐藏 / 恢复。': 'After selecting, hide / restore layers directly in the list below.',
+  '图层选择模式': 'Layer selection mode',
+  '过滤图层…': 'Filter layers…',
+  '全部显示': 'Show All',
+  '全部隐藏': 'Hide All',
+  '没有匹配的图层': 'No matching layers',
+  '（暂无图层）': '(no layers)',
+
+  /* ---- 舞台 ---- */
+  '加载中…': 'Loading…',
+  '从右侧选一个资产开始查看': 'Pick an asset on the right to start',
+  '也可以直接点「上传文件」或把文件夹拖进这个窗口': 'Or click "Upload Files" / drag a folder into this window',
+  '上一个动画': 'Previous animation',
+  '下一个动画': 'Next animation',
+
+  /* ---- 平铺页 ---- */
+  '平铺浏览 · {n} 个 L2D': 'Grid · {n} L2D',
+  '播放顺序': 'Play order',
+  '手动': 'Manual',
+  '名称': 'Name',
+  '日期': 'Date',
+  '切换升序降序': 'Toggle ascending / descending',
+  '切换升序 / 降序': 'Toggle ascending / descending',
+  '反转当前播放顺序': 'Reverse current play order',
+  '当前升序，点一下改降序': 'Currently ascending — click for descending',
+  '当前降序，点一下改升序': 'Currently descending — click for ascending',
+  '重建缩略图': 'Rebuild Thumbnails',
+  '删掉缓存，重新生成缩略图': 'Clear cache and regenerate thumbnails',
+  '选择': 'Select',
+  '进入批量选择，可一次删除多个资产': 'Enter multi-select to delete several assets at once',
+  '全选': 'Select All',
+  '未选择': 'None selected',
+  '删除所选': 'Delete Selected',
+  '完成': 'Done',
+  '退出选择': 'Exit selection',
+  '拖动卡片调整播放顺序（按住左上角 ⠿ 立刻拖）· 右键卡片可删除':
+    'Drag cards to reorder playback (hold ⠿ at top-left to drag immediately) · right-click a card to delete',
+  '长按卡片拖动 = 调整播放顺序 · 按住不动弹删除菜单':
+    'Long-press and drag a card = reorder · hold still = delete menu',
+  '按{mode}（{dir}）· 切回「手动」才能拖动排序': 'By {mode} ({dir}) · switch back to Manual to drag-reorder',
+  '未生成': 'not generated',
+  '拖动调整播放顺序': 'Drag to reorder playback',
+  '直接全屏播放': 'Play in fullscreen',
+  '取消': 'Cancel',
+  '删除': 'Delete',
+
+  /* ---- 右栏：资产 ---- */
+  '资产浏览': 'Assets',
+  '搜索：目录名 / 文件名 / 图集内资源…': 'Search: folder / file name / inner assets…',
+  '清空搜索': 'Clear search',
+  '过滤：目录名 / 文件名…': 'Filter: folder / file name…',
+  '仅可播放': 'Playable only',
+  '清除已上传': 'Clear Uploaded',
+  '没有匹配的资产': 'No matching assets',
+  '请先添加一个目录': 'Add a folder first',
+  '匹配 {n} 个': '{n} matched',
+  '无匹配': 'No match',
+
+  /* ---- 手机端 ---- */
+  '上一个资产': 'Previous asset',
+  '下一个资产': 'Next asset',
+
+  /* ---- 全屏 ---- */
+  '文件列表': 'File list',
+  '隐藏界面（只看画面）': 'Hide UI (artwork only)',
+  '隐藏界面 · 点画面可临时唤出': 'UI hidden · tap the artwork to show temporarily',
+  '显示界面': 'Show UI',
+  '退出全屏': 'Exit fullscreen',
+  '上一个动画（音量−）': 'Previous animation (Vol−)',
+  '下一个动画（音量+）': 'Next animation (Vol+)',
+  '◀▶ 切资产 · 音量键切动画 · ☰ 换文件 · ✕ 退出': '◀▶ asset · volume keys animation · ☰ files · ✕ exit',
+
+  /* ---- 设置 ---- */
+  '文件目录': 'File Folder',
+  '贴图预乘 alpha（BD2 素材建议开启；若边缘出现黑边/半透明异常可关掉试试）':
+    'Premultiply texture alpha (recommended for BD2 assets; turn off if edges show dark fringes or odd transparency)',
+  '切换资产后自动播放': 'Auto-play after switching asset',
+  '切换动画时自动重新取景（会保留你当前的缩放倍数，不会打回原始大小；想完全固定视角就关掉）':
+    'Refit when switching animation (keeps your current zoom level, does not reset to original size; turn off to lock the view)',
+  '音量上键': 'Volume Up key',
+  '切到下一个动画': 'Next animation',
+  '切到上一个动画': 'Previous animation',
+  '音量键切动画只在全屏模式生效；音量下键方向相反。':
+    'Volume keys switch animations in fullscreen only; Volume Down is the opposite direction.',
+  '默认背景色': 'Default background',
+  '截图边长上限': 'Screenshot max side',
+  '导出帧率': 'Export frame rate',
+  '界面语言': 'Language',
+  '中文': '中文',
+  'English': 'English',
+  '语言只影响界面文字，不改动你的资产和排序设置。': 'Language only affects UI text; it does not touch your assets or sort settings.',
+
+  /* ---- 语言首次询问 ---- */
+  '选择界面语言': 'Choose your language',
+  '可随时在「设置」里修改': 'You can change this anytime in Settings',
+  '继续': 'Continue',
+
+  /* ---- 上传 ---- */
+  '上传 Spine 文件': 'Upload Spine Files',
+  '选择或拖入同一个 Spine 4.1 资产组的 .json（或 .skel）+ .atlas + 全部 .png。也可以直接拖入整个文件夹。':
+    'Select or drop the .json (or .skel) + .atlas + all .png of one Spine 4.1 asset group. You can also drop an entire folder.',
+  '显示名称（可留空）': 'Display name (optional)',
+  '把文件拖到这里，或 选择文件': 'Drop files here, or choose files',
+  '选择文件': 'choose files',
+  '载入': 'Load',
+  '导入文件': 'Import Files',
+  '资产': 'Assets',
+  '把文件拖到这里，或': 'Drop files here, or ',
+  '本次会话上传的资产（不在磁盘上）': 'Assets uploaded this session (not on disk)',
+  '这些是本次会话上传的资产，移除后需要重新上传。':
+    'These assets were uploaded this session; removing them means uploading again.',
+
+  /* ---- 快捷键弹窗 ---- */
+  '拖拽 / 滚轮': 'Drag / Wheel',
+  '平移 / 缩放视图': 'Pan / zoom the view',
+  '空格': 'Space',
+  '播放 / 暂停': 'Play / pause',
+  '← / →': '← / →',
+  '后退 / 前进一帧': 'Step back / forward one frame',
+  'R': 'R',
+  'F': 'F',
+  'L': 'L',
+  '切换图层选择模式': 'Toggle layer selection mode',
+  '点击模型': 'Click model',
+  '图层选择模式下选中该图层': 'Select that layer in layer-selection mode',
+  'H': 'H',
+  '隐藏选中的图层': 'Hide the selected layer',
+  'U': 'U',
+  '恢复上一次隐藏': 'Restore the last hidden layer',
+  'Esc': 'Esc',
+  '还原全部隐藏': 'Restore all hidden layers',
+  '[ / ]': '[ / ]',
+  '上一套 / 下一套动画': 'Previous / next animation set',
+  '↑ / ↓': '↑ / ↓',
+  '上一个 / 下一个动画（全屏时也可用音量键）': 'Previous / next animation (volume keys work in fullscreen)',
+  '知道了': 'Got it',
+  '本项目基于': 'Built upon',
+  '构建 · MIT License, Copyright (c) 2025 Jelosus2': ' · MIT License, Copyright (c) 2025 Jelosus2',
+  '功能形态沿用上游，源码为独立重写（未复制其源码）。':
+    'Feature design follows the upstream project; source code is an independent rewrite (no code copied).',
+
+  /* ---- 卡片菜单 / 删除确认 ---- */
+  '资产操作': 'Asset Actions',
+  '删除这个资产': 'Delete this asset',
+  '批量选择…': 'Multi-select…',
+  '确认删除': 'Confirm Delete',
+  '删除这个资产？': 'Delete this asset?',
+  '正在删除…': 'Deleting…',
+  '删除 {n} 个资产？': 'Delete {n} assets?',
+  '⚠️ 此操作非常危险，可能导致不可逆的数据丢失！': '⚠️ This is irreversible and may cause permanent data loss!',
+  '将真正删除磁盘上的 ': 'This will permanently delete ',
+  ' 套资产文件</b>（atlas / skeleton / 贴图），无法恢复。':
+    ' asset file set(s) from disk (atlas / skeleton / textures). It cannot be undone.',
+
+  /* ---- 含行内标签的段落（用 data-i18n-html / innerHTML 整条替换） ----
+     用 `textContent` 会把 <b> 一起抹掉，所以这些单独列出来。
+     key 和值都必须带标签，两边形状一致才不会出现「中文有粗体、英文没有」。
+     ⚠ 只允许放我们自己写的常量 —— 绝不能把资产名 / 路径塞进这些字符串再 innerHTML。 */
+  '选择或拖入同一个 Spine 4.1 资产组的 <b>.json</b>（或 <b>.skel</b>）+ <b>.atlas</b> + 全部 <b>.png</b>。也可以直接拖入整个文件夹。':
+    'Select or drop the <b>.json</b> (or <b>.skel</b>) + <b>.atlas</b> + all <b>.png</b> of one Spine 4.1 asset group. You can also drop an entire folder.',
+  '⚠️ 此操作非常危险，可能导致不可逆的数据丢失！<br>将<b>真正删除磁盘上的 {n} 套资产文件</b>（atlas / skeleton / 贴图），无法恢复。':
+    '⚠️ This is irreversible and may cause permanent data loss!<br>This will <b>permanently delete {n} asset file set(s)</b> from disk (atlas / skeleton / textures). It cannot be undone.',
+
+  /* ---- toast / 状态 ---- */
+  '扫描中…': 'Scanning…',
+  '扫描失败': 'Scan failed',
+  '扫描失败：': 'Scan failed: ',
+  '载入中…': 'Loading…',
+  '载入失败：': 'Load failed: ',
+  '初始化播放器失败：': 'Failed to initialize player: ',
+  '切换皮肤失败：': 'Failed to switch skin: ',
+  '保存失败：': 'Save failed: ',
+  '写入失败': 'Write failed',
+  '删除失败': 'Delete failed',
+  '导出失败：': 'Export failed: ',
+  '导出帧序列失败：': 'Frame sequence export failed: ',
+  '截图失败：': 'Screenshot failed: ',
+  '录制失败': 'Recording failed',
+  '读取失败': 'Read failed',
+  '读取导出结果失败': 'Failed to read export result',
+  '读取目录：创建失败': 'Folder: creation failed',
+  '读取目录：{dir}': 'Folder: {dir}',
+  '添加失败': 'Add failed',
+  '添加目录失败：': 'Failed to add folder: ',
+  '打不开文件夹选择器：': 'Could not open folder picker: ',
+  '后台任务出错：': 'Background task error: ',
+  '原生层无响应：': 'Native layer not responding: ',
+  '无法连接本地服务：': 'Cannot reach local service: ',
+  '缩略图渲染失败': 'Thumbnail render failed',
+  '缩略图生成超时': 'Thumbnail generation timed out',
+  '无法读取 atlas': 'Cannot read atlas',
+  '读不到骨架文件：': 'Cannot read skeleton file: ',
+  '读不到骨架文件（HTTP {status}）': 'Cannot read skeleton file (HTTP {status})',
+  'JSON 损坏：{msg}': 'Corrupt JSON: {msg}',
+  '「{folder}」的 .json 是坏文件（{msg}）。\n': 'The .json for "{folder}" is a corrupt file ({msg}).\n',
+  '骨架为空：请确认 .json 与 .atlas 是否匹配': 'Empty skeleton: check that the .json matches the .atlas',
+  '这个骨架里没有任何动画': 'This skeleton has no animations',
+  '没有可导出的动画': 'No animation to export',
+  '缺少 .atlas 文件': 'Missing .atlas file',
+  '缺少 .json 或 .skel 骨架文件': 'Missing .json or .skel skeleton file',
+  '缺少贴图 .png': 'Missing texture .png',
+  'atlas 引用了但没提供这些图：': 'atlas references these missing images: ',
+  '缩略图 {done}/{total}': 'Thumbnails {done}/{total}',
+  '正在重新生成缩略图…': 'Regenerating thumbnails…',
+  '正在移除…': 'Removing…',
+  '正在录制 WebM…': 'Recording WebM…',
+  '正在打包 ZIP…': 'Packaging ZIP…',
+  '正在录制 WebM {i}/{total} …': 'Recording WebM {i}/{total} …',
+  '正在导出帧 {i}/{total} …': 'Exporting frame {i}/{total} …',
+  '录制结果为空：当前浏览器没能从画布采到帧':
+    'Recording produced nothing: this browser could not capture frames from the canvas',
+  '提示：渲染跟不上 {fps} fps，已跳过 {dropped}/{total} 帧（建议把帧率调低或改用帧序列导出）':
+    'Note: rendering cannot keep up with {fps} fps; skipped {dropped}/{total} frames (lower the frame rate or use frame sequence export)',
+  '已保存：': 'Saved: ',
+  '已删除 {n} 个资产': 'Deleted {n} assets',
+  '没有资产被删除': 'No assets deleted',
+  '有 {n} 个资产没能删除：': '{n} asset(s) could not be deleted: ',
+  '有 {n} 个文件没导入成功：{list}': '{n} file(s) failed to import: {list}',
+  '已导入 {n} 个文件': '{n} file(s) imported',
+  '已接收 {n} 个文件，点「载入」开始': '{n} file(s) received — click Load to start',
+  '导入 {i}/{total} · {name}': 'Importing {i}/{total} · {name}',
+  '导入 0/{total} …': 'Importing 0/{total} …',
+  '已还原': 'Restored',
+  '界面已恢复': 'UI restored',
+  '已选 {n} 个': '{n} selected',
+  '已选图层：<b>{name}</b>': 'Selected layer: <b>{name}</b>',
+  '已隐藏界面 · 点画面可临时唤出': 'UI hidden · tap the artwork to show temporarily',
+  '播放顺序已保存（{n} 个）': 'Play order saved ({n} items)',
+  '放大 ×{step}': 'Zoom ×{step}',
+  '正序': 'forward',
+  '倒序': 'reversed',
+  '升序': 'ascending',
+  '降序': 'descending',
+  '新的在前': 'newest first',
+  '旧的在前': 'oldest first',
+  '（根目录）': '(root)',
+  '（不存在）': '(not found)',
+  '（未配置目录）': '(no folder configured)',
+  '（目录还没建好）': '(folder not ready)',
+  '（暂无动画）': '(no animations)',
+  '（会话内上传，不在磁盘上）': '(uploaded this session, not on disk)',
+  '已上传（本次会话）': 'Uploaded (this session)',
+  '磁盘文件 · {bits}': 'On disk · {bits}',
+  '{n} 张贴图': '{n} textures',
+  '+{n} 张贴图': '+{n} textures',
+  ' · {n} 图': ' · {n} images',
+  '超过 12MB': 'over 12MB',
+  '未知原因': 'unknown reason',
+
+  /* ---- 手机端存储条 ---- */
+  '去开启': 'Enable',
+  '跳转到系统设置页，开启「所有文件访问权限」': 'Open system settings to grant "All files access"',
+  '授权文件夹': 'Authorize Folder',
+  '用系统文件夹选择器授权一个目录，直接读取不用拷贝文件':
+    'Authorize a folder with the system picker to read files directly, no copying',
+  '把手机里的 Spine 文件拷进 App 目录，不用数据线':
+    'Copy Spine files from your phone into the App folder, no cable needed',
+  '复制路径': 'Copy Path',
+  '复制目录路径，可粘贴到文件管理器': 'Copy the folder path to paste into a file manager',
+  '文件目录：{path}': 'Folder: {path}',
+  'APK 模式 · 从手机存储读取 · 扫描深度 {depth}': 'APK mode · reading from phone storage · scan depth {depth}',
+  '本地服务 {host}:{port} · 扫描深度 {depth}': 'Local service {host}:{port} · scan depth {depth}',
+  '用手机自带的「文件管理」把 .atlas + .json/.skel + .png 拷进这个目录（每套一个子文件夹），':
+    'Use your phone file manager to copy .atlas + .json/.skel + .png into this folder (one subfolder per set), ',
+  '回来点顶栏「重新扫描」就能看到；懒得找目录就用「导入文件」直接选文件。':
+    'then tap "Rescan" in the top bar. If you would rather not hunt for folders, use "Import Files" instead.',
+  '可用顶栏「导入文件」拷进当前目录。': 'You can use "Import Files" in the top bar to copy into this folder.',
+  '外部目录 {path} 用不了：Android {sdk}+ 的分区存储不允许 App 在手机存储根目录建目录或读文件，':
+    'External folder {path} is unavailable: scoped storage on Android {sdk}+ does not let apps create or read folders at phone-storage root, ',
+  '（系统设置里叫「所有文件访问权限」）；不想开权限，用顶栏「导入文件」把文件拷进来。':
+    ' (called "All files access" in system settings). If you prefer not to grant it, use "Import Files" to copy them in.',
+  '已开启全部文件访问，但 {path} 仍不可用：{reason}。':
+    'All-files access is granted, but {path} is still unavailable: {reason}.',
+  '现在读的是 App 专属目录（文件管理器进不去）。想在手机存储里直接放文件就点「去开启」':
+    'Currently reading the app-private folder (file managers cannot reach it). Tap "Enable" to put files in phone storage instead.',
+  '目录不存在：{path}': 'Folder does not exist: {path}',
+  '多半是下载/拷贝不完整：重新导出一份完整文件，或先看别的资产。':
+    'Probably an incomplete download/copy: re-export a full set, or view another asset first.',
+  '目录太大，扫描已截断：只覆盖了前 4000 个子目录。建议直接选到放 Spine 文件的那一层。':
+    'Folder too large — scan truncated to the first 4000 subfolders. Point the root directly at the folder holding the Spine files.',
+  '输入要添加的本地目录绝对路径（例如 E:\\xxx\\mods）：':
+    'Enter the absolute path of the local folder to add (e.g. E:\\xxx\\mods):',
+  '上次运行崩溃了：\n': 'The previous run crashed:\n',
+}
+
+/** 当前语言：'zh' | 'en'。中文是源语言，也是任何异常情况下的兜底。 */
+let LANG = 'zh'
+const LANG_KEY = 'bd2.lang'
+
+/** 读一次语言偏好。注意**不在这里判断「是否首次」** —— 那个由 boot 决定，
+ *  因为要在界面画出来之前就把语言定下来，否则会先闪一屏中文。 */
+function loadLang() {
+  try {
+    const v = localStorage.getItem(LANG_KEY)
+    if (v === 'en' || v === 'zh') return v
+  } catch { /* 读不到就靠下面兜底 */ }
+  // 没存过：跟随系统。桌面版没弹窗时（比如直接开 localhost）也有个合理默认。
+  return systemLangGuess()
+}
+
+function systemLangGuess() {
+  try {
+    const l = (navigator.language || '').toLowerCase()
+    return l.startsWith('zh') ? 'zh' : 'en'
+  } catch { return 'zh' }
+}
+
+function saveLang(v) {
+  LANG = v === 'en' ? 'en' : 'zh'
+  try { localStorage.setItem(LANG_KEY, LANG) } catch { /* 存不下就算了，本次会话内仍生效 */ }
+  applyLang()
+}
+
+/**
+ * 翻译函数。中文模式下直接返回原文（**恒等**，保证中文界面零回归）。
+ *
+ * 参数替换用 {name} 占位。中英两侧的模板都写 {name}，
+ * 所以 t('已删除 {n} 个资产', {n: 3}) 在中文下得到「已删除 3 个资产」，
+ * 而不是「已删除 {n} 个资产」—— 这一条必须对，否则中文界面会漏出占位符。
+ */
+function t(zh, params) {
+  let s = zh
+  if (LANG === 'en') {
+    const en = I18N_EN[zh]
+    if (en != null) s = en
+  }
+  if (params) {
+    s = s.replace(/\{(\w+)\}/g, (m, k) => (params[k] != null ? String(params[k]) : m))
+  }
+  return s
+}
+
+/** 给节点设文字（已经用 textContent 的地方可以不改；这个是为了表达意图统一） */
+function setText(el, zh, params) {
+  if (el) el.textContent = t(zh, params)
+}
+
+/**
+ * 把界面上的静态文案刷成当前语言。
+ *
+ * 做法：index.html 里给要翻译的元素加 `data-i18n="中文原文"`，
+ * 这里按属性去查表并写回。中文时会把 data-i18n 的值原样写回 ——
+ * 也就是说**中文界面的文字来自 HTML 自己**，JS 一个字符都没改。
+ *
+ * 带 title / placeholder / aria-label 的另有两种属性：
+ *   data-i18n-title / data-i18n-ph / data-i18n-aria
+ */
+function applyLang() {
+  document.documentElement.lang = LANG === 'en' ? 'en' : 'zh-CN'
+  for (const el of document.querySelectorAll('[data-i18n]')) {
+    el.textContent = t(el.getAttribute('data-i18n'))
+  }
+  // 含 <b> / <br> 这类行内标签的段落在翻译表里整条存 HTML。
+  // 只有这几处的翻译值是**我们自己写的常量**，不含用户数据 ——
+  // 用 innerHTML 是安全的；绝不要拿它去渲染任何来自资产/路径的字符串。
+  for (const el of document.querySelectorAll('[data-i18n-html]')) {
+    el.innerHTML = t(el.getAttribute('data-i18n-html'))
+  }
+  for (const el of document.querySelectorAll('[data-i18n-title]')) {
+    el.title = t(el.getAttribute('data-i18n-title'))
+  }
+  for (const el of document.querySelectorAll('[data-i18n-ph]')) {
+    el.placeholder = t(el.getAttribute('data-i18n-ph'))
+  }
+  for (const el of document.querySelectorAll('[data-i18n-aria]')) {
+    el.setAttribute('aria-label', t(el.getAttribute('data-i18n-aria')))
+  }
+  // 这些是 JS 生成的文案，静态替换覆盖不到 → 重刷一遍（它们都读状态，是纯渲染函数）
+  if (typeof applySortUI === 'function') applySortUI()
+  if (typeof refreshLists === 'function' && S.rootId) refreshLists()
+  if (typeof renderStorageBar === 'function') renderStorageBar()
+  // #dropText 是「主文案 + 选择文件链接」两段结构，任何地方改了它都要能还原
+  if (typeof dropTextDefault === 'function') dropTextDefault()
+}
+
+/**
+ * 写 #dropText。**不要**直接 `$('dropText').textContent = ...` ——
+ * 那个容器里是两个 span（主文案 + 「选择文件」链接），整体赋值会把链接节点一起删掉，
+ * 之后既点不了、切语言也回不来。所以只在第一个 span 上写，链接始终留着。
+ */
+function setDropText(s) {
+  const box = $('dropText')
+  if (!box) return
+  const head = box.querySelector('span[data-i18n]')
+  if (head) head.textContent = s
+  else box.textContent = s
+}
+
+/** 把 #dropText 恢复成「拖到这里 / 选择文件」的默认两段结构 */
+function dropTextDefault() {
+  setDropText(t('把文件拖到这里，或'))
+}
+
 /* ------------------------------------------------------------------ 小工具 */
 
 function showError(msg) {
@@ -77,7 +544,7 @@ function setBusy(on, text) {
 // 没被捕获的 Promise 异常也给出可读提示（不阻塞任何交互，9 秒自动消失）
 window.addEventListener('unhandledrejection', e => {
   const r = e?.reason
-  showError('后台任务出错：' + (r?.message || String(r)))
+  showError(t('后台任务出错：') + (r?.message || String(r)))
 })
 
 function hexToRgba(hex, alpha) {
@@ -147,7 +614,7 @@ function nativeAsk(kind, call, timeoutMs = 120000) {
     nativeWaiters[kind] = resolve
     const timer = setTimeout(() => {
       nativeWaiters[kind] = null
-      reject(new Error('原生层无响应：' + kind))
+      reject(new Error(t('原生层无响应：') + kind))
     }, timeoutMs)
     nativeWaiters[kind + ':timer'] = timer
     try { call() } catch (e) { nativeWaiters[kind] = null; clearTimeout(timer); reject(e) }
@@ -159,7 +626,7 @@ window.__native = {
   // 一次性推几 MB 的 JSON 给 evaluateJavascript 会把进程压崩。
   onScanMeta(payload) { const t = nativeWaiters['scan:timer']; if (t) clearTimeout(t); nativeWaiters.scan?.(payload); nativeWaiters.scan = null },
   onError(msg) { showError(String(msg)) },
-  onCrash(msg) { showError('上次运行崩溃了：\n' + String(msg).split('\n').slice(0, 6).join('\n')) },
+  onCrash(msg) { showError(t('上次运行崩溃了：\n') + String(msg).split('\n').slice(0, 6).join('\n')) },
   // 从系统权限设置页回到 App：权限可能刚开，重画目录提示并按需重扫
   onPermission() { refreshRootsAndRescan() },
 }
@@ -172,10 +639,10 @@ function nativeSave(blob, filename) {
     const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1)
     try {
       const ok = window.BD2Native.saveBlob(filename, base64)
-      if (ok) window.BD2Native.toast('已保存：' + filename)
-    } catch (e) { showError('保存失败：' + e.message) }
+      if (ok) window.BD2Native.toast(t('已保存：') + filename)
+    } catch (e) { showError(t('保存失败：') + e.message) }
   }
-  reader.onerror = () => showError('读取导出结果失败')
+  reader.onerror = () => showError(t('读取导出结果失败'))
   reader.readAsDataURL(blob)
 }
 
@@ -189,6 +656,12 @@ function initialView() { return deepLinkItem() ? 'player' : 'grid' }
 
 async function boot() {
   applyGLTexturePatch(true)
+  // 语言必须在**画第一帧之前**定下来，而且要比 applyTouchMode() 更早 ——
+  // 那个函数里也有 t() 文案（空状态的副标题），晚了就会在英文界面上留下一句中文。
+  LANG = loadLang()
+  applyLang()
+  $('setLang').value = LANG
+  setupLangPicker()
   if (NATIVE) applyTouchMode()
   bindUI()
   // 首屏必须在**这里**同步定下来 —— 不能等 scan() 收尾。
@@ -199,8 +672,41 @@ async function boot() {
   // 让第一帧就是资产页；这里再对齐一次 JS 的 viewMode，并把「设置」入口摆对。
   setView(initialView())
   updateVolumeKeyHints()
+  // 首次启动（从没选过语言）才弹一次。**故意不 await**：让扫描并行跑起来，
+  // 用户点完语言时资产列表已经就绪，而不是干等两个来回。
+  if (!langPicked()) askLanguage()
   await loadConfig()
   await scan(false)
+}
+
+/** 用户有没有主动选过语言。和 loadLang() 分开：
+ *  loadLang() 负责「现在用哪种语言」（没选过就跟随系统），
+ *  这个只负责「要不要弹询问框」—— 两件事，别混。 */
+function langPicked() {
+  try {
+    const v = localStorage.getItem(LANG_KEY)
+    return v === 'en' || v === 'zh'
+  } catch { return false }
+}
+
+/** 首次语言询问：亮出弹窗并接管两个按钮 */
+function askLanguage() {
+  const modal = $('langModal')
+  if (!modal) return
+  modal.hidden = false
+  for (const btn of modal.querySelectorAll('.lang-pick')) {
+    btn.onclick = () => {
+      saveLang(btn.dataset.lang)
+      $('setLang').value = LANG
+      modal.hidden = true
+    }
+  }
+}
+
+/** 设置里的语言下拉。切换立即生效并落盘（不需要点「完成」）。 */
+function setupLangPicker() {
+  const sel = $('setLang')
+  if (sel) sel.onchange = () => saveLang(sel.value)
 }
 
 /* 手机上没有键盘：快捷键入口收起来，改用底部抽屉 + 大按钮的操作方式 */
@@ -222,7 +728,7 @@ function applyTouchMode() {
   const gridTop = $('btnGrid')
   if (gridTop) gridTop.hidden = true
   const sub = document.querySelector('.empty-sub')
-  if (sub) sub.textContent = '点底部「资产」选一套，或用顶部「导入文件」把文件拷进来'
+  if (sub) sub.textContent = t('点底部「资产」选一套，或用顶部「导入文件」把文件拷进来')
   detectScreenProfile()
   window.addEventListener('resize', scheduleScreenProfile)   // 旋转 / 分屏 / 折叠屏展开
   setupMobileShell()
@@ -390,7 +896,7 @@ function setFullscreen(on) {
     closeSheet()
     updateFsLabels()
     wakeFsBar()
-    toast('◀▶ 切资产 · 音量键切动画 · ☰ 换文件 · ✕ 退出')
+    toast(t('◀▶ 切资产 · 音量键切动画 · ☰ 换文件 · ✕ 退出'))
     try { window.BD2Native.setFullscreen(true) } catch { /* 桌面版没有这个口 */ }
     if (!NATIVE && !document.fullscreenElement && document.documentElement.requestFullscreen) {
       try { document.documentElement.requestFullscreen().catch(() => {}) } catch { /* ignore */ }
@@ -429,8 +935,8 @@ function volDirMul() { return S.volDir === 'prev' ? -1 : 1 }
 /** 设置变化后同步全屏条上的提示文案 */
 function updateVolumeKeyHints() {
   const prev = $('fsPrevAnim'), next = $('fsNextAnim')
-  if (prev) prev.title = volDirMul() === -1 ? '音量+：上一个动画' : '音量−：上一个动画'
-  if (next) next.title = volDirMul() === -1 ? '音量−：下一个动画' : '音量+：下一个动画'
+  if (prev) prev.title = t(volDirMul() === -1 ? '音量+：上一个动画' : '音量−：上一个动画')
+  if (next) next.title = t(volDirMul() === -1 ? '音量−：下一个动画' : '音量+：下一个动画')
 }
 
 /** dir: +1 下一个动画，-1 上一个；到头循环。
@@ -462,7 +968,7 @@ function updateFsLabels() {
   const file = $('fsFile')
   const anim = $('fsAnim')
   if (!file || !anim) return
-  file.textContent = S.current?.folder || '未载入'
+  file.textContent = S.current?.folder || t('未载入')
   const a = currentAnimation()?.name
   const i = a ? S.animations.indexOf(a) : -1
   anim.textContent = a ? `${a}　${i + 1}/${S.animations.length}` : '—'
@@ -496,8 +1002,8 @@ function setCleanUI(on) {
     clearTimeout(cleanRevealTimer)
   }
   const btn = $('fsHide')
-  if (btn) btn.title = cleanUI ? '显示界面' : '隐藏界面（只看画面）'
-  toast(cleanUI ? '已隐藏界面 · 点画面可临时唤出' : '界面已恢复')
+  if (btn) btn.title = t(cleanUI ? '显示界面' : '隐藏界面（只看画面）')
+  toast(t(cleanUI ? '已隐藏界面 · 点画面可临时唤出' : '界面已恢复'))
   if (!cleanUI) wakeFsBar()
 }
 
@@ -564,7 +1070,7 @@ function doubleTapZoom(clientX, clientY) {
   const factor = ratio > 0 ? 1 / ratio : 1     // 相对「铺满」当前放大了几倍
 
   // 到顶（或已经超出可读范围）→ 还原
-  if (factor >= ZOOM_TOP * 0.9) { fitToWindow(); toast('已还原'); return }
+  if (factor >= ZOOM_TOP * 0.9) { fitToWindow(); toast(t('已还原')); return }
 
   // 留 15% 余量：手抖掉一点缩放不该让档位判定来回跳
   const step = ZOOM_LADDER.find(s => s > factor * 1.15) || ZOOM_TOP
@@ -579,7 +1085,7 @@ function doubleTapZoom(clientX, clientY) {
     y: world.y - world.ny * target * vh / 2,
     z: target,
   }, world)
-  toast(`放大 ×${step < 10 ? step.toFixed(1) : Math.round(step)}`)
+  toast(t('放大 ×{step}', { step: step < 10 ? step.toFixed(1) : Math.round(step) }))
 }
 
 /** 相机从当前位置缓动到目标（约 200ms），到位后刷新调试信息 */
@@ -654,18 +1160,19 @@ async function loadConfig() {
       const res = await fetch('/api/config')
       S.config = await res.json()
     } catch (err) {
-      showError('无法连接本地服务：' + err.message)
+      showError(t('无法连接本地服务：') + err.message)
       return
     }
   }
   if (NATIVE) {
     const dir = nativeDefaultPath()
     $('envInfo').textContent = dir
-      ? `文件目录：${dir}`
-      : `APK 模式 · 从手机存储读取 · 扫描深度 ${S.config.maxDepth || 6}`
+      ? t('文件目录：{path}', { path: dir })
+      : t('APK 模式 · 从手机存储读取 · 扫描深度 {depth}', { depth: S.config.maxDepth || 6 })
   } else {
-    $('envInfo').textContent =
-      `本地服务 ${S.config.host}:${S.config.port} · 扫描深度 ${S.config.maxDepth}`
+    $('envInfo').textContent = t('本地服务 {host}:{port} · 扫描深度 {depth}', {
+      host: S.config.host, port: S.config.port, depth: S.config.maxDepth,
+    })
   }
   renderRootOptions()
   renderStorageBar()
@@ -676,18 +1183,32 @@ function nativeDefaultPath() {
   catch { return '' }
 }
 
+/**
+ * 目录下拉。
+ *
+ * `data-i18n-keep` 协议（R11.1）：有两类中文**本来就不该翻译** ——
+ *   ① **用户数据**：根目录名（"手机存储 /BD2Viewer"）是系统/用户给的名字，翻译它是错的；
+ *   ② **专名/自称**：语言选择器里的「中文」，英文界面下也必须写「中文」。
+ * 打上这个属性只是**做标记、不改内容**，用途是让「英文界面不许残留中文」的测试
+ * 能区分「漏包 t()」和「本来就该是中文」。静态的那批（语言选择器）直接写在
+ * index.html 的属性上，JS 生成的（就是这里的 option）就地打标。
+ */
 function renderRootOptions() {
   const sel = $('rootSelect')
   sel.innerHTML = ''
   for (const r of S.config.roots) {
     const opt = document.createElement('option')
     opt.value = r.id
-    opt.textContent = `${r.label}${r.exists === false ? '（不存在）' : ''}`
+    // r.label 是**用户/系统给的目录名**（"手机存储 /BD2Viewer"），属于数据不是文案，
+    // 不翻译；只有「（不存在）」这个后缀是界面文案。就地打 keep 标记（R11.1）。
+    opt.textContent = r.label + (r.exists === false ? t('（不存在）') : '')
+    opt.dataset.i18nKeep = ''
     sel.appendChild(opt)
   }
   if (!S.config.roots.length) {
     const opt = document.createElement('option')
-    opt.textContent = NATIVE ? '（目录还没建好）' : '（未配置目录）'
+    opt.textContent = t(NATIVE ? '（目录还没建好）' : '（未配置目录）')
+    opt.dataset.i18nKeep = ''
     sel.appendChild(opt)
   }
   if (S.rootId == null) {
@@ -755,15 +1276,15 @@ function renderStorageBar() {
   const path = document.createElement('span')
   path.className = 'sb-path'
   path.textContent = st.defaultDir
-    ? `读取目录：${st.defaultDir}`
-    : '读取目录：创建失败'
+    ? t('读取目录：{dir}', { dir: st.defaultDir })
+    : t('读取目录：创建失败')
   bar.appendChild(path)
 
   const btn = (text, title, fn) => {
     const b = document.createElement('button')
     b.className = 'btn tiny'
-    b.textContent = text
-    b.title = title
+    b.textContent = t(text)
+    b.title = t(title)
     b.onclick = fn
     bar.appendChild(b)
   }
@@ -772,31 +1293,55 @@ function renderStorageBar() {
     try { window.BD2Native.copyText(st.defaultDir || '') } catch { /* ignore */ }
   })
   btn('授权文件夹', '用系统文件夹选择器授权一个目录，直接读取不用拷贝文件', () => {
-    try { window.BD2Native.pickFolder() } catch (e) { showError('打不开文件夹选择器：' + e.message) }
+    try { window.BD2Native.pickFolder() } catch (e) { showError(t('打不开文件夹选择器：') + e.message) }
   })
 
+  // 说明文字与「去开启」按钮跟手机设置页共用一份（见 storageHint）
+  const hint = storageHint(st)
+  for (const a of hint.actions) btn(a.text, a.title, a.fn)
   const tip = document.createElement('div')
   tip.className = 'sb-tip'
+  tip.textContent = hint.tip
+  bar.appendChild(tip)
+}
+
+/** 手机端：目录/权限信息渲染进「设置 → 文件目录」，含路径、操作按钮和说明 */
+/**
+ * 手机端存储状态说明：**唯一一份文案来源**。
+ *
+ * 桌面状态条（renderStorageBar）和手机设置页（renderStorageSettings）原本各写了一
+ * 遍同样的三条提示，改一处忘一处 —— 加语言时这种重复立刻变成两倍翻译成本，
+ * 而且很容易只改了一边（英文界面漏出中文）。现在两边都调这个函数。
+ *
+ * 返回 { tip, actions }：tip 是说明文字，actions 是只在这种状态下该出现的按钮。
+ */
+function storageHint(st) {
   if (st.defaultIsPublic) {
-    tip.textContent =
-      `用手机自带的「文件管理」把 .atlas + .json/.skel + .png 拷进这个目录（每套一个子文件夹），` +
-      `回来点顶栏「重新扫描」就能看到；懒得找目录就用「导入文件」直接选文件。`
-    bar.appendChild(tip)
-  } else if (!st.allFilesAccess) {
-    tip.textContent =
-      `外部目录 ${st.publicPath} 用不了：Android ${st.sdk || 11}+ 的分区存储不允许 App 在手机存储根目录建目录或读文件，` +
-      `现在读的是 App 专属目录（文件管理器进不去）。想在手机存储里直接放文件就点「去开启」` +
-      `（系统设置里叫「所有文件访问权限」）；不想开权限，用顶栏「导入文件」把文件拷进来。`
-    bar.appendChild(tip)
-    btn('去开启', '跳到系统设置页，开启「所有文件访问权限」', () => {
-      try { window.BD2Native.requestAllFilesAccess() } catch { /* ignore */ }
-      setTimeout(() => { refreshRootsAndRescan() }, 8000)   // 从设置页回来后再刷一次
-    })
-  } else {
-    tip.textContent =
-      `已开启全部文件访问，但 ${st.publicPath} 仍不可用：${st.publicReason || '未知原因'}。` +
-      `可用顶栏「导入文件」拷进当前目录。`
-    bar.appendChild(tip)
+    return {
+      tip: t('用手机自带的「文件管理」把 .atlas + .json/.skel + .png 拷进这个目录（每套一个子文件夹），') +
+        t('回来点顶栏「重新扫描」就能看到；懒得找目录就用「导入文件」直接选文件。'),
+      actions: [],
+    }
+  }
+  if (!st.allFilesAccess) {
+    return {
+      tip: t('外部目录 {path} 用不了：Android {sdk}+ 的分区存储不允许 App 在手机存储根目录建目录或读文件，', { path: st.publicPath, sdk: st.sdk || 11 }) +
+        t('现在读的是 App 专属目录（文件管理器进不去）。想在手机存储里直接放文件就点「去开启」') +
+        t('（系统设置里叫「所有文件访问权限」）；不想开权限，用顶栏「导入文件」把文件拷进来。'),
+      actions: [{
+        text: '去开启',
+        title: '跳到系统设置页，开启「所有文件访问权限」',
+        fn: () => {
+          try { window.BD2Native.requestAllFilesAccess() } catch { /* ignore */ }
+          setTimeout(() => { refreshRootsAndRescan() }, 8000)   // 从设置页回来后再刷一次
+        },
+      }],
+    }
+  }
+  return {
+    tip: t('已开启全部文件访问，但 {path} 仍不可用：{reason}。', { path: st.publicPath, reason: st.publicReason || t('未知原因') }) +
+      t('可用顶栏「导入文件」拷进当前目录。'),
+    actions: [],
   }
 }
 
@@ -807,48 +1352,32 @@ function renderStorageSettings(st) {
   box.hidden = false
   const path = $('setStoragePath')
   if (path) path.textContent = st.defaultDir
-    ? `读取目录：${st.defaultDir}`
-    : '读取目录：创建失败'
+    ? t('读取目录：{dir}', { dir: st.defaultDir })
+    : t('读取目录：创建失败')
   const tip = $('setStorageTip')
   const actions = $('setStorageActions')
   if (actions) actions.innerHTML = ''
 
-  const btn = (text, title, fn) => {
+  const addBtn = (text, title, fn) => {
     const b = document.createElement('button')
     b.className = 'btn tiny'
-    b.textContent = text
-    b.title = title
+    b.textContent = t(text)
+    b.title = t(title)
     b.onclick = fn
-    actions.appendChild(b)
+    if (actions) actions.appendChild(b)
+    return b
   }
 
-  btn('复制路径', '复制目录路径，可粘贴到文件管理器', () => {
+  addBtn('复制路径', '复制目录路径，可粘贴到文件管理器', () => {
     try { window.BD2Native.copyText(st.defaultDir || '') } catch { /* ignore */ }
   })
-  btn('授权文件夹', '用系统文件夹选择器授权一个目录，直接读取不用拷贝文件', () => {
-    try { window.BD2Native.pickFolder() } catch (e) { showError('打不开文件夹选择器：' + e.message) }
+  addBtn('授权文件夹', '用系统文件夹选择器授权一个目录，直接读取不用拷贝文件', () => {
+    try { window.BD2Native.pickFolder() } catch (e) { showError(t('打不开文件夹选择器：') + e.message) }
   })
 
-  let tipText = ''
-  if (st.defaultIsPublic) {
-    tipText =
-      `用手机自带的「文件管理」把 .atlas + .json/.skel + .png 拷进这个目录（每套一个子文件夹），` +
-      `回来点顶栏「重新扫描」就能看到；懒得找目录就用「导入文件」直接选文件。`
-  } else if (!st.allFilesAccess) {
-    tipText =
-      `外部目录 ${st.publicPath} 用不了：Android ${st.sdk || 11}+ 的分区存储不允许 App 在手机存储根目录建目录或读文件，` +
-      `现在读的是 App 专属目录（文件管理器进不去）。想在手机存储里直接放文件就点「去开启」` +
-      `（系统设置里叫「所有文件访问权限」）；不想开权限，用顶栏「导入文件」把文件拷进来。`
-    btn('去开启', '跳到系统设置页，开启「所有文件访问权限」', () => {
-      try { window.BD2Native.requestAllFilesAccess() } catch { /* ignore */ }
-      setTimeout(() => { refreshRootsAndRescan() }, 8000)   // 从设置页回来后再刷一次
-    })
-  } else {
-    tipText =
-      `已开启全部文件访问，但 ${st.publicPath} 仍不可用：${st.publicReason || '未知原因'}。` +
-      `可用顶栏「导入文件」拷进当前目录。`
-  }
-  if (tip) tip.textContent = tipText
+  const hint = storageHint(st)
+  for (const a of hint.actions) addBtn(a.text, a.title, a.fn)
+  if (tip) tip.textContent = hint.tip
 }
 
 async function scan(force) {
@@ -857,7 +1386,7 @@ async function scan(force) {
     refreshLists()
     return
   }
-  setBusy(true, '扫描中…')
+  setBusy(true, t('扫描中…'))
   try {
     let data
     if (NATIVE) {
@@ -869,18 +1398,18 @@ async function scan(force) {
         for (let i = 0; i < chunk.length; i++) items.push(chunk[i])
       }
       data = Object.assign({}, meta, { items })
-      if (meta.truncated) showError('目录太大，扫描已截断：只覆盖了前 4000 个子目录。建议直接选到放 Spine 文件的那一层。')
+      if (meta.truncated) showError(t('目录太大，扫描已截断：只覆盖了前 4000 个子目录。建议直接选到放 Spine 文件的那一层。'))
     } else {
       const res = await fetch(`/api/scan?root=${encodeURIComponent(S.rootId)}${force ? '&refresh=1' : ''}`)
       data = await res.json()
-      if (!res.ok) throw new Error(data.error || '扫描失败')
+      if (!res.ok) throw new Error(data.error || t('扫描失败'))
     }
     S.items = data.items || []
-    if (!data.exists) showError(`目录不存在：${data.root.path}`)
-    $('assetCount').textContent = `${data.playableCount}/${data.itemCount} 可播放` +
+    if (!data.exists) showError(t('目录不存在：{path}', { path: data.root.path }))
+    $('assetCount').textContent = t('{ok}/{total} 可播放', { ok: data.playableCount, total: data.itemCount }) +
       (data.scanMs ? ` · ${data.scanMs}ms` : '')
   } catch (err) {
-    showError('扫描失败：' + err.message)
+    showError(t('扫描失败：') + err.message)
   } finally {
     setBusy(false)
   }
@@ -923,6 +1452,8 @@ const sortKeyFor = rid => `bd2.sort.${rid || 'default'}`
 const SORT_MODES = ['manual', 'name', 'date']
 /** 各排序方式的默认方向：名称 A→Z，日期新的在前 */
 const SORT_DEFAULT_DIR = { manual: 1, name: 1, date: -1 }
+/** 排序方式 → 界面文案。**不预先把中文烤进常量** —— 那样切语言时这个表
+ *  还是旧语言。取值时即时查表（t() 在中英之间恒等/翻译）。 */
 const SORT_LABEL = { manual: '手动', name: '名称', date: '日期' }
 
 let sortState = { mode: 'manual', dir: SORT_DEFAULT_DIR.manual }
@@ -1038,11 +1569,11 @@ function toggleSortDir() {
   applySortUI()
   refreshLists()
   const what = sortState.mode === 'manual'
-    ? (dir === 1 ? '正序' : '倒序')
+    ? t(dir === 1 ? '正序' : '倒序')
     : sortState.mode === 'date'
-      ? (dir === -1 ? '新的在前' : '旧的在前')
-      : (dir === 1 ? '升序' : '降序')
-  toast(`${SORT_LABEL[sortState.mode]} · ${what}`)
+      ? t(dir === -1 ? '新的在前' : '旧的在前')
+      : t(dir === 1 ? '升序' : '降序')
+  toast(`${t(SORT_LABEL[sortState.mode])} · ${what}`)
 }
 
 /** 把排序状态同步到界面：滑块位置、升降序图标、提示文案 */
@@ -1059,23 +1590,27 @@ function applySortUI() {
   if (dir) {
     dir.textContent = st.dir === 1 ? '↑' : '↓'
     dir.title = st.mode === 'manual'
-      ? '反转当前播放顺序'
-      : (st.dir === 1 ? '当前升序，点一下改降序' : '当前降序，点一下改升序')
+      ? t('反转当前播放顺序')
+      : t(st.dir === 1 ? '当前升序，点一下改降序' : '当前降序，点一下改升序')
     dir.setAttribute('aria-label', dir.title)
   }
   const hint = $('galHint')
   if (hint) {
     if (st.mode === 'manual') {
-      hint.textContent = document.body.classList.contains('is-touch')
+      hint.textContent = t(document.body.classList.contains('is-touch')
         ? '长按卡片拖动 = 调整播放顺序 · 按住不动弹删除菜单'
-        : '拖动卡片调整播放顺序（按住左上角 ⠿ 立刻拖）· 右键卡片可删除'
+        : '拖动卡片调整播放顺序（按住左上角 ⠿ 立刻拖）· 右键卡片可删除')
     } else {
       const arrow = st.mode === 'date'
-        ? (st.dir === -1 ? '新的在前' : '旧的在前')
-        : (st.dir === 1 ? '升序' : '降序')
-      hint.textContent = `按${SORT_LABEL[st.mode]}（${arrow}）· 拖动卡片会转为手动顺序`
+        ? t(st.dir === -1 ? '新的在前' : '旧的在前')
+        : t(st.dir === 1 ? '升序' : '降序')
+      hint.textContent = t('按{mode}（{dir}）· 切回「手动」才能拖动排序',
+        { mode: t(SORT_LABEL[st.mode]), dir: arrow })
     }
   }
+  // 以名称 / 日期排序时拖不动，「⠿」手柄就不该出现 —— 看得见却拖不动比直接没有更让人困惑。
+  // 归 JS 挂类名（而不是 :has() 或内联样式）：这是**随数据变**的条件，见 ARCHITECTURE R1。
+  document.body.classList.toggle('sort-locked', st.mode !== 'manual')
 }
 
 /** 扫描出来的资产唯一标识：上传的自定义项有 key，扫描出来的只有 id（= relAtlas） */
@@ -1088,18 +1623,65 @@ function itemKey(i) { return i.key || i.id || i.relAtlas || '' }
    约定：控件只是**入口**，filters 才是事实来源 —— 控件一变调 syncFilters()，其余人只读 filters。 */
 const filters = { q: '', onlyOk: true }
 
+/* 搜索的「命中理由」：assetKey → 命中的资源文件名。
+   它**不是**第二个可见性口径 —— 可见性仍然只由 filteredItems() 决定。
+   这里只是那条过滤顺手留下的副产物，纯粹给界面解释「这条为什么被搜出来」用
+   （搜 illust_special6 时卡片显示的是目录名，不解释一句会让人以为搜错了）。
+   每次 filteredItems() 开头清空重建，读它的人必须在同一次渲染里读。 */
+const searchHits = new Map()
+
 /** 把左侧抽屉那两个控件同步进 filters（只在输入事件里调用） */
 function syncFilters() {
   filters.q = $('assetFilter').value.trim().toLowerCase()
   filters.onlyOk = $('chkOnlyPlayable').checked
 }
 
+/**
+ * 一套资产里所有「可被搜到的名字」—— 目录名、组名、骨架名，以及**内部资源文件**的
+ * 真实文件名（.atlas / .skel / .json / 每个 .png）。
+ *
+ * 为什么要搜资源文件：资产卡片上显示的是目录名，但人们记得住的常常是图叫什么
+ * （「illust_special6 那套在哪来着」）。只比目录名的话，这类记忆完全搜不到。
+ *
+ * 全部走已经扫出来的字段，不再读一次磁盘；`relSkeleton` 在「只有 atlas 没有骨架」的
+ * 残缺资产上是 null，所以逐个判空。
+ */
+function searchHaystack(i) {
+  const parts = [i.folder, i.base, i.group, i.atlas, i.relAtlas]
+  if (i.relSkeleton) parts.push(i.relSkeleton)
+  if (i.skeleton) parts.push(i.skeleton)
+  if (Array.isArray(i.relImages)) parts.push(...i.relImages)
+  return parts.filter(Boolean).join(' ').toLowerCase()
+}
+
+/** 资产 → 这次搜索命中的资源文件名（给界面显示「为什么这条被搜出来」）。
+ *  只在没有任何「表面字段」命中时才需要它，所以按需算。 */
+function hitReason(i, q) {
+  const surface = `${i.folder} ${i.base} ${i.group}`.toLowerCase()
+  if (surface.includes(q)) return ''
+  const files = []
+  if (i.relSkeleton) files.push(i.relSkeleton)
+  if (Array.isArray(i.relImages)) files.push(...i.relImages)
+  if (i.atlas) files.push(i.atlas)
+  const hit = files.find(f => String(f).toLowerCase().includes(q))
+  // 取文件名做展示。**两种分隔符都要切**：relImages 在磁盘扫描时可能拿到
+  // Windows 的反斜杠形式（"sub\\img.png"），只 split('/') 会把 "sub\\img.png"
+  // 整串当成文件名显示在卡片上。
+  return hit ? String(hit).split(/[/\\]/).pop() : ''
+}
+
 /** 当前过滤条件下、按用户排序排好的资产 —— 全项目唯一的「可见资产」口径 */
 function filteredItems() {
   const { q, onlyOk } = filters
-  return orderedList(allItems().filter(i =>
-    (!onlyOk || i.ok) &&
-    (!q || `${i.folder} ${i.base} ${i.group}`.toLowerCase().includes(q))))
+  searchHits.clear()
+  return orderedList(allItems().filter(i => {
+    if (onlyOk && !i.ok) return false
+    if (!q) return true
+    if (!searchHaystack(i).includes(q)) return false
+    const why = hitReason(i, q)
+    if (why) searchHits.set(itemKey(i), why)
+    return true
+  }))
 }
 
 /**
@@ -1120,8 +1702,23 @@ function filteredItems() {
  */
 function refreshLists() {
   syncFilters()
+  syncSearchUI()
   renderAssetList()
   if (viewMode === 'grid') renderGallery()
+}
+
+/** 搜索框的附属 UI：有内容才显示「✕」清空键。
+ *  放在这里而不是 input 事件里 —— 清空也可能来自别处（比如「重新扫描」后重置），
+ *  状态同步只该有一个出口。
+ *  计数故意**不在这里算**：那要多跑一遍 filteredItems()，大目录下白费一次全量排序。
+ *  交给 renderAssetList() 末尾顺手更新（它本来就要遍历一遍结果）。 */
+function syncSearchUI() {
+  // 两个搜索框（抽屉 + 平铺页头部）各有一个清空键，显隐要跟着各自的输入框走
+  for (const [inpId, clearId] of [['assetFilter', 'assetFilterClear'], ['galFilter', 'galFilterClear']]) {
+    const input = $(inpId)
+    const clear = $(clearId)
+    if (clear) clear.hidden = !(input && input.value)
+  }
 }
 
 function renderAssetList() {
@@ -1138,10 +1735,11 @@ function renderAssetList() {
   for (const item of filteredItems()) {
     if (grouped && item.group !== group) {
       group = item.group
-      const t = document.createElement('div')
-      t.className = 'asset-group-title'
-      t.textContent = group
-      list.appendChild(t)
+      // 同理避开 t()：局部叫 gt（group title）
+      const gt = document.createElement('div')
+      gt.className = 'asset-group-title'
+      gt.textContent = group
+      list.appendChild(gt)
     }
     const el = document.createElement('div')
     el.className = 'asset-item' + (item.ok ? '' : ' bad') +
@@ -1149,10 +1747,13 @@ function renderAssetList() {
     el.innerHTML = `<div class="ai-name"></div><div class="ai-sub"></div>` +
       (item.problems?.length ? `<div class="ai-warn"></div>` : '')
     el.querySelector('.ai-name').textContent = item.folder
-    el.querySelector('.ai-sub').textContent =
-      (grouped ? '' : (item.group ? item.group + ' · ' : '')) +
+    let sub = (grouped ? '' : (item.group ? item.group + ' · ' : '')) +
       item.base + (item.skeletonKind ? `.${item.skeletonKind}` : '') +
-      ` · ${item.images.length} 图`
+      t(' · {n} 图', { n: item.images.length })
+    // 搜索命中的是内部资源文件 → 副标题里补上命中的那个文件名（否则看不出为什么它在结果里）
+    const hit = searchHits.get(itemKey(item))
+    if (hit) sub += ` · 🔍 ${hit}`
+    el.querySelector('.ai-sub').textContent = sub
     if (item.problems?.length) el.querySelector('.ai-warn').textContent = '⚠ ' + item.problems.join('；')
     el.onclick = () => { openItem(item); closeSheet(); if (fsMode) toggleFsFiles(false) }
     list.appendChild(el)
@@ -1162,9 +1763,14 @@ function renderAssetList() {
   if (!shown) {
     const empty = document.createElement('div')
     empty.className = 'asset-group-title'
-    empty.textContent = S.rootId ? '没有匹配的资产' : '请先添加一个目录'
+    empty.textContent = t(S.rootId ? '没有匹配的资产' : '请先添加一个目录')
     list.appendChild(empty)
   }
+
+  // 搜索时把右上角计数换成命中数 —— 复用刚遍历完的 shown，不再多跑一遍 filteredItems()。
+  // 没在搜索就别动它：那个计数是 scan() 写的「N/M 可播放 · 耗时」，另有含义。
+  const count = $('assetCount')
+  if (count && filters.q) count.textContent = shown ? t('匹配 {n} 个', { n: shown }) : t('无匹配')
 }
 
 /* ------------------------------------------------------------ 平铺浏览（主界面）
@@ -1401,11 +2007,11 @@ function applySelectUI() {
   const n = selectedKeys.size
   if (bar) bar.hidden = !selectMode
   if (btn) {
-    btn.textContent = selectMode ? '退出选择' : '选择'
+    btn.textContent = t(selectMode ? '退出选择' : '选择')
     btn.setAttribute('aria-pressed', String(selectMode))
   }
   const cnt = $('galSelCount')
-  if (cnt) cnt.textContent = n ? `已选 ${n} 个` : '未选择'
+  if (cnt) cnt.textContent = n ? t('已选 {n} 个', { n }) : t('未选择')
   const del = $('galSelDelete')
   if (del) del.disabled = n === 0
   const all = $('galSelAll')
@@ -1432,10 +2038,10 @@ function openCardMenu(item) {
     if (isDiskItem(item)) {
       const bits = [`atlas: ${item.relAtlas || item.id}`]
       if (item.relSkeleton) bits.push(String(item.relSkeleton))
-      if (item.relImages?.length) bits.push(`${item.relImages.length} 张贴图`)
-      info.textContent = `磁盘文件 · ${bits.join(' · ')}`
+      if (item.relImages?.length) bits.push(t('{n} 张贴图', { n: item.relImages.length }))
+      info.textContent = t('磁盘文件 · {bits}', { bits: bits.join(' · ') })
     } else {
-      info.textContent = '本次会话上传的资产（不在磁盘上）'
+      info.textContent = t('本次会话上传的资产（不在磁盘上）')
     }
   }
   $('cardMenu').hidden = false
@@ -1448,11 +2054,10 @@ function confirmDelete(items) {
     const list = $('confirmList')
     const diskCount = items.filter(isDiskItem).length
 
-    $('confirmTitle').textContent = items.length === 1 ? '删除这个资产？' : `删除 ${items.length} 个资产？`
+    $('confirmTitle').textContent = items.length === 1 ? t('删除这个资产？') : t('删除 {n} 个资产？', { n: items.length })
     $('confirmWarn').innerHTML = diskCount
-      ? '⚠️ 此操作非常危险，可能导致不可逆的数据丢失！<br>将<b>真正删除磁盘上的 '
-        + diskCount + ' 套资产文件</b>（atlas / skeleton / 贴图），无法恢复。'
-      : '这些是本次会话上传的资产，移除后需要重新上传。'
+      ? t('⚠️ 此操作非常危险，可能导致不可逆的数据丢失！<br>将<b>真正删除磁盘上的 {n} 套资产文件</b>（atlas / skeleton / 贴图），无法恢复。', { n: diskCount })
+      : t('这些是本次会话上传的资产，移除后需要重新上传。')
 
     list.innerHTML = ''
     for (const it of items) {
@@ -1460,22 +2065,22 @@ function confirmDelete(items) {
       row.className = 'confirm-row'
       const nm = document.createElement('div')
       nm.className = 'cr-name'
-      nm.textContent = `${it.folder || '（根目录）'} / ${it.base}`
+      nm.textContent = `${it.folder || t('（根目录）')} / ${it.base}`
       const fl = document.createElement('div')
       fl.className = 'cr-files'
       const bits = []
       if (isDiskItem(it)) {
         if (it.relAtlas || it.id) bits.push(String(it.relAtlas || it.id))
         if (it.relSkeleton) bits.push(String(it.relSkeleton))
-        if (it.relImages?.length) bits.push(`+${it.relImages.length} 张贴图`)
+        if (it.relImages?.length) bits.push(t('+{n} 张贴图', { n: it.relImages.length }))
       } else {
-        bits.push('（会话内上传，不在磁盘上）')
+        bits.push(t('（会话内上传，不在磁盘上）'))
       }
       fl.textContent = bits.join('  ·  ')
       row.appendChild(nm); row.appendChild(fl)
       list.appendChild(row)
     }
-    $('confirmYes').textContent = diskCount ? '确认删除' : '移除'
+    $('confirmYes').textContent = t(diskCount ? '确认删除' : '移除')
     mask.hidden = false
 
     const onMask = e => { if (e.target === mask) done(false) }
@@ -1513,7 +2118,7 @@ async function removeItemsOnDisk(items) {
     body: JSON.stringify({ rootId: S.rootId, items: payload }),
   })
   const data = await res.json()
-  if (!res.ok) throw new Error(data.error || '删除失败')
+  if (!res.ok) throw new Error(data.error || t('删除失败'))
   return data
 }
 
@@ -1526,7 +2131,7 @@ async function runDelete(items) {
   const local = items.filter(i => !isDiskItem(i))
   const gone = new Set()
 
-  setBusy(true, disk.length ? '正在删除…' : '正在移除…')
+  setBusy(true, t(disk.length ? '正在删除…' : '正在移除…'))
   let failed = []
   try {
     if (local.length) {
@@ -1542,7 +2147,7 @@ async function runDelete(items) {
     }
   } catch (err) {
     setBusy(false)
-    showError('删除失败：' + err.message)
+    showError(t('删除失败：') + err.message)
     return
   }
   setBusy(false)
@@ -1575,9 +2180,9 @@ async function runDelete(items) {
   applySelectUI()
 
   if (failed.length) {
-    showError(`有 ${failed.length} 个资产没能删除：` + failed.map(f => f.reason || f.relAtlas).join('；'))
+    showError(t('有 {n} 个资产没能删除：', { n: failed.length }) + failed.map(f => f.reason || f.relAtlas).join('；'))
   }
-  toast(gone.size ? `已删除 ${gone.size} 个资产` : '没有资产被删除')
+  toast(gone.size ? t('已删除 {n} 个资产', { n: gone.size }) : t('没有资产被删除'))
 }
 
 function renderGallery() {
@@ -1585,7 +2190,7 @@ function renderGallery() {
   if (!grid) return
   const items = filteredItems()
   const count = $('galCount')
-  if (count) count.textContent = `平铺浏览 · ${items.length} 个 L2D`
+  if (count) count.textContent = t('平铺浏览 · {n} 个 L2D', { n: items.length })
   grid.innerHTML = ''
   for (const item of items) grid.appendChild(galleryCard(item))
   thumbKick()
@@ -1599,16 +2204,29 @@ function galleryCard(item) {
     (selectMode && selectedKeys.has(key) ? ' sel' : '')
   el.dataset.key = key
   el.__item = item          // 长按菜单要用（拖动引擎只拿到元素）
+  // 这两条 title 只含我们自己写的常量（从翻译表取），不含用户数据 → 直接拼进 HTML 是安全的。
   el.innerHTML =
-    '<div class="card-drag" title="拖动调整播放顺序">⠿</div>' +
+    `<div class="card-drag" title="${t('拖动调整播放顺序')}">⠿</div>` +
     '<div class="card-check" aria-hidden="true"></div>' +
     '<div class="card-thumb pending"></div>' +
-    '<button class="card-fs" title="直接全屏播放">⛶</button>' +
-    '<div class="card-info"><div class="card-name"></div><div class="card-sub"></div></div>'
+    `<button class="card-fs" title="${t('直接全屏播放')}">⛶</button>` +
+    '<div class="card-info"><div class="card-name"></div><div class="card-sub"></div>' +
+    '<div class="card-hit" hidden></div></div>'
 
   el.querySelector('.card-name').textContent = item.folder
   el.querySelector('.card-sub').textContent =
-    item.base + (item.skeletonKind ? `.${item.skeletonKind}` : '') + ` · ${item.images.length} 图`
+    item.base + (item.skeletonKind ? `.${item.skeletonKind}` : '') +
+    t(' · {n} 图', { n: item.images.length })
+
+  // 搜索命中的是**内部资源文件**（不是目录名 / 文件名）时，卡片上要说明一句，
+  // 否则用户看到一堆名字里没有关键词的卡片会以为搜错了。
+  const hit = searchHits.get(key)
+  if (hit) {
+    const box = el.querySelector('.card-hit')
+    box.hidden = false
+    box.textContent = `🔍 ${hit}`
+    box.title = t('匹配到的资源文件：{name}', { name: hit })
+  }
 
   const thumb = el.querySelector('.card-thumb')
   const tk = thumbKey(item)
@@ -1672,7 +2290,7 @@ function updateThumbStatus() {
   const done = [...cards].filter(c => !c.querySelector('.card-thumb.pending')).length
   if (!cards.length || done >= cards.length) { el.hidden = true; return }
   el.hidden = false
-  el.textContent = `缩略图 ${done}/${cards.length}`
+  el.textContent = t('缩略图 {done}/{total}', { done, total: cards.length })
 }
 
 /** 依次给视野里的卡片生成缩略图；播放页不抢 GL，回平铺页再继续 */
@@ -1731,9 +2349,9 @@ async function makeThumb(item, size = 220) {
     (urls.skeletonUrl && urls.skeletonKind === 'json' ? urls.skeletonUrl : null)
   if (jsonUrl) {
     const res = await fetch(jsonUrl)
-    if (!res.ok) throw new Error(`读不到骨架文件（HTTP ${res.status}）`)
+    if (!res.ok) throw new Error(t('读不到骨架文件（HTTP {status}）', { status: res.status }))
     const text = await res.text()
-    try { JSON.parse(text) } catch (e) { throw new Error('JSON 损坏：' + e.message) }
+    try { JSON.parse(text) } catch (e) { throw new Error(t('JSON 损坏：{msg}', { msg: e.message })) }
   }
 
   const host = document.createElement('div')
@@ -1755,7 +2373,7 @@ async function makeThumb(item, size = 220) {
   try {
     const p = await new Promise((resolve, reject) => {
       // ② 兜底超时：就算播放器内部再出幺蛾子（不走 error 回调），队列也能继续
-      timer = setTimeout(() => reject(new Error('缩略图生成超时')), 25000)
+      timer = setTimeout(() => reject(new Error(t('缩略图生成超时'))), 25000)
       const cfg = {
         showControls: false,
         showLoading: false,
@@ -1789,7 +2407,7 @@ async function makeThumb(item, size = 220) {
     const canvas = p.canvas
     let url = null
     try { url = canvas.toDataURL('image/jpeg', 0.62) } catch { url = null }
-    if (!url) throw new Error('缩略图渲染失败')
+    if (!url) throw new Error(t('缩略图渲染失败'))
     return url
   } finally {
     cleanup()
@@ -1882,6 +2500,11 @@ function startCardDrag(e, card) {
   const grid = $('galGrid')
   if (!grid || !card || card.parentElement !== grid) return
 
+  // 非手动排序（名称 / 日期）下不给拖 —— 那两个顺序是算出来的，拖了也无处可存。
+  // 但**不能在这里直接 return**：触屏的「长按弹菜单」是同一套起手逻辑，
+  // 它跟排序模式无关。所以只掐掉拖动，放行到长按分支（见 needHold 那段）。
+  const canDrag = sortState.mode === 'manual'
+
   const pid = e.pointerId
   const fromHandle = !!(e.target && e.target.closest && e.target.closest('.card-drag'))
   const isTouch = e.pointerType === 'touch'
@@ -1910,6 +2533,23 @@ function startCardDrag(e, card) {
     started = true
     stopWaiting()
     beginCardDrag(card, grid, pid, x, y, isTouch)
+  }
+
+  // 不能拖的时候：触屏仍然要能长按弹菜单，鼠标则什么都不做（右键菜单另有 contextmenu 处理）。
+  // 这里复用拖动引擎的重型超时（HOLD_MS + MENU_MS ≈ 500ms），保持两种模式手感一致。
+  if (!canDrag) {
+    if (!isTouch) return
+    card.addEventListener('pointermove', onWaitMove)
+    card.addEventListener('pointerup', onWaitUp)
+    card.addEventListener('pointercancel', onWaitUp)
+    holdT = setTimeout(() => {
+      stopWaiting()
+      // 手指一直没动、也没抬 → 用户要的是长按菜单，不是滚动
+      suppressClick = { el: card, until: Date.now() + 900 }
+      haptic(10)
+      openCardMenu(card.__item)
+    }, DRAG.HOLD_MS + DRAG.MENU_MS)
+    return
   }
 
   if (!needHold) { begin(downX, downY); return }
@@ -1974,13 +2614,6 @@ function beginCardDrag(card, grid, pid, x, y, isTouch) {
     if (!d.moved) {
       d.moved = true
       clearTimeout(d.holdMenuT)      // 真的开始拖了，长按菜单作废
-      // 排序不是手动 → 现在真的开始拖了，把当前看到的顺序固化成手动顺序再接住
-      if (sortState.mode !== 'manual') {
-        seedManualOrderFromSort()
-        sortState = { mode: 'manual', dir: 1 }
-        saveSort()
-        applySortUI()
-      }
     }
     moveCardTo(ev.clientX, ev.clientY)
   }
@@ -2238,7 +2871,7 @@ function commitCardOrder() {
   // 会把拖动的收尾动画和滚动位置一起打掉；而平铺页的顺序本来就是用户刚摆好的，
   // 不需要再画一遍。这是 refreshLists() 之外唯一的例外。
   renderAssetList()
-  toast(`播放顺序已保存（${keys.length} 个）`)
+  toast(t('播放顺序已保存（{n} 个）', { n: keys.length }))
 }
 
 /** 重建缩略图：清掉缓存，卡片重新排队 */
@@ -2253,7 +2886,7 @@ async function rebuildThumbs() {
     if (box) { box.innerHTML = ''; box.classList.remove('failed'); box.classList.add('pending') }
     c.__wantThumb = true
   }
-  toast('正在重新生成缩略图…')
+  toast(t('正在重新生成缩略图…'))
   thumbKick()
 }
 
@@ -2301,7 +2934,7 @@ async function loadCurrent() {
   $('currentSub').textContent = [item.group, item.base, item.skeletonKind ? `.${item.skeletonKind}` : '']
     .filter(Boolean).join(' · ')
   $('emptyState').hidden = true
-  setBusy(true, '载入中…')
+  setBusy(true, t('载入中…'))
 
   const urls = urlsForItem(item)
   const cfg = {
@@ -2321,7 +2954,7 @@ async function loadCurrent() {
     success: onLoaded,
     error: (p, msg) => {
       setBusy(false)
-      showError('载入失败：' + (typeof msg === 'string' ? msg : JSON.stringify(msg)))
+      showError(t('载入失败：') + (typeof msg === 'string' ? msg : JSON.stringify(msg)))
     },
   }
   if (urls.jsonUrl) cfg.jsonUrl = urls.jsonUrl
@@ -2342,13 +2975,13 @@ async function loadCurrent() {
         JSON.parse(text)
       } catch (e) {
         setBusy(false)
-        showError(`「${item.folder}」的 .json 是坏文件（${e.message}）。\n` +
-          `多半是下载/拷贝不完整：重新导出一份完整文件，或先看别的资产。`)
+        showError(t('「{folder}」的 .json 是坏文件（{msg}）。\n', { folder: item.folder, msg: e.message }) +
+          t('多半是下载/拷贝不完整：重新导出一份完整文件，或先看别的资产。'))
         return
       }
     } catch (e) {
       setBusy(false)
-      showError('读不到骨架文件：' + e.message)
+      showError(t('读不到骨架文件：') + e.message)
       return
     }
   }
@@ -2357,7 +2990,7 @@ async function loadCurrent() {
     S.player = new spine.SpinePlayer($('playerHost'), cfg)
   } catch (err) {
     setBusy(false)
-    showError('初始化播放器失败：' + err.message)
+    showError(t('初始化播放器失败：') + err.message)
   }
 }
 
@@ -2390,7 +3023,7 @@ function onLoaded(player) {
   const skeleton = player.skeleton
   if (!skeleton) {
     setBusy(false)
-    showError('骨架为空：请确认 .json 与 .atlas 是否匹配')
+    showError(t('骨架为空：请确认 .json 与 .atlas 是否匹配'))
     return
   }
 
@@ -2413,7 +3046,7 @@ function onLoaded(player) {
     const e = player.animationState.getCurrent(0)
     if (e) e.trackTime = 0
   } else {
-    showError('这个骨架里没有任何动画')
+    showError(t('这个骨架里没有任何动画'))
   }
 
   // 取景框（沿当前动画采样实测内容范围）
@@ -2718,9 +3351,9 @@ function setPlaying(on) {
 }
 
 function updatePlayButton() {
-  $('btnPlay').textContent = S.playing ? '暂停' : '播放'
+  $('btnPlay').textContent = t(S.playing ? '暂停' : '播放')
   const m = $('mPlay')
-  if (m) m.textContent = S.playing ? '暂停' : '播放'
+  if (m) m.textContent = t(S.playing ? '暂停' : '播放')
 }
 
 function stepFrame(dir) {
@@ -2755,7 +3388,7 @@ function renderAnimList() {
     const el = document.createElement('div')
     el.className = 'list-item'
     el.style.color = '#6b7280'
-    el.textContent = '（暂无动画）'
+    el.textContent = t('（暂无动画）')
     box.appendChild(el)
   }
   if (fsMode) updateFsLabels()
@@ -2780,7 +3413,7 @@ function applySkin(name) {
     p.skeleton.setSkinByName(name)
     p.skeleton.setSlotsToSetupPose()
   } catch (err) {
-    showError('切换皮肤失败：' + err.message)
+    showError(t('切换皮肤失败：') + err.message)
     return
   }
   p.skeleton.updateWorldTransform()
@@ -2825,7 +3458,7 @@ function renderLayerList() {
     const el = document.createElement('div')
     el.className = 'layer-row'
     el.style.color = '#6b7280'
-    el.textContent = S.slots.length ? '没有匹配的图层' : '（暂无图层）'
+    el.textContent = t(S.slots.length ? '没有匹配的图层' : '（暂无图层）')
     box.appendChild(el)
   }
 }
@@ -2848,11 +3481,12 @@ function setLayerHidden(name, hidden) {
 }
 
 function updateLayerToast() {
-  const t = $('layerToast')
-  if (!S.selectedLayer) { t.hidden = true; return }
-  t.hidden = false
-  t.innerHTML = '已选图层：<b></b>'
-  t.querySelector('b').textContent = S.selectedLayer
+  // 局部变量叫 el 而不是 t —— 全局 t() 是翻译函数，同名会把这个元素当函数调（真的崩过）。
+  const el = $('layerToast')
+  if (!S.selectedLayer) { el.hidden = true; return }
+  el.hidden = false
+  el.innerHTML = t('已选图层：<b></b>')
+  el.querySelector('b').textContent = S.selectedLayer
 }
 
 /* ------------------------------------------------------------------ 点选图层 */
@@ -3209,7 +3843,7 @@ function composeToCanvas(source, transparent, targetW, targetH) {
 
 async function screenshot(transparent, sizeOverride) {
   const p = S.player
-  if (!p || !S.camera) { showError('还没有载入任何资产'); return }
+  if (!p || !S.camera) { showError(t('还没有载入任何资产')); return }
   if (S.busy) return
   S.busy = true
   try {
@@ -3236,7 +3870,7 @@ async function screenshot(transparent, sizeOverride) {
     if (blob) download(blob, name)
     else download(composed.toDataURL('image/png'), name)
   } catch (err) {
-    showError('截图失败：' + err.message)
+    showError(t('截图失败：') + err.message)
   } finally {
     S.busy = false
   }
@@ -3246,14 +3880,14 @@ async function screenshot(transparent, sizeOverride) {
 
 async function exportWebm(transparent) {
   const p = S.player
-  if (!p || !S.camera) { showError('还没有载入任何资产'); return }
+  if (!p || !S.camera) { showError(t('还没有载入任何资产')); return }
   const anim = currentAnimation()
-  if (!anim) { showError('没有可导出的动画'); return }
+  if (!anim) { showError(t('没有可导出的动画')); return }
   if (S.busy) return
   S.busy = true
   const note = $('exportNote')
   note.hidden = false
-  note.textContent = '正在录制 WebM…'
+  note.textContent = t('正在录制 WebM…')
 
   const cam = S.camera
   const savedPos = { x: cam.position.x, y: cam.position.y }
@@ -3308,7 +3942,7 @@ async function exportWebm(transparent) {
 
     const done = new Promise((resolve, reject) => {
       rec.onstop = resolve
-      rec.onerror = e => reject(e.error || new Error('录制失败'))
+      rec.onerror = e => reject(e.error || new Error(t('录制失败')))
     })
 
     p.animationState.setAnimation(0, anim.name, false)
@@ -3339,15 +3973,16 @@ async function exportWebm(transparent) {
       // 落后超过一帧就跳过这一帧的渲染，让时长保持正确，代价是掉帧。
       const targetMs = i * frameMs
       if (performance.now() - t0 > targetMs + frameMs) { dropped++; continue }
-      note.textContent = `正在录制 WebM ${i + 1}/${total} …`
-      const t = (i + 1) / fps
-      if (entry) { entry.trackTime = t; entry.animationLast = -1; entry.nextAnimationLast = -1 }
+      note.textContent = t('正在录制 WebM {i}/{total} …', { i: i + 1, total })
+      // 同上：避开全局 t() 的名字
+      const trackT = (i + 1) / fps
+      if (entry) { entry.trackTime = trackT; entry.animationLast = -1; entry.nextAnimationLast = -1 }
       p.animationState.apply(p.skeleton)
       p.skeleton.updateWorldTransform()
       p.drawFrame(false)
       paintBgAndSource(outCtx, p.canvas, transparent, out.width, out.height)
       if (manual) track.requestFrame()
-      const wait = t0 + t * 1000 - performance.now()
+      const wait = t0 + trackT * 1000 - performance.now()
       await new Promise(r => setTimeout(r, wait > 2 ? wait : 0))
     }
     // 多撑两帧，让编码器把最后一张收进去
@@ -3360,18 +3995,18 @@ async function exportWebm(transparent) {
       const blob = new Blob(chunks, { type })
       S.lastWebm = { frames: total, dropped, fps, bytes: blob.size, chunks: chunks.length }
       if (!blob.size) {
-        showError('录制结果为空：当前浏览器没能从画布采到帧')
+        showError(t('录制结果为空：当前浏览器没能从画布采到帧'))
       } else {
         if (dropped > total * 0.15) {
           note.hidden = false
-          note.textContent = `提示：渲染跟不上 ${fps} fps，已跳过 ${dropped}/${total} 帧（建议把帧率调低或改用帧序列导出）`
+          note.textContent = t('提示：渲染跟不上 {fps} fps，已跳过 {dropped}/{total} 帧（建议把帧率调低或改用帧序列导出）', { fps, dropped, total })
           await new Promise(r => setTimeout(r, 3500))
         }
         download(blob, `animation_${safeName(S.current?.folder)}_${safeName(anim.name)}.webm`)
       }
     }
   } catch (err) {
-    showError('导出失败：' + err.message)
+    showError(t('导出失败：') + err.message)
   } finally {
     try { if (rec && rec.state !== 'inactive') rec.stop() } catch { /* ignore */ }
     stream?.getTracks().forEach(t => t.stop())
@@ -3390,9 +4025,9 @@ async function exportWebm(transparent) {
 
 async function exportFrames(transparent) {
   const p = S.player
-  if (!p || !S.camera) { showError('还没有载入任何资产'); return }
+  if (!p || !S.camera) { showError(t('还没有载入任何资产')); return }
   const anim = currentAnimation()
-  if (!anim) { showError('没有可导出的动画'); return }
+  if (!anim) { showError(t('没有可导出的动画')); return }
   if (S.busy) return
   S.busy = true
   const note = $('exportNote')
@@ -3420,10 +4055,12 @@ async function exportFrames(transparent) {
     const entry = p.animationState.getCurrent(0)
 
     for (let i = 0; i < total; i++) {
-      note.textContent = `正在导出帧 ${i + 1}/${total} …`
-      const t = i / fps
+      note.textContent = t('正在导出帧 {i}/{total} …', { i: i + 1, total })
+      // 局部变量叫 trackT 而不是 t —— 全局 t() 是翻译函数，
+      // 同名会在本块形成 TDZ，把上面的 note.textContent = t(...) 打炸。
+      const trackT = i / fps
       if (entry) {
-        entry.trackTime = t
+        entry.trackTime = trackT
         entry.animationLast = -1
         entry.nextAnimationLast = -1
       }
@@ -3436,11 +4073,11 @@ async function exportFrames(transparent) {
       if (i % 5 === 0) await new Promise(r => setTimeout(r, 0))
     }
 
-    note.textContent = '正在打包 ZIP…'
+    note.textContent = t('正在打包 ZIP…')
     const out = await zip.generateAsync({ type: 'blob' })
     download(out, `frames_${safeName(S.current?.folder)}_${safeName(anim.name)}.zip`)
   } catch (err) {
-    showError('导出帧序列失败：' + err.message)
+    showError(t('导出帧序列失败：') + err.message)
   } finally {
     cam.position.x = savedPos.x
     cam.position.y = savedPos.y
@@ -3462,9 +4099,9 @@ async function blobUrlsFromFiles(files, name) {
   const json = files.find(f => f.name.toLowerCase().endsWith('.json'))
   const skel = files.find(f => f.name.toLowerCase().endsWith('.skel'))
   const textures = files.filter(f => /\.(png|jpe?g|webp)$/i.test(f.name))
-  if (!atlas) throw new Error('缺少 .atlas 文件')
-  if (!json && !skel) throw new Error('缺少 .json 或 .skel 骨架文件')
-  if (!textures.length) throw new Error('缺少贴图 .png')
+  if (!atlas) throw new Error(t('缺少 .atlas 文件'))
+  if (!json && !skel) throw new Error(t('缺少 .json 或 .skel 骨架文件'))
+  if (!textures.length) throw new Error(t('缺少贴图 .png'))
 
   const atlasText = await await_text(atlas)
   const referenced = [...atlasText.matchAll(/([^\s]+\.(?:png|jpe?g|webp))/gi)].map(m => m[1])
@@ -3473,7 +4110,7 @@ async function blobUrlsFromFiles(files, name) {
     const bn = r.split('/').pop()
     return !textures.some(t => t.name === bn)
   })
-  if (missing.length) throw new Error('atlas 引用了但没提供这些图：' + missing.join(', '))
+  if (missing.length) throw new Error(t('atlas 引用了但没提供这些图：') + missing.join(', '))
 
   const atlasUrl = URL.createObjectURL(atlas)
   const rawDataURIs = {}
@@ -3499,7 +4136,7 @@ function await_text(file) {
   return new Promise((resolve, reject) => {
     const fr = new FileReader()
     fr.onload = () => resolve(String(fr.result))
-    fr.onerror = () => reject(new Error('无法读取 atlas'))
+    fr.onerror = () => reject(new Error(t('无法读取 atlas')))
     fr.readAsText(file)
   })
 }
@@ -3513,7 +4150,7 @@ async function doUpload() {
     const item = {
       key: 'custom-' + Date.now(),
       folder: label,
-      group: '已上传（本次会话）',
+      group: t('已上传（本次会话）'),
       base: uploaded.files.find(f => f.name.toLowerCase().endsWith('.atlas')).name,
       images: uploaded.files.filter(f => /\.(png|jpe?g|webp)$/i.test(f.name)),
       skeletonKind: urls.skeletonKind,
@@ -3526,7 +4163,9 @@ async function doUpload() {
     S.customItems.unshift(item)
     $('uploadModal').hidden = true
     uploaded.files = []
-    $('dropText').textContent = '把文件拖到这里，或 选择文件'
+    // 不能直接给 #dropText 赋 textContent —— 它里面是两个 span（主文案 + 「选择文件」链接），
+    // 覆盖会连链接一起抹掉。走 applyLang() 按 data-i18n 还原结构。
+    applyLang()
     selectItem(item)          // 它内部会 refreshLists()，这里不必再刷一遍
   } catch (err) {
     msg.textContent = '✕ ' + err.message
@@ -3543,25 +4182,25 @@ async function onImportFiles(e) {
   e.target.value = ''
   if (!files.length || !NATIVE) return
 
-  setBusy(true, `导入 0/${files.length} …`)
+  setBusy(true, t('导入 0/{total} …', { total: files.length }))
   let ok = 0
   const failed = []
   for (let i = 0; i < files.length; i++) {
     const f = files[i]
-    setBusy(true, `导入 ${i + 1}/${files.length} · ${f.name}`)
+    setBusy(true, t('导入 {i}/{total} · {name}', { i: i + 1, total: files.length, name: f.name }))
     try {
-      if (f.size > IMPORT_MAX_BYTES) throw new Error('超过 12MB')
+      if (f.size > IMPORT_MAX_BYTES) throw new Error(t('超过 12MB'))
       const b64 = await fileToBase64(f)
-      if (!window.BD2Native.importFile(f.name, b64)) throw new Error('写入失败')
+      if (!window.BD2Native.importFile(f.name, b64)) throw new Error(t('写入失败'))
       ok++
     } catch (err) {
       failed.push(`${f.name}（${err.message}）`)
     }
   }
   setBusy(false)
-  if (failed.length) showError(`有 ${failed.length} 个文件没导入成功：${failed.join('、')}`)
+  if (failed.length) showError(t('有 {n} 个文件没导入成功：{list}', { n: failed.length, list: failed.join('、') }))
   else if (ok) {
-    try { window.BD2Native.toast(`已导入 ${ok} 个文件`) } catch { /* ignore */ }
+    try { window.BD2Native.toast(t('已导入 {n} 个文件', { n: ok })) } catch { /* ignore */ }
   }
   await scan(true)
 }
@@ -3574,7 +4213,7 @@ function fileToBase64(file) {
       const comma = s.indexOf(',')
       resolve(comma >= 0 ? s.slice(comma + 1) : '')
     }
-    r.onerror = () => reject(new Error('读取失败'))
+    r.onerror = () => reject(new Error(t('读取失败')))
     r.readAsDataURL(file)
   })
 }
@@ -3587,8 +4226,8 @@ function bindUI() {
     // 不再让用户进系统文件夹选择器 —— 那玩意儿在部分机型上会把进程带崩。
     // 改成「导入文件」：选中的文件直接拷进 App 自己的目录。
     const b = $('btnAddRoot')
-    b.textContent = '导入文件'
-    b.title = '把手机里的 Spine 文件拷进 App 目录，不用数据线'
+    b.textContent = t('导入文件')
+    b.title = t('把手机里的 Spine 文件拷进 App 目录，不用数据线')
   }
   const imp = $('importFiles')
   if (imp) imp.onchange = onImportFiles
@@ -3598,8 +4237,8 @@ function bindUI() {
     S.current = null
     disposePlayer()
     $('emptyState').hidden = false
-    $('currentName').textContent = '未载入'
-    $('currentSub').textContent = '在右侧列表里选一个资产'
+    $('currentName').textContent = t('未载入')
+    $('currentSub').textContent = t('在右侧列表里选一个资产')
     scan(false)
   }
   $('btnRescan').onclick = () => scan(true)
@@ -3660,7 +4299,7 @@ function bindUI() {
       $('importFiles').click()
       return
     }
-    const p = prompt('输入要添加的本地目录绝对路径（例如 E:\\xxx\\mods）：')
+    const p = prompt(t('输入要添加的本地目录绝对路径（例如 E:\\xxx\\mods）：'))
     if (!p) return
     try {
       const res = await fetch('/api/roots', {
@@ -3669,13 +4308,13 @@ function bindUI() {
         body: JSON.stringify({ path: p }),
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error || '添加失败')
+      if (!res.ok) throw new Error(data.error || t('添加失败'))
       await loadConfig()
       S.rootId = data.root.id
       $('rootSelect').value = S.rootId
       await scan(true)
     } catch (err) {
-      showError('添加目录失败：' + err.message)
+      showError(t('添加目录失败：') + err.message)
     }
   }
   $('btnUpload').onclick = () => {
@@ -3765,8 +4404,29 @@ function bindUI() {
   }
 
   // 右侧
-  // 过滤条件变了：走唯一入口 refreshLists()（它内部先 syncFilters() 把控件读进状态）
-  $('assetFilter').oninput = refreshLists
+  // 过滤条件变了：走唯一入口 refreshLists()（它内部先 syncFilters() 把控件读进状态）。
+  // 搜索框有两个入口 —— 播放页右侧抽屉一个、平铺页头部一个 —— 但事实来源仍然只有
+  // filters.q 一个：任一个输入都先把值同步给另一个（syncFilters 只从 #assetFilter 读），
+  // 再走 refreshLists()。清空同理。这样两个框永远显示同一个词，不会各搜各的。
+  const SEARCH_INPUTS = ['assetFilter', 'galFilter']
+  const onSearchInput = e => {
+    const v = e.target.value
+    for (const id of SEARCH_INPUTS) {
+      const inp = $(id)
+      if (inp && inp !== e.target && inp.value !== v) inp.value = v
+    }
+    refreshLists()
+  }
+  const clearSearch = focusId => {
+    for (const id of SEARCH_INPUTS) { const i = $(id); if (i) i.value = '' }
+    refreshLists()
+    const f = $(focusId)
+    if (f) f.focus()
+  }
+  $('assetFilter').oninput = onSearchInput
+  $('galFilter').oninput = onSearchInput
+  $('assetFilterClear').onclick = () => clearSearch('assetFilter')
+  $('galFilterClear').onclick = () => clearSearch('galFilter')
   $('chkOnlyPlayable').onchange = refreshLists
   $('btnClearCustom').onclick = () => {
     if (!S.customItems.length) return
@@ -3895,7 +4555,7 @@ function bindUI() {
     uploaded.files = files
     $('uploadName').value = files[0].webkitRelativePath?.split('/')[0] || ''
     $('dropzone').classList.add('over')
-    $('dropText').textContent = `已接收 ${files.length} 个文件，点「载入」开始`
+    setDropText(t('已接收 {n} 个文件，点「载入」开始', { n: files.length }))
     $('uploadModal').hidden = false
     $('uploadMsg').textContent = ''
   })
@@ -3909,7 +4569,7 @@ function bindUI() {
   $('filePick').onchange = e => {
     uploaded.files = [...e.target.files]
     $('dropzone').classList.add('over')
-    $('dropText').textContent = `已接收 ${uploaded.files.length} 个文件，点「载入」开始`
+    setDropText(t('已接收 {n} 个文件，点「载入」开始', { n: uploaded.files.length }))
     $('uploadMsg').textContent = ''
   }
   $('btnDoUpload').onclick = doUpload
@@ -4047,4 +4707,18 @@ window.__bd2viewer = {
   get filters() { return { ...filters } },
   /** 播放页左右箭头此刻是否可见（当前资产有多个动画才显示） */
   get stageNav() { return document.body.classList.contains('stage-nav-avail') },
+
+  /* ---- i18n（脚本化测试用；见 ARCHITECTURE R11） ---- */
+  /** 当前语言：'zh' | 'en' */
+  get lang() { return LANG },
+  /** 翻译函数本体（测试里直接查表，不必读 HTML） */
+  t,
+  /** 切语言并落盘（等同设置里那个下拉） */
+  setLang: v => { saveLang(v); $('setLang').value = LANG },
+  /** 用户主动选过语言没有 —— 决定首次启动弹不弹询问框 */
+  get langPicked() { return langPicked() },
+  /** 手动亮出 / 收起首次语言询问框（测试流程用） */
+  showLangModal: () => askLanguage(),
+  /** 当前这次搜索的命中理由表：assetKey → 命中的资源文件名 */
+  get searchHits() { return Object.fromEntries(searchHits) },
 }

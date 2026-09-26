@@ -3,11 +3,24 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
-  <title>BD2 L2D Viewer · 本地版</title>
+  <title>kakiko-BD2Viewer · 本地版</title>
   <link rel="stylesheet" href="/lib/spine-player.css">
   <link rel="stylesheet" href="/styles.css">
   <script src="/lib/spine-player.js"></script>
   <script src="/lib/jszip.min.js"></script>
+  <script>
+    /* 语言钉子：在样式表和 app.js 之前就把 <html lang> 定下来。
+       理由和下面 body 上那个首屏类名一样 —— 语言是**首屏属性**，
+       如果只由 app.js 里的 applyLang() 决定，那么冷启动的一瞬间中文界面已经画出来了，
+       英文用户会看到一屏中文再被翻译过去（"闪中文"）。
+       这里只读一次 localStorage，同步、无依赖、出错就退回中文。 */
+    (function () {
+      try {
+        var v = localStorage.getItem('bd2.lang')
+        if (v === 'en') document.documentElement.lang = 'en'
+      } catch (e) { /* 隐私模式下读不到 → 保持中文 */ }
+    })()
+  </script>
 </head>
 <!-- 首屏预置：默认落在资产页（平铺）。
      视图状态由 app.js 的 setView() 决定，但 boot() 要等脚本跑起来才执行；
@@ -19,18 +32,18 @@
   <header class="nav">
     <div class="brand">
       <span class="logo">🎬</span>
-      <span>BD2 L2D Viewer</span>
-      <span class="badge">本地复刻版</span>
+      <span>kakiko-BD2Viewer</span>
+      <span class="badge" data-i18n="本地复刻版">本地复刻版</span>
     </div>
     <div class="nav-actions">
-      <select id="rootSelect" class="select" title="选择资产根目录"></select>
-      <button class="btn" id="btnAddRoot" title="把任意本地文件夹加为根目录">添加目录</button>
-      <button class="btn" id="btnRescan" title="重新扫描">重新扫描</button>
-      <button class="btn" id="btnUpload" title="拖入 .json/.skel + .atlas + .png">上传文件</button>
-      <button class="btn" id="btnGrid" title="回到平铺浏览">平铺浏览</button>
-      <button class="btn" id="btnFullscreen" title="全屏观看（音量键/↑↓ 切动画，☰ 换文件）">全屏</button>
-      <button class="btn" id="btnHelp" title="快捷键">快捷键</button>
-      <button class="btn" id="btnSettings" title="设置">设置</button>
+      <select id="rootSelect" class="select" data-i18n-title="选择资产根目录" title="选择资产根目录"></select>
+      <button class="btn" id="btnAddRoot" data-i18n="添加目录" data-i18n-title="把任意本地文件夹加为根目录" title="把任意本地文件夹加为根目录">添加目录</button>
+      <button class="btn" id="btnRescan" data-i18n="重新扫描" data-i18n-title="重新扫描" title="重新扫描">重新扫描</button>
+      <button class="btn" id="btnUpload" data-i18n="上传文件" data-i18n-title="拖入 .json/.skel + .atlas + .png" title="拖入 .json/.skel + .atlas + .png">上传文件</button>
+      <button class="btn" id="btnGrid" data-i18n="平铺浏览" data-i18n-title="回到平铺浏览" title="回到平铺浏览">平铺浏览</button>
+      <button class="btn" id="btnFullscreen" data-i18n="全屏" data-i18n-title="全屏观看（音量键/↑↓ 切动画，☰ 换文件）" title="全屏观看（音量键/↑↓ 切动画，☰ 换文件）">全屏</button>
+      <button class="btn" id="btnHelp" data-i18n="快捷键" data-i18n-title="快捷键" title="快捷键">快捷键</button>
+      <button class="btn" id="btnSettings" data-i18n="设置" data-i18n-title="设置" title="设置">设置</button>
     </div>
   </header>
 
@@ -42,88 +55,88 @@
     <!-- ======================= 左侧栏 ======================= -->
     <aside class="side side-left">
       <div class="tabs">
-        <button class="tab active" data-tab="controls">控制</button>
-        <button class="tab" data-tab="layers">图层</button>
+        <button class="tab active" data-tab="controls" data-i18n="控制">控制</button>
+        <button class="tab" data-tab="layers" data-i18n="图层">图层</button>
       </div>
 
       <div class="pane" id="paneControls">
         <div class="current-item">
-          <div class="ci-name" id="currentName">未载入</div>
-          <div class="ci-sub" id="currentSub">在右侧列表里选一个资产</div>
+          <div class="ci-name" id="currentName" data-i18n="未载入">未载入</div>
+          <div class="ci-sub" id="currentSub" data-i18n="在右侧列表里选一个资产">在右侧列表里选一个资产</div>
         </div>
 
         <section class="group">
-          <h4>动画</h4>
-          <input class="text-input" id="animFilter" placeholder="过滤动画…">
+          <h4 data-i18n="动画">动画</h4>
+          <input class="text-input" id="animFilter" data-i18n-ph="过滤动画…" placeholder="过滤动画…">
           <div class="list anim-list" id="animList"></div>
         </section>
 
         <section class="group">
-          <h4>皮肤 (Skin)</h4>
+          <h4 data-i18n="皮肤 (Skin)">皮肤 (Skin)</h4>
           <select class="select full" id="skinSelect"></select>
         </section>
 
         <section class="group">
-          <h4>播放</h4>
+          <h4 data-i18n="播放">播放</h4>
           <div class="row">
-            <button class="btn primary" id="btnPlay">暂停</button>
-            <button class="btn" id="btnStepBack" title="后退一帧">◀|</button>
-            <button class="btn" id="btnStepFwd" title="前进一帧">|▶</button>
+            <button class="btn primary" id="btnPlay" data-i18n="暂停">暂停</button>
+            <button class="btn" id="btnStepBack" data-i18n-title="后退一帧" title="后退一帧">◀|</button>
+            <button class="btn" id="btnStepFwd" data-i18n-title="前进一帧" title="前进一帧">|▶</button>
           </div>
           <label class="row small">
             <input type="checkbox" id="chkLoop" checked>
-            <span>循环播放</span>
+            <span data-i18n="循环播放">循环播放</span>
           </label>
           <div class="row">
-            <span class="lbl">速度</span>
+            <span class="lbl" data-i18n="速度">速度</span>
             <input type="range" id="speedRange" min="0.1" max="3" step="0.05" value="1" class="grow">
             <span class="val" id="speedVal">1.00x</span>
           </div>
         </section>
 
         <section class="group">
-          <h4>视图</h4>
+          <h4 data-i18n="视图">视图</h4>
           <div class="row">
-            <button class="btn" id="btnZoomIn">放大 +</button>
-            <button class="btn" id="btnZoomOut">缩小 −</button>
+            <button class="btn" id="btnZoomIn" data-i18n="放大 +">放大 +</button>
+            <button class="btn" id="btnZoomOut" data-i18n="缩小 −">缩小 −</button>
           </div>
           <div class="row">
-            <button class="btn" id="btnResetCam">重置视图</button>
-            <button class="btn" id="btnFit">适配窗口</button>
+            <button class="btn" id="btnResetCam" data-i18n="重置视图">重置视图</button>
+            <button class="btn" id="btnFit" data-i18n="适配窗口">适配窗口</button>
           </div>
           <label class="row small">
             <input type="checkbox" id="chkUseCam">
-            <span>截图 / 导出时使用当前镜头</span>
+            <span data-i18n="截图 / 导出时使用当前镜头">截图 / 导出时使用当前镜头</span>
           </label>
         </section>
 
         <section class="group">
-          <h4>背景</h4>
+          <h4 data-i18n="背景">背景</h4>
           <div class="row">
             <input type="color" id="bgColor" value="#1f2937" class="color-input">
-            <button class="btn" id="btnBgImage">选背景图</button>
-            <button class="btn" id="btnBgClear">清除</button>
+            <button class="btn" id="btnBgImage" data-i18n="选背景图">选背景图</button>
+            <button class="btn" id="btnBgClear" data-i18n="清除">清除</button>
           </div>
           <input type="file" id="bgFile" accept="image/*" hidden>
         </section>
 
         <section class="group">
-          <h4>截图 / 导出</h4>
+          <h4 data-i18n="截图 / 导出">截图 / 导出</h4>
           <label class="row small">
             <input type="checkbox" id="chkTransparent">
-            <span>透明背景</span>
+            <span data-i18n="透明背景">透明背景</span>
           </label>
           <div class="row">
-            <button class="btn primary" id="btnShot">截图 PNG</button>
-            <button class="btn" id="btnShotBig">2K 截图</button>
+            <button class="btn primary" id="btnShot" data-i18n="截图 PNG">截图 PNG</button>
+            <button class="btn" id="btnShotBig" data-i18n="2K 截图">2K 截图</button>
           </div>
           <div class="row">
-            <button class="btn" id="btnExportWebm">导出 WebM 视频</button>
+            <button class="btn" id="btnExportWebm" data-i18n="导出 WebM 视频">导出 WebM 视频</button>
           </div>
           <div class="row">
-            <button class="btn" id="btnExportFrames">导出帧序列 (ZIP)</button>
+            <button class="btn" id="btnExportFrames" data-i18n="导出帧序列 (ZIP)">导出帧序列 (ZIP)</button>
           </div>
-          <div class="row small muted">
+          <div class="row small muted" data-i18n="视频按「时长 × 帧率」逐帧录制（最高 60 fps），背景色/背景图会烘进画面；浏览器限制 WebM 不带透明通道，「透明背景」只对 PNG 截图与帧序列生效。需要更高帧率请用帧序列导出。">
             视频按「时长 × 帧率」逐帧录制（最高 60 fps），背景色/背景图会烘进画面；浏览器限制 WebM 不带透明通道，「透明背景」只对 PNG 截图与帧序列生效。需要更高帧率请用帧序列导出。
           </div>
           <div class="progress-note" id="exportNote" hidden></div>
@@ -132,16 +145,16 @@
 
       <div class="pane hidden" id="paneLayers">
         <div class="hint-box">
-          开启「图层选择」后可直接点模型选层。<span class="kb-only"><b>H</b> 隐藏选中层，<b>U</b> 恢复上一次，<b>Esc</b> 全部还原。</span><span class="touch-only">选中后在下方图层列表里直接隐藏 / 恢复。</span>
+          <span data-i18n="开启「图层选择」后可直接点模型选层。">开启「图层选择」后可直接点模型选层。</span><span class="kb-only"><b>H</b> <span data-i18n="隐藏选中层，">隐藏选中层，</span><b>U</b> <span data-i18n="恢复上一次，">恢复上一次，</span><b>Esc</b> <span data-i18n="全部还原。">全部还原。</span></span><span class="touch-only" data-i18n="选中后在下方图层列表里直接隐藏 / 恢复。">选中后在下方图层列表里直接隐藏 / 恢复。</span>
         </div>
         <label class="row small">
           <input type="checkbox" id="chkLayerSelect">
-          <span>图层选择模式</span>
+          <span data-i18n="图层选择模式">图层选择模式</span>
         </label>
-        <input class="text-input" id="layerFilter" placeholder="过滤图层…">
+        <input class="text-input" id="layerFilter" data-i18n-ph="过滤图层…" placeholder="过滤图层…">
         <div class="row">
-          <button class="btn" id="btnShowAll">全部显示</button>
-          <button class="btn" id="btnHideAll">全部隐藏</button>
+          <button class="btn" id="btnShowAll" data-i18n="全部显示">全部显示</button>
+          <button class="btn" id="btnHideAll" data-i18n="全部隐藏">全部隐藏</button>
         </div>
         <div class="list layer-list" id="layerList"></div>
       </div>
@@ -156,16 +169,16 @@
         <div class="player-host" id="playerHost" data-tutorial="character-viewer"></div>
         <canvas class="overlay-canvas" id="overlayCanvas"></canvas>
         <div class="layer-toast" id="layerToast" hidden></div>
-        <div class="spinner" id="spinner" hidden><span class="dot"></span>加载中…</div>
+        <div class="spinner" id="spinner" hidden><span class="dot"></span><span data-i18n="加载中…">加载中…</span></div>
         <div class="error-box" id="errorBox" hidden></div>
         <div class="empty-state" id="emptyState">
           <div class="empty-icon">🖼</div>
-          <div>从右侧选一个资产开始查看</div>
-          <div class="empty-sub">也可以直接点「上传文件」或把文件夹拖进这个窗口</div>
+          <div data-i18n="从右侧选一个资产开始查看">从右侧选一个资产开始查看</div>
+          <div class="empty-sub" data-i18n="也可以直接点「上传文件」或把文件夹拖进这个窗口">也可以直接点「上传文件」或把文件夹拖进这个窗口</div>
         </div>
       </div>
       <!-- 播放页：画面右上角全屏图标 / 左上角回到平铺 -->
-      <button class="fs-fab grid-fab" id="stageGrid" title="回到平铺浏览" hidden>
+      <button class="fs-fab grid-fab" id="stageGrid" data-i18n-title="回到平铺浏览" title="回到平铺浏览" hidden>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
              stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
           <rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/>
@@ -175,7 +188,7 @@
         </svg>
       </button>
       <!-- 全屏入口：钉在画面右上角的图标（触屏模式才显示） -->
-      <button class="fs-fab" id="stageFs" title="全屏观看（音量键切动画）" hidden>
+      <button class="fs-fab" id="stageFs" data-i18n-title="全屏观看（音量键切动画）" title="全屏观看（音量键切动画）" hidden>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
              stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
           <path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>
@@ -184,13 +197,13 @@
       <!-- 播放页左右两侧：切上一个 / 下一个**动画**。
            切资产是底部那条 ◀◀/▶▶ 的活（两处分工与常见布局相反，别按直觉改回来）。
            全屏模式的底部条里已经有同一对按钮，所以沉浸时这两个收起来（见 CSS）。 -->
-      <button class="stage-nav prev" id="stagePrev" title="上一个动画">
+      <button class="stage-nav prev" id="stagePrev" data-i18n-title="上一个动画" title="上一个动画">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
              stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M15 5 8 12l7 7"/>
         </svg>
       </button>
-      <button class="stage-nav next" id="stageNext" title="下一个动画">
+      <button class="stage-nav next" id="stageNext" data-i18n-title="下一个动画" title="下一个动画">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
              stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M9 5l7 7-7 7"/>
@@ -203,32 +216,43 @@
     <section class="gallery" id="gallery">
       <div class="gal-head">
         <div class="gal-head-main">
-          <span class="gal-title" id="galCount">平铺浏览</span>
+          <span class="gal-title" id="galCount" data-i18n="平铺浏览">平铺浏览</span>
           <span class="gal-thumb" id="galThumb" hidden></span>
           <span class="gal-hint" id="galHint"></span>
         </div>
+        <!-- 平铺页的搜索框：和右侧抽屉里那个是同一个 filters.q 的两个入口。
+             在这里放一份是因为平铺页才是主浏览入口 —— 手机上抽屉收着，
+             不翻开就完全没法搜。 -->
+        <div class="gal-search search-box">
+          <input class="text-input" id="galFilter" data-i18n-ph="搜索：目录名 / 文件名 / 图集内资源…"
+                 placeholder="搜索：目录名 / 文件名 / 图集内资源…"
+                 autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="search">
+          <button type="button" class="icon-btn search-clear" id="galFilterClear"
+                  data-i18n-title="清空搜索" title="清空搜索" hidden>✕</button>
+        </div>
         <div class="gal-head-tools">
           <!-- 播放顺序：手动（拖动） / 按名称 / 按日期 -->
-          <div class="gal-sort" id="galSort" role="group" aria-label="播放顺序">
+          <div class="gal-sort" id="galSort" role="group" data-i18n-aria="播放顺序" aria-label="播放顺序">
             <span class="gs-pill" aria-hidden="true"></span>
-            <button type="button" class="gs-btn" data-mode="manual" aria-pressed="true">手动</button>
-            <button type="button" class="gs-btn" data-mode="name" aria-pressed="false">名称</button>
-            <button type="button" class="gs-btn" data-mode="date" aria-pressed="false">日期</button>
+            <button type="button" class="gs-btn" data-mode="manual" aria-pressed="true" data-i18n="手动">手动</button>
+            <button type="button" class="gs-btn" data-mode="name" aria-pressed="false" data-i18n="名称">名称</button>
+            <button type="button" class="gs-btn" data-mode="date" aria-pressed="false" data-i18n="日期">日期</button>
           </div>
           <button type="button" class="gs-dir" id="galSortDir"
+                  data-i18n-aria="切换升序降序" data-i18n-title="切换升序 / 降序"
                   aria-label="切换升序降序" title="切换升序 / 降序"></button>
-          <button type="button" class="btn tiny" id="galRebuild" title="删掉缓存，重新生成缩略图">重建缩略图</button>
+          <button type="button" class="btn tiny" id="galRebuild" data-i18n="重建缩略图" data-i18n-title="删掉缓存，重新生成缩略图" title="删掉缓存，重新生成缩略图">重建缩略图</button>
           <button type="button" class="btn tiny" id="galSelect" aria-pressed="false"
-                  title="进入批量选择，可一次删除多个资产">选择</button>
+                  data-i18n="选择" data-i18n-title="进入批量选择，可一次删除多个资产" title="进入批量选择，可一次删除多个资产">选择</button>
         </div>
       </div>
       <!-- 批量选择时才出现的操作条 -->
       <div class="gal-selbar" id="galSelBar" hidden>
-        <label class="row small"><input type="checkbox" id="galSelAll"><span>全选</span></label>
-        <span class="muted small" id="galSelCount">未选择</span>
+        <label class="row small"><input type="checkbox" id="galSelAll"><span data-i18n="全选">全选</span></label>
+        <span class="muted small" id="galSelCount" data-i18n="未选择">未选择</span>
         <span class="gal-selbar-spacer"></span>
-        <button type="button" class="btn tiny danger" id="galSelDelete" disabled>删除所选</button>
-        <button type="button" class="btn tiny" id="galSelDone">完成</button>
+        <button type="button" class="btn tiny danger" id="galSelDelete" disabled data-i18n="删除所选">删除所选</button>
+        <button type="button" class="btn tiny" id="galSelDone" data-i18n="完成">完成</button>
       </div>
       <div class="gal-grid" id="galGrid"></div>
     </section>
@@ -236,13 +260,19 @@
     <!-- ======================= 右侧栏 ======================= -->
     <aside class="side side-right">
       <div class="side-head">
-        <span>资产浏览</span>
+        <span data-i18n="资产浏览">资产浏览</span>
         <span class="count" id="assetCount">—</span>
       </div>
-      <input class="text-input" id="assetFilter" placeholder="过滤：目录名 / 文件名…">
+      <div class="search-box">
+        <input class="text-input" id="assetFilter" data-i18n-ph="搜索：目录名 / 文件名 / 图集内资源…"
+               placeholder="搜索：目录名 / 文件名 / 图集内资源…"
+               autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="search">
+        <button type="button" class="icon-btn search-clear" id="assetFilterClear"
+                data-i18n-title="清空搜索" title="清空搜索" hidden>✕</button>
+      </div>
       <div class="row small filters">
-        <label class="row small"><input type="checkbox" id="chkOnlyPlayable" checked><span>仅可播放</span></label>
-        <button class="btn tiny" id="btnClearCustom">清除已上传</button>
+        <label class="row small"><input type="checkbox" id="chkOnlyPlayable" checked><span data-i18n="仅可播放">仅可播放</span></label>
+        <button class="btn tiny" id="btnClearCustom" data-i18n="清除已上传">清除已上传</button>
       </div>
       <div class="list asset-list" id="assetList"></div>
     </aside>
@@ -254,31 +284,31 @@
        两个箭头是「上一个 / 下一个动作」，不是逐帧步进。 -->
   <div class="mnow" id="mNow" hidden></div>
   <div class="mquick" id="mQuick" hidden>
-    <button class="btn" id="mPlay">暂停</button>
-    <button class="btn" id="mBack" title="上一个资产">◀◀</button>
-    <button class="btn" id="mFwd" title="下一个资产">▶▶</button>
-    <button class="btn" id="mReset" title="重置视图">重置</button>
+    <button class="btn" id="mPlay" data-i18n="暂停">暂停</button>
+    <button class="btn" id="mBack" data-i18n-title="上一个资产" title="上一个资产">◀◀</button>
+    <button class="btn" id="mFwd" data-i18n-title="下一个资产" title="下一个资产">▶▶</button>
+    <button class="btn" id="mReset" data-i18n-title="重置视图" title="重置视图">重置</button>
   </div>
   <nav class="mtabs" id="mTabs" hidden>
-    <button class="mtab" data-sheet="asset">资产</button>
-    <button class="mtab" data-sheet="ctrl">播放</button>
-    <button class="mtab" data-sheet="layer">图层</button>
-    <button class="mtab" data-sheet="set">设置</button>
+    <button class="mtab" data-sheet="asset" data-i18n="资产">资产</button>
+    <button class="mtab" data-sheet="ctrl" data-i18n="播放">播放</button>
+    <button class="mtab" data-sheet="layer" data-i18n="图层">图层</button>
+    <button class="mtab" data-sheet="set" data-i18n="设置">设置</button>
   </nav>
   <div class="sheet-scrim" id="sheetScrim" hidden></div>
 
   <!-- 全屏模式：顶部条（☰ 文件列表 / ◀▶ 切换资产 / ✕ 退出）
        + 底部条（◀▶ 切换动画） -->
   <div class="fsbar" id="fsBar" hidden>
-    <button class="fs-btn" id="fsFiles" title="文件列表">☰</button>
+    <button class="fs-btn" id="fsFiles" data-i18n-title="文件列表" title="文件列表">☰</button>
     <div class="fs-mid">
       <div class="fs-file-row">
-        <button class="fs-btn tiny" id="fsPrevFile" title="上一个资产">◀</button>
+        <button class="fs-btn tiny" id="fsPrevFile" data-i18n-title="上一个资产" title="上一个资产">◀</button>
         <div class="fs-file" id="fsFile">—</div>
-        <button class="fs-btn tiny" id="fsNextFile" title="下一个资产">▶</button>
+        <button class="fs-btn tiny" id="fsNextFile" data-i18n-title="下一个资产" title="下一个资产">▶</button>
       </div>
     </div>
-    <button class="fs-btn" id="fsHide" title="隐藏界面（只看画面）">
+    <button class="fs-btn" id="fsHide" data-i18n-title="隐藏界面（只看画面）" title="隐藏界面（只看画面）">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/>
@@ -286,12 +316,12 @@
         <path class="eye-off" d="M4 4l16 16"/>
       </svg>
     </button>
-    <button class="fs-btn" id="fsExit" title="退出全屏">✕</button>
+    <button class="fs-btn" id="fsExit" data-i18n-title="退出全屏" title="退出全屏">✕</button>
   </div>
   <div class="fs-anim-bar" id="fsAnimBar" hidden>
-    <button class="fs-btn tiny" id="fsPrevAnim" title="上一个动画（音量−）">◀</button>
+    <button class="fs-btn tiny" id="fsPrevAnim" data-i18n-title="上一个动画（音量−）" title="上一个动画（音量−）">◀</button>
     <span class="fs-anim-name" id="fsAnim">—</span>
-    <button class="fs-btn tiny" id="fsNextAnim" title="下一个动画（音量+）">▶</button>
+    <button class="fs-btn tiny" id="fsNextAnim" data-i18n-title="下一个动画（音量+）" title="下一个动画（音量+）">▶</button>
   </div>
   <!-- 全局轻提示：**不只在全屏用** —— 平铺页保存顺序、删除资产、切资产都走它。
        原来叫 fs-toast / #fsToast，名字把作用域说小了，容易让人以为只有全屏才看得到。 -->
@@ -302,52 +332,81 @@
 <div class="modal-mask" id="settingsModal" hidden>
   <div class="modal">
     <div class="modal-head">
-      <h3>设置</h3>
+      <h3 data-i18n="设置">设置</h3>
       <button class="icon-btn" data-close="settingsModal">✕</button>
     </div>
     <div class="modal-body">
       <div class="group" id="setStorage" hidden>
-        <h4>文件目录</h4>
+        <h4 data-i18n="文件目录">文件目录</h4>
         <div class="muted small" id="setStoragePath" style="word-break:break-all"></div>
         <div class="row" id="setStorageActions" style="flex-wrap:wrap"></div>
         <div class="muted small" id="setStorageTip" style="line-height:1.6"></div>
       </div>
+      <div class="row">
+        <span class="lbl" data-i18n="界面语言">界面语言</span>
+        <select id="setLang" class="select">
+          <option value="zh" data-i18n-keep>中文</option>
+          <option value="en" data-i18n-keep>English</option>
+        </select>
+      </div>
+      <div class="muted small" data-i18n="语言只影响界面文字，不改动你的资产和排序设置。">
+        语言只影响界面文字，不改动你的资产和排序设置。
+      </div>
       <label class="row small">
         <input type="checkbox" id="chkPremultiplied" checked>
-        <span>贴图预乘 alpha（BD2 素材建议开启；若边缘出现黑边/半透明异常可关掉试试）</span>
+        <span data-i18n="贴图预乘 alpha（BD2 素材建议开启；若边缘出现黑边/半透明异常可关掉试试）">贴图预乘 alpha（BD2 素材建议开启；若边缘出现黑边/半透明异常可关掉试试）</span>
       </label>
       <label class="row small">
         <input type="checkbox" id="chkAutoPlay" checked>
-        <span>切换资产后自动播放</span>
+        <span data-i18n="切换资产后自动播放">切换资产后自动播放</span>
       </label>
       <label class="row small">
         <input type="checkbox" id="chkAutoRefit" checked>
-        <span>切换动画时自动重新取景（会保留你当前的缩放倍数，不会打回原始大小；想完全固定视角就关掉）</span>
+        <span data-i18n="切换动画时自动重新取景（会保留你当前的缩放倍数，不会打回原始大小；想完全固定视角就关掉）">切换动画时自动重新取景（会保留你当前的缩放倍数，不会打回原始大小；想完全固定视角就关掉）</span>
       </label>
       <div class="row">
-        <span class="lbl">音量上键</span>
+        <span class="lbl" data-i18n="音量上键">音量上键</span>
         <select id="setVolumeDir" class="select">
-          <option value="next">切到下一个动画</option>
-          <option value="prev">切到上一个动画</option>
+          <option value="next" data-i18n="切到下一个动画">切到下一个动画</option>
+          <option value="prev" data-i18n="切到上一个动画">切到上一个动画</option>
         </select>
       </div>
-      <div class="muted small">音量键切动画只在全屏模式生效；音量下键方向相反。</div>
+      <div class="muted small" data-i18n="音量键切动画只在全屏模式生效；音量下键方向相反。">音量键切动画只在全屏模式生效；音量下键方向相反。</div>
       <div class="row">
-        <span class="lbl">默认背景色</span>
+        <span class="lbl" data-i18n="默认背景色">默认背景色</span>
         <input type="color" id="setBgColor" class="color-input" value="#1f2937">
       </div>
       <div class="row">
-        <span class="lbl">截图边长上限</span>
+        <span class="lbl" data-i18n="截图边长上限">截图边长上限</span>
         <input type="number" id="setMaxSize" class="text-input tiny-input" value="3000" min="256" max="8192" step="128">
       </div>
       <div class="row">
-        <span class="lbl">导出帧率</span>
+        <span class="lbl" data-i18n="导出帧率">导出帧率</span>
         <input type="number" id="setFps" class="text-input tiny-input" value="60" min="1" max="120" step="1">
       </div>
       <div class="muted small" id="envInfo"></div>
     </div>
     <div class="modal-foot">
-      <button class="btn primary" data-close="settingsModal">完成</button>
+      <button class="btn primary" data-close="settingsModal" data-i18n="完成">完成</button>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= 首次启动：选择语言 =======================
+     只在「从没选过语言」时出现一次（见 boot 里的 BD2_LANG_PICKED 判断）。
+     做成网页层弹窗而不是安卓原生对话框：桌面版和 APK 共用同一套代码与行为，
+     也方便用现有的 CDP 测试覆盖。 -->
+<div class="modal-mask" id="langModal" hidden>
+  <div class="modal narrow">
+    <div class="modal-head">
+      <h3 data-i18n="选择界面语言">选择界面语言</h3>
+    </div>
+    <div class="modal-body">
+      <p class="muted small" data-i18n="可随时在「设置」里修改">可随时在「设置」里修改</p>
+      <!-- 语言名是「自称」，永远用原文显示：英文界面下这里也必须写「中文」，
+           所以打 data-i18n-keep 让「英文界面不许残留中文」的测试跳过它们。 -->
+      <button type="button" class="btn block primary lang-pick" data-lang="zh" data-i18n-keep>中文</button>
+      <button type="button" class="btn block lang-pick" data-lang="en" data-i18n-keep>English</button>
     </div>
   </div>
 </div>
@@ -356,18 +415,18 @@
 <div class="modal-mask" id="uploadModal" hidden>
   <div class="modal">
     <div class="modal-head">
-      <h3>上传 Spine 文件</h3>
+      <h3 data-i18n="上传 Spine 文件">上传 Spine 文件</h3>
       <button class="icon-btn" data-close="uploadModal">✕</button>
     </div>
     <div class="modal-body">
-      <p class="muted small">
+      <p class="muted small" data-i18n-html="选择或拖入同一个 Spine 4.1 资产组的 <b>.json</b>（或 <b>.skel</b>）+ <b>.atlas</b> + 全部 <b>.png</b>。也可以直接拖入整个文件夹。">
         选择或拖入同一个 Spine 4.1 资产组的 <b>.json</b>（或 <b>.skel</b>）+ <b>.atlas</b> + 全部 <b>.png</b>。
         也可以直接拖入整个文件夹。
       </p>
-      <input class="text-input" id="uploadName" placeholder="显示名称（可留空）">
+      <input class="text-input" id="uploadName" data-i18n-ph="显示名称（可留空）" placeholder="显示名称（可留空）">
       <div class="dropzone" id="dropzone">
-        <div id="dropText">把文件拖到这里，或
-          <span class="link" id="pickFiles">选择文件</span>
+        <div id="dropText"><span data-i18n="把文件拖到这里，或">把文件拖到这里，或</span>
+          <span class="link" id="pickFiles" data-i18n="选择文件">选择文件</span>
         </div>
         <input type="file" id="filePick" multiple accept=".json,.skel,.atlas,.png,.jpg,.webp" hidden>
         <input type="file" id="importFiles" multiple accept=".json,.skel,.atlas,.png,.jpg,.webp" hidden>
@@ -375,8 +434,8 @@
       <div class="muted small" id="uploadMsg"></div>
     </div>
     <div class="modal-foot">
-      <button class="btn" data-close="uploadModal">取消</button>
-      <button class="btn primary" id="btnDoUpload">载入</button>
+      <button class="btn" data-close="uploadModal" data-i18n="取消">取消</button>
+      <button class="btn primary" id="btnDoUpload" data-i18n="载入">载入</button>
     </div>
   </div>
 </div>
@@ -385,23 +444,23 @@
 <div class="modal-mask" id="helpModal" hidden>
   <div class="modal">
     <div class="modal-head">
-      <h3>快捷键</h3>
+      <h3 data-i18n="快捷键">快捷键</h3>
       <button class="icon-btn" data-close="helpModal">✕</button>
     </div>
     <div class="modal-body">
       <table class="keys">
-        <tr><td>拖拽 / 滚轮</td><td>平移 / 缩放视图</td></tr>
-        <tr><td>空格</td><td>播放 / 暂停</td></tr>
-        <tr><td>← / →</td><td>后退 / 前进一帧</td></tr>
-        <tr><td>R</td><td>重置视图</td></tr>
-        <tr><td>F</td><td>适配窗口</td></tr>
-        <tr><td>L</td><td>切换图层选择模式</td></tr>
-        <tr><td>点击模型</td><td>图层选择模式下选中该图层</td></tr>
-        <tr><td>H</td><td>隐藏选中的图层</td></tr>
-        <tr><td>U</td><td>恢复上一次隐藏</td></tr>
-        <tr><td>Esc</td><td>还原全部隐藏</td></tr>
-        <tr><td>[ / ]</td><td>上一套 / 下一套动画</td></tr>
-        <tr><td>↑ / ↓</td><td>上一个 / 下一个动画（全屏时也可用音量键）</td></tr>
+        <tr><td data-i18n="拖拽 / 滚轮">拖拽 / 滚轮</td><td data-i18n="平移 / 缩放视图">平移 / 缩放视图</td></tr>
+        <tr><td data-i18n="空格">空格</td><td data-i18n="播放 / 暂停">播放 / 暂停</td></tr>
+        <tr><td data-i18n="← / →">← / →</td><td data-i18n="后退 / 前进一帧">后退 / 前进一帧</td></tr>
+        <tr><td>R</td><td data-i18n="重置视图">重置视图</td></tr>
+        <tr><td>F</td><td data-i18n="适配窗口">适配窗口</td></tr>
+        <tr><td>L</td><td data-i18n="切换图层选择模式">切换图层选择模式</td></tr>
+        <tr><td data-i18n="点击模型">点击模型</td><td data-i18n="图层选择模式下选中该图层">图层选择模式下选中该图层</td></tr>
+        <tr><td>H</td><td data-i18n="隐藏选中的图层">隐藏选中的图层</td></tr>
+        <tr><td>U</td><td data-i18n="恢复上一次隐藏">恢复上一次隐藏</td></tr>
+        <tr><td>Esc</td><td data-i18n="还原全部隐藏">还原全部隐藏</td></tr>
+        <tr><td data-i18n="[ / ]">[ / ]</td><td data-i18n="上一套 / 下一套动画">上一套 / 下一套动画</td></tr>
+        <tr><td data-i18n="↑ / ↓">↑ / ↓</td><td data-i18n="上一个 / 下一个动画（全屏时也可用音量键）">上一个 / 下一个动画（全屏时也可用音量键）</td></tr>
       </table>
 
       <!-- 上游署名：本项目基于该项目构建（MIT 要求保留署名与来源说明）。
@@ -409,13 +468,13 @@
            间距用父级的 gap，不要写 margin-top —— .modal-body 是 flex 列容器，
            末元素的上外边距不会被算进高度，会把最后一行裁掉。 -->
       <div class="muted small" style="padding-top:12px; border-top:1px solid var(--g700); line-height:1.65">
-        本项目基于 <b>Jelosus2/BD2-L2D-Viewer</b> 构建 · MIT License, Copyright (c) 2025 Jelosus2<br>
+        <span data-i18n="本项目基于">本项目基于</span> <b>Jelosus2/BD2-L2D-Viewer</b><span data-i18n="构建 · MIT License, Copyright (c) 2025 Jelosus2">构建 · MIT License, Copyright (c) 2025 Jelosus2</span><br>
         https://github.com/Jelosus2/BD2-L2D-Viewer<br>
-        功能形态沿用上游，源码为独立重写（未复制其源码）。
+        <span data-i18n="功能形态沿用上游，源码为独立重写（未复制其源码）。">功能形态沿用上游，源码为独立重写（未复制其源码）。</span>
       </div>
     </div>
     <div class="modal-foot">
-      <button class="btn primary" data-close="helpModal">知道了</button>
+      <button class="btn primary" data-close="helpModal" data-i18n="知道了">知道了</button>
     </div>
   </div>
 </div>
@@ -424,14 +483,14 @@
 <div class="modal-mask" id="cardMenu" hidden>
   <div class="modal narrow">
     <div class="modal-head">
-      <h3>资产操作</h3>
+      <h3 data-i18n="资产操作">资产操作</h3>
       <button class="icon-btn" data-close="cardMenu">✕</button>
     </div>
     <div class="modal-body">
       <div class="menu-title" id="cardMenuName">—</div>
       <div class="muted small" id="cardMenuInfo"></div>
-      <button type="button" class="btn block danger" id="cardMenuDelete">删除这个资产</button>
-      <button type="button" class="btn block" id="cardMenuSelect">批量选择…</button>
+      <button type="button" class="btn block danger" id="cardMenuDelete" data-i18n="删除这个资产">删除这个资产</button>
+      <button type="button" class="btn block" id="cardMenuSelect" data-i18n="批量选择…">批量选择…</button>
     </div>
   </div>
 </div>
@@ -440,15 +499,15 @@
 <div class="modal-mask" id="confirmModal" hidden>
   <div class="modal narrow">
     <div class="modal-head">
-      <h3 id="confirmTitle">确认删除</h3>
+      <h3 id="confirmTitle" data-i18n="确认删除">确认删除</h3>
     </div>
     <div class="modal-body">
       <p class="danger-note" id="confirmWarn"></p>
       <div class="confirm-list" id="confirmList"></div>
     </div>
     <div class="modal-foot">
-      <button type="button" class="btn" id="confirmNo">取消</button>
-      <button type="button" class="btn danger" id="confirmYes">删除</button>
+      <button type="button" class="btn" id="confirmNo" data-i18n="取消">取消</button>
+      <button type="button" class="btn danger" id="confirmYes" data-i18n="删除">删除</button>
     </div>
   </div>
 </div>
