@@ -110,6 +110,11 @@ export class Cdp {
     }
     cdp.proc = proc
     cdp.profile = profile
+    // 自建的临时目录由 close() 清理；**调用方显式传入的 profile 归调用方管** ——
+    // native_mode 的「重启」用例要跨两次 launch 复用同一个目录，close() 把它删了
+    // 重启后 localStorage / IndexedDB 就全空了（这个竞态以前靠「Chrome 退得慢、
+    // 目录删不掉」才一直绿的，2026-09-29 被踩爆）。
+    cdp.profileOwned = !opts.profile
     await cdp.send('Page.enable')
     await cdp.send('Runtime.enable')
     return cdp
@@ -170,6 +175,8 @@ export class Cdp {
   async close() {
     try { this.ws.close() } catch { /* ignore */ }
     try { this.proc.kill() } catch { /* ignore */ }
-    try { fs.rmSync(this.profile, { recursive: true, force: true }) } catch { /* ignore */ }
+    if (this.profileOwned) {
+      try { fs.rmSync(this.profile, { recursive: true, force: true }) } catch { /* ignore */ }
+    }
   }
 }

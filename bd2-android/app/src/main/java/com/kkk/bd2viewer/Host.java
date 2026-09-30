@@ -51,6 +51,12 @@ public final class Host {
     }
 
     static String mimeOf(String path) {
+        // Lost Sword 用 Unity TextAsset 导出：x.atlas.bytes(文本图集) / x.skel.bytes(二进制骨架)。
+        // lastIndexOf('.') 只会看到最末的 "bytes"，按它判会全落到 octet-stream。
+        // 这里按下标而不是文件尾匹配，避免 "atlas.bytes" 里那段被当成后缀。
+        String lower = path.toLowerCase();
+        if (lower.endsWith(".atlas.bytes")) return "text/plain; charset=utf-8";
+        if (lower.endsWith(".skel.bytes")) return "application/octet-stream";
         int dot = path.lastIndexOf('.');
         if (dot < 0) return "application/octet-stream";
         String ext = path.substring(dot + 1).toLowerCase();

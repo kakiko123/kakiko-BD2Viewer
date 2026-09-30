@@ -1,6 +1,6 @@
 {
   "name": "kakiko-bd2viewer",
-  "version": "1.01",
+  "version": "1.04",
   "private": true,
   "type": "module",
   "description": "Based on Jelosus2/BD2-L2D-Viewer (MIT, (c) 2025 Jelosus2): browse and play Spine ('L2D') animations from local Brown Dust 2 mod folders. Source is an independent rewrite.",
@@ -10,7 +10,6 @@
     "open": "node server.mjs --open"
   },
   "dependencies": {
-    "@esotericsoftware/spine-player": "4.1.55",
     "jszip": "^3.10.1"
   }
 }

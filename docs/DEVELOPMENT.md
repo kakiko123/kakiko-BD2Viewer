@@ -2,7 +2,7 @@
 
 给要改这个项目的人。**动手前请先读
 [`bd2-local-viewer/ARCHITECTURE.md`](../bd2-local-viewer/ARCHITECTURE.md)** ——
-那份文档里有分层调用链和 10 条不变量（R1~R10），本项目的多数 bug 都是违反而来的。
+那份文档里有分层调用链和 18 条不变量（R1~R18），本项目的多数 bug 都是违反而来的。
 
 ---
 
@@ -64,7 +64,7 @@ node _test/run_all.mjs --keep           # 跑完不关自己起的服务
 |---|---|
 | 8137 | `server.mjs` 默认端口。`bundle_check` / `bundle_firstpaint` / `e2e` 连它 |
 | 8143 | `native_mode` 连它（`server.mjs --port=8143`） |
-| 8600 起自动找空闲 | `delete_api` 自己起的临时服务（用 `BD2_CONFIG` 指到临时目录） |
+| 8600 起自动找空闲 | `delete_api` / `format_check` 自己起的临时服务（用 `BD2_CONFIG` 指到临时目录） |
 
 ---
 
@@ -80,10 +80,10 @@ node _test/run_all.mjs --keep           # 跑完不关自己起的服务
 
 - 你自己跑测试，需要本地有 BD2 mod 资产，并把 root 的 `id` 配成 `bd2-mods`；
 - 换一批资产后某些用例可能失败 —— **多半是 fixture 不匹配，不一定是代码坏了**；
-- 自包含、不需要任何真实数据的只有 `manifest_check`（纯静态）和 `delete_api`
-  （自己建临时根目录，用 `BD2_CONFIG` 指过去，绝不会碰你的真实目录）。
+- 自包含、不需要任何真实数据的只有 `manifest_check`（纯静态）、`delete_api` 与 `format_check`
+  （后两个自己建临时根目录，用 `BD2_CONFIG` 指过去，绝不会碰你的真实目录）。
 
-这是当前测试设计的一个已知短板（README §12 已知问题 1）。
+这是当前测试设计的一个已知短板，见 `KNOWN-ISSUES.md` 第 1 条「测试套件依赖真实资产」。
 
 ---
 
@@ -133,7 +133,7 @@ check('松手后状态干净', !stats.active, JSON.stringify(stats))
 
 `diag_*.mjs` / `probe.mjs` / 早期的 `shot*.mjs` 是开发期一次性脚本，
 随意新增、用完可以不管。但**不要**把新功能回归挂在这种脚本上 ——
-正式断言请加到 `run_all.mjs` 会跑的那 6 个套件里。
+正式断言请加到 `run_all.mjs` 会跑的那 7 个套件里（清单见 `_test/README.md`）。
 
 ---
 
@@ -204,7 +204,7 @@ Node 的输出在重定向到文件时是**块缓冲**。前台跑一个长任�
 
 | 文档 | 内容 |
 |---|---|
-| [`bd2-local-viewer/ARCHITECTURE.md`](../bd2-local-viewer/ARCHITECTURE.md) | 分层调用链、病根复盘、10 条不变量、验证矩阵 |
+| [`bd2-local-viewer/ARCHITECTURE.md`](../bd2-local-viewer/ARCHITECTURE.md) | 分层调用链、病根复盘、18 条不变量、验证矩阵 |
 | [`docs/TECHNICAL.md`](TECHNICAL.md) | 技术栈、项目结构、环境要求、主要实现思路、桌面版配置 |
 | [`docs/BUILD.md`](BUILD.md) | 构建、Release 签名、R8、clone 后跑不起来的排查清单 |
 | [`docs/KNOWN-ISSUES.md`](KNOWN-ISSUES.md) | 已知而未处理的问题 |

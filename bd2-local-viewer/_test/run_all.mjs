@@ -14,7 +14,7 @@
  * ⚠ 关于数据依赖：native_mode / e2e / bundle_firstpaint 会去读**你本机的真实资产**
  *   （viewer.config.json 里 id 为 bd2-mods 的那个 root）。
  *   没有这份数据的话它们会失败 —— 这是设计如此，它们测的就是真实解码链路。
- *   自包含、不需要任何真实数据的套件：manifest_check / delete_api。
+ *   自包含、不需要任何真实数据的套件：manifest_check / delete_api / format_check。
  */
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -36,6 +36,7 @@ const SUITES = [
   { name: 'bundle_check',      file: 'bundle_check.mjs',      needs: '8137',      data: true,  desc: '单文件产物：id 一致性、内联、遮罩、无外链' },
   { name: 'bundle_firstpaint', file: 'bundle_firstpaint.mjs', needs: '8137',      data: true,  desc: '产物级首屏：第一帧就是资产页、深链可用' },
   { name: 'delete_api',        file: 'delete_api.mjs',        needs: null,        data: false, desc: '真删磁盘 + 路径越界拒绝（自带临时根目录）' },
+  { name: 'format_check',      file: 'format_check.mjs',      needs: null,        data: false, desc: '命名约定双模式：bd / lostsword 互不串味、thumb、MIME、缓存分离（自带临时根目录）' },
   { name: 'e2e',               file: 'e2e.mjs',               needs: '8137',      data: true,  desc: '端到端：加载/相机/图层/截图/导出' },
   { name: 'native_mode',       file: 'native_mode.mjs',       needs: '8143',      data: true,  desc: '假桥原生通路：拖动/长按/批删/箭头/返回键/首屏' },
 ]

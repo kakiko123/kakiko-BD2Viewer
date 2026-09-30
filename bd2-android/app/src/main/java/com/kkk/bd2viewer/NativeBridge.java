@@ -59,10 +59,10 @@ public final class NativeBridge {
      * items 由 JS 用 scanPage 分页同步拉取 —— 一次性推几 MB 的 JSON 会把进程压崩。
      */
     @JavascriptInterface
-    public void requestScan(final String rootId, final boolean force) {
+    public void requestScan(final String rootId, final boolean force, final String mode) {
         new Thread(() -> {
             try {
-                JSONObject data = ScanEngine.scan(act, rootId, force);
+                JSONObject data = ScanEngine.scan(act, rootId, force, mode);
                 emit("window.__native&&window.__native.onScanMeta(" + jsSafe(data.toString()) + ")");
             } catch (Throwable t) {
                 Log.e(TAG, "scan failed", t);
@@ -74,9 +74,9 @@ public final class NativeBridge {
 
     /** 同步分页取扫描结果；每页控制在几十条，避免超大字符串 */
     @JavascriptInterface
-    public String scanPage(String rootId, int from, int count) {
+    public String scanPage(String rootId, int from, int count, String mode) {
         try {
-            return ScanEngine.scanPage(rootId, from, count);
+            return ScanEngine.scanPage(rootId, from, count, mode);
         } catch (Throwable t) {
             Log.e(TAG, "scanPage failed", t);
             return "[]";
@@ -84,9 +84,9 @@ public final class NativeBridge {
     }
 
     @JavascriptInterface
-    public int scanCount(String rootId) {
+    public int scanCount(String rootId, String mode) {
         try {
-            return ScanEngine.scanCount(rootId);
+            return ScanEngine.scanCount(rootId, mode);
         } catch (Throwable t) {
             return 0;
         }

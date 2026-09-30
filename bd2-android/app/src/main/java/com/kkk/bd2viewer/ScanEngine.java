@@ -52,6 +52,159 @@ public final class ScanEngine {
             "node_modules", ".git", ".svn", "__pycache__", "$recycle.bin", "cache", "code_cache"));
     private static final Set<String> IMG_EXT = new HashSet<>(Arrays.asList(".png", ".jpg", ".jpeg", ".webp"));
 
+    /* ------------------------------------------------------------ 资产命名约定
+     *
+     * 不同游戏给同一批 Spine 文件起的扩展名不一样，于是「怎么认出一套资产」有两套规则：
+     *   · bd（默认）：标准 Spine 导出 —— xxx.atlas + xxx.json / xxx.skel + 贴图
+     *   · lostsword ：Unity TextAsset 导出 —— xxx.atlas.bytes + xxx.skel.bytes
+     *                 （JSON 骨架是裸 xxx.bytes），目录里还常带一张预算好的 thumb.png
+     *
+     * 关键设计：**分桶的键不再用扩展名，而用「角色」**（@atlas / @json / @skel / @thumb，
+     * 贴图仍用真实扩展名）。这样 emitEntries / emitSaf 里那些
+     * `byExt.getOrDefault(".atlas", ...)` 只要改成 `byExt.getOrDefault(K_ATLAS, ...)`，
+     * 主体逻辑一行不用重写，两套规则就同时支持了。
+     *
+     * 与服务端的 FORMATS（server.mjs）保持同一套语义 —— 改一边记得改另一边。
+     */
+
+    static final String K_ATLAS = "@atlas";
+    static final String K_JSON = "@json";
+    static final String K_SKEL = "@skel";
+    static final String K_THUMB = "@thumb";
+
+    static final String MODE_BD = "bd";
+    static final String MODE_LOSTSWORD = "lostsword";
+    /** NIKKE：文件命名与 bd 完全一样（差别在前端怎么归组 + 骨架是 4.0），归桶直接复用 bd 那套。 */
+    static final String MODE_NIKKE = "nikke";
+
+    /** classify() 的结果：这个文件在资产里扮演什么角色 */
+    static final class Role {
+        final String bucket;   // 分桶键：K_ATLAS / K_JSON / K_SKEL / K_THUMB / 真实图片扩展名 / null
+        final String base;     // 资产基名（同名匹配用），仅 atlas / skeleton 有
+        Role(String bucket, String base) { this.bucket = bucket; this.base = base; }
+    }
+
+    /**
+     * 按当前模式把文件名归类。
+     * 返回 null 表示这个文件不参与资产识别（也不进桶）。
+     */
+    private static Role classify(String name, String mode) {
+        if (name == null) return null;
+        String l = name.toLowerCase(Locale.ROOT);
+        if (MODE_LOSTSWORD.equals(mode)) {
+            // 顺序要紧：.atlas.bytes / .skel.bytes 必须先判，否则会被裸 .bytes 抢走，
+            // 基名会算成 "xxx.atlas" 而不是 "xxx"。
+            if (l.endsWith(".atlas.bytes")) return new Role(K_ATLAS, name.substring(0, name.length() - 12));
+            if (l.endsWith(".skel.bytes")) return new Role(K_SKEL, name.substring(0, name.length() - 11));
+            if (l.endsWith(".bytes")) return new Role(K_JSON, name.substring(0, name.length() - 6));
+            if (l.equals("thumb.png")) return new Role(K_THUMB, null);
+            if (IMG_EXT.contains(extOf(name))) return new Role(extOf(name), null);
+            return null;
+        }
+        // bd 与 nikke 共用同一套归桶规则（NIKKE 的文件命名与 BD2 相同，
+        // 差别在前端归组与骨架世代，见 server.mjs FORMATS.nikke 的注释）。
+        if (l.endsWith(".atlas")) return new Role(K_ATLAS, baseName(name));
+        if (l.endsWith(".skel")) return new Role(K_SKEL, baseName(name));
+        if (l.endsWith(".json")) return new Role(K_JSON, baseName(name));
+        if (IMG_EXT.contains(extOf(name))) return new Role(extOf(name), null);
+        return null;
+    }
+
+    /**
+     * 从候选骨架里挑出与 atlas 配对的那个。三级级联，越靠前越可信：
+     *   ① 基名精确相同  ② 骨架基名是 atlas 基名的前缀（取最长）  ③ 目录里唯一候选
+     * 实测 Lost Sword 的 430 套里 429 套命中①，剩下一套靠②
+     * （skull_Soldier_Green.atlas.bytes ↔ skull_Soldier.skel.bytes）。
+     * 不能只用③：有 40 个目录里放着 2~3 个骨架，随便挑会张冠李戴。
+     */
+    private static <T> T pickByBase(List<T> cands, String base, java.util.function.Function<T, String> nameOf) {
+        if (cands == null || cands.isEmpty()) return null;
+        for (T c : cands) {
+            String n = nameOf.apply(c);
+            if (n != null && base.equals(classifyBaseOf(n))) return c;
+        }
+        T best = null;
+        int bestLen = -1;
+        for (T c : cands) {
+            String n = nameOf.apply(c);
+            String sb = n == null ? null : classifyBaseOf(n);
+            if (sb != null && !sb.isEmpty() && base.startsWith(sb) && sb.length() > bestLen) {
+                best = c;
+                bestLen = sb.length();
+            }
+        }
+        if (best != null) return best;
+        return cands.size() == 1 ? cands.get(0) : null;
+    }
+
+    /** 取基名：丢掉 .atlas.bytes / .skel.bytes 这类中缀 */
+    private static String classifyBaseOf(String name) {
+        String l = name.toLowerCase(Locale.ROOT);
+        if (l.endsWith(".atlas.bytes")) return name.substring(0, name.length() - 12);
+        if (l.endsWith(".skel.bytes")) return name.substring(0, name.length() - 11);
+        if (l.endsWith(".atlas")) return baseName(name);
+        if (l.endsWith(".skel")) return baseName(name);
+        if (l.endsWith(".json")) return baseName(name);
+        if (l.endsWith(".bytes")) return name.substring(0, name.length() - 6);
+        return baseName(name);
+    }
+
+    /** 二进制骨架头 → '4.0' / '4.1' / null（与前端 spineMinorFor / server spineMinorFromHead 同一口径） */
+    static String spineMinorFromHead(byte[] head) {
+        if (head == null || head.length == 0) return null;
+        StringBuilder sb = new StringBuilder(32);
+        int n = Math.min(head.length, 32);
+        for (int i = 0; i < n; i++) sb.append((char) (head[i] & 0xff));
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("4\\.(\\d)\\.\\d+").matcher(sb.toString());
+        return m.find() ? ("4." + m.group(1)) : null;
+    }
+
+    static String spineMinorOfEntry(Entry e, String kindBucket) {
+        if (e == null || !K_SKEL.equals(kindBucket)) return null;
+        if (e.file != null) {
+            try (FileInputStream in = new FileInputStream(e.file)) {
+                byte[] buf = new byte[32];
+                int n = in.read(buf);
+                if (n <= 0) return null;
+                if (n < buf.length) {
+                    byte[] slim = new byte[n];
+                    System.arraycopy(buf, 0, slim, 0, n);
+                    return spineMinorFromHead(slim);
+                }
+                return spineMinorFromHead(buf);
+            } catch (Exception ex) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /** SAF：通过 DocumentsContract Uri 读骨架头前 32 字节 */
+    static String spineMinorOfSafEntry(Context ctx, Uri tree, SafEntry e, String kindBucket) {
+        if (ctx == null || tree == null || e == null || !K_SKEL.equals(kindBucket) || e.docId == null) return null;
+        Uri uri = DocumentsContract.buildDocumentUriUsingTree(tree, e.docId);
+        try (InputStream in = ctx.getContentResolver().openInputStream(uri)) {
+            if (in == null) return null;
+            byte[] buf = new byte[32];
+            int n = in.read(buf);
+            if (n <= 0) return null;
+            if (n < buf.length) {
+                byte[] slim = new byte[n];
+                System.arraycopy(buf, 0, slim, 0, n);
+                return spineMinorFromHead(slim);
+            }
+            return spineMinorFromHead(buf);
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    /** 骨架桶 → spine-player 需要的 kind（决定走 jsonUrl 还是 binaryUrl） */
+    private static String kindOfBucket(String bucket) {
+        return K_SKEL.equals(bucket) ? "skel" : "json";
+    }
+
+
     public static final class Root {
         public String id;
         public String label;
@@ -126,6 +279,22 @@ public final class ScanEngine {
     public static final String DEFAULT_ROOT_ID = "__default__";
     public static final String PUBLIC_ROOT_ID = "__public__";
     public static final String DIR_NAME = "BD2Viewer";
+    /** 各模式在 BD2Viewer 下的子目录名（与前端 ASSET_MODES 对应；bd → bd2 以免与父目录混淆） */
+    public static final String SUB_BD = "bd2";
+    public static final String SUB_NIKKE = "nikke";
+    public static final String SUB_LOSTSWORD = "lostsword";
+    /** 最近一次扫描/绑定的 mode，storageStatus / writeImport 用它挑子目录 */
+    private static volatile String boundMode = MODE_BD;
+
+    public static String modeFolderName(String mode) {
+        if (MODE_NIKKE.equals(mode)) return SUB_NIKKE;
+        if (MODE_LOSTSWORD.equals(mode)) return SUB_LOSTSWORD;
+        return SUB_BD;
+    }
+
+    public static String[] allModeFolders() {
+        return new String[]{SUB_BD, SUB_NIKKE, SUB_LOSTSWORD};
+    }
 
     /** MediaStore 里拿到的一个文件条目（没有「全部文件访问」时只能这么读） */
     public static final class Entry {
@@ -134,7 +303,7 @@ public final class ScanEngine {
         public Uri uri;     // ms / saf 模式
     }
 
-    /** App 专属外部目录：零权限、一定可读写 */
+    /** App 专属外部目录父级：.../files/BD2Viewer（其下再分 bd2/nikke/lostsword） */
     public static File defaultDir(Context ctx) {
         File base = ctx.getExternalFilesDir(null);
         if (base == null) base = ctx.getFilesDir();
@@ -147,10 +316,25 @@ public final class ScanEngine {
         return d;
     }
 
-    /** 默认入口：优先外部存储根目录的 /sdcard/BD2Viewer，建不出来就退回 App 专属目录 */
+    /** App 专属目录下当前 mode 的子目录 */
+    public static File defaultModeDir(Context ctx, String mode) {
+        File d = new File(defaultDir(ctx), modeFolderName(mode));
+        try {
+            if (!d.exists() && !d.mkdirs()) Log.w(TAG, "mkdir failed: " + d);
+        } catch (Exception e) {
+            Log.w(TAG, "mkdir: " + e.getMessage());
+        }
+        return d;
+    }
+
+    /** 默认入口：优先外部 /sdcard/BD2Viewer/<mode>，建不出来就退回 App 专属同名子目录 */
     public static File primaryDir(Context ctx) {
-        File p = publicDir();
-        return p != null ? p : defaultDir(ctx);
+        return primaryDir(ctx, boundMode);
+    }
+
+    public static File primaryDir(Context ctx, String mode) {
+        File p = publicModeDir(mode);
+        return p != null ? p : defaultModeDir(ctx, mode);
     }
 
     /**
@@ -161,7 +345,7 @@ public final class ScanEngine {
         String safe = String.valueOf(rel).replace('\\', '/');
         while (safe.startsWith("/")) safe = safe.substring(1);
         if (safe.trim().isEmpty()) return false;
-        File[] targets = new File[]{publicDir(), defaultDir(ctx)};
+        File[] targets = new File[]{publicModeDir(boundMode), defaultModeDir(ctx, boundMode)};
         for (File dir : targets) {
             if (dir == null) continue;
             try {
@@ -211,7 +395,7 @@ public final class ScanEngine {
        静默失败会让用户以为 App 坏了，所以必须把原因说出来。 */
     private static String publicProblem = "";
 
-    /** 公共目录 /sdcard/BD2Viewer：只有真能写才启用，否则当它不存在 */
+    /** 公共目录父级 /sdcard/BD2Viewer：只有真能写才启用，否则当它不存在 */
     public static File publicDir() {
         publicProblem = "";
         File d = new File(Environment.getExternalStorageDirectory(), DIR_NAME);
@@ -237,28 +421,56 @@ public final class ScanEngine {
         return d;
     }
 
-    /** 期望的公共目录路径（不管建没建成功），给 UI 显示用 */
+    /** 公共目录下当前 mode 的子目录：/sdcard/BD2Viewer/{bd2,nikke,lostsword} */
+    public static File publicModeDir(String mode) {
+        File parent = publicDir();
+        if (parent == null) return null;
+        File d = new File(parent, modeFolderName(mode));
+        try {
+            if (!d.exists() && !d.mkdirs()) {
+                publicProblem = "无法在 BD2Viewer 下创建 " + modeFolderName(mode);
+                return null;
+            }
+        } catch (Exception e) {
+            publicProblem = "建子目录异常：" + e.getMessage();
+            return null;
+        }
+        return d;
+    }
+
+    /** 期望的公共目录父路径（不管建没建成功），给 UI 显示用 */
     public static String publicDirPath() {
         return new File(Environment.getExternalStorageDirectory(), DIR_NAME).getAbsolutePath();
     }
 
-    /** 给前端的目录/权限诊断信息 */
+    /** 期望的 mode 子目录路径 */
+    public static String publicModeDirPath(String mode) {
+        return new File(publicDirPath(), modeFolderName(mode)).getAbsolutePath();
+    }
+
+    /** 给前端的目录/权限诊断信息（路径已绑到当前 mode 子目录） */
     public static JSONObject storageStatus(Context ctx) {
         JSONObject o = new JSONObject();
-        File app = defaultDir(ctx);
-        File p = publicDir();
+        String mode = boundMode == null ? MODE_BD : boundMode;
+        File appParent = defaultDir(ctx);
+        File app = defaultModeDir(ctx, mode);
+        File pubParent = publicDir();
+        File p = publicModeDir(mode);
         File primary = p != null ? p : app;
         boolean allFiles = android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R
                 || Environment.isExternalStorageManager();
         try {
-            // 默认入口：外部 /sdcard/BD2Viewer 优先，拿不到才是 App 专属目录
             o.put("defaultDir", primary.getAbsolutePath());
             o.put("defaultExists", primary.isDirectory());
             o.put("defaultIsPublic", p != null);
             o.put("appDir", app.getAbsolutePath());
-            o.put("publicPath", publicDirPath());
+            o.put("appParentDir", appParent.getAbsolutePath());
+            o.put("publicPath", publicModeDirPath(mode));
+            o.put("publicParentPath", publicDirPath());
             o.put("publicOk", p != null);
             o.put("publicReason", publicProblem);
+            o.put("mode", mode);
+            o.put("modeFolder", modeFolderName(mode));
             o.put("allFilesAccess", allFiles);
             o.put("sdk", android.os.Build.VERSION.SDK_INT);
             o.put("rootCount", ROOTS.size());
@@ -267,16 +479,34 @@ public final class ScanEngine {
         return o;
     }
 
-    /** 启动时建好目录并放一份说明，用户把文件拷进去就行 */
+    /** 启动时建好父目录 + 三个 mode 子目录，并各放一份说明 */
     public static void ensureDefaults(Context ctx) {
-        // 外部存储根目录优先：能建就建，建不了的原因会显示在顶部状态条上
         File pub = publicDir();
         if (pub != null) {
             writeReadme(pub);
+            for (String sub : allModeFolders()) {
+                File d = new File(pub, sub);
+                try {
+                    if (!d.exists()) d.mkdirs();
+                } catch (Exception e) {
+                    Log.w(TAG, "mkdir mode: " + e.getMessage());
+                }
+                writeReadme(d);
+                scanPath(ctx, d.getAbsolutePath());
+            }
             scanPath(ctx, pub.getAbsolutePath());
         }
-        // App 专属目录始终建一份，导入文件随时有地方放
-        writeReadme(defaultDir(ctx));
+        File app = defaultDir(ctx);
+        writeReadme(app);
+        for (String sub : allModeFolders()) {
+            writeReadme(defaultModeDir(ctx, modeFolderToMode(sub)));
+        }
+    }
+
+    private static String modeFolderToMode(String folder) {
+        if (SUB_NIKKE.equals(folder)) return MODE_NIKKE;
+        if (SUB_LOSTSWORD.equals(folder)) return MODE_LOSTSWORD;
+        return MODE_BD;
     }
 
     private static void writeReadme(File dir) {
@@ -291,23 +521,45 @@ public final class ScanEngine {
     }
 
     private static String readmeText() {
-        return "把 Spine 动图文件拷进这个文件夹，每个子文件夹放一套：\r\n"
+        return "BD2Viewer 按游戏分三个子目录（App 会自动创建）：\r\n"
+                + "\r\n"
+                + "    BD2Viewer/bd2/        ← BD2 模式读取这里\r\n"
+                + "    BD2Viewer/nikke/      ← NIKKE 模式读取这里\r\n"
+                + "    BD2Viewer/lostsword/  ← Lost Sword 模式读取这里\r\n"
+                + "\r\n"
+                + "每个子目录里，一套 Spine 资产一个子文件夹：\r\n"
                 + "\r\n"
                 + "    xxx.atlas\r\n"
                 + "    xxx.json  或  xxx.skel\r\n"
-                + "    xxx.png   贴图，可能一张也可能好几张\r\n"
+                + "    xxx.png（图集页，可能不止一张）\r\n"
                 + "\r\n"
-                + "拷完回到 App 点顶部「重新扫描」就能看到列表。\r\n"
-                + "懒得用数据线的话，也可以直接点 App 里的「导入文件」。\r\n";
+                + "Lost Sword 是 Unity TextAsset：xxx.atlas.bytes + xxx.skel.bytes（或裸 xxx.bytes）+ xxx.png，\r\n"
+                + "目录里还可以带一张预算好的 thumb.png。\r\n"
+                + "\r\n"
+                + "懒得用数据线的话，也可以直接用 App 里的「导入文件」。\r\n";
     }
 
     private static void refreshAutoRoots(Context ctx) {
-        // 默认入口：外部存储的 /sdcard/BD2Viewer（文件管理器/数据线都进得去）
-        File pub = publicDir();
-        if (pub != null) putAuto(PUBLIC_ROOT_ID, "手机存储 /BD2Viewer", pub.getAbsolutePath(), "file");
-        else dropAuto(PUBLIC_ROOT_ID);
-        // 外部目录拿不到时的兜底
-        putAuto(DEFAULT_ROOT_ID, "BD2Viewer（App 目录）", defaultDir(ctx).getAbsolutePath(), "file");
+        bindModeRoots(ctx, boundMode);
+    }
+
+    /**
+     * 按当前资产模式把自动根绑到 BD2Viewer/{bd2,nikke,lostsword}。
+     * 切 mode 时由 scan() 调用；路径变了会清掉该 rootId 下所有 mode 缓存。
+     */
+    public static void bindModeRoots(Context ctx, String mode) {
+        if (mode == null || mode.isEmpty()) mode = MODE_BD;
+        boundMode = mode;
+        String folder = modeFolderName(mode);
+        File pub = publicModeDir(mode);
+        if (pub != null) {
+            String label = "手机存储 /BD2Viewer/" + folder;
+            putAuto(PUBLIC_ROOT_ID, label, pub.getAbsolutePath(), "file");
+        } else {
+            dropAuto(PUBLIC_ROOT_ID);
+        }
+        File app = defaultModeDir(ctx, mode);
+        putAuto(DEFAULT_ROOT_ID, "BD2Viewer/" + folder + "（App 目录）", app.getAbsolutePath(), "file");
         sortAuto();
     }
 
@@ -341,10 +593,21 @@ public final class ScanEngine {
     private static void putAuto(String id, String label, String path, String kind) {
         for (Root r : ROOTS) {
             if (id.equals(r.id)) {
+                boolean pathChanged = path != null && !path.equals(r.path);
                 r.label = label;
                 r.kind = kind;
                 r.path = path;
                 r.exists = "ms".equals(kind) || new File(path).isDirectory();
+                if (pathChanged) {
+                    // 切 mode 换了子目录：旧缓存指向另一批文件，所有 mode 桶一起丢
+                    synchronized (SCAN_LOCK) {
+                        java.util.Iterator<String> cit = CACHE.keySet().iterator();
+                        while (cit.hasNext()) {
+                            String k = cit.next();
+                            if (k.equals(id) || k.startsWith(id + "|")) cit.remove();
+                        }
+                    }
+                }
                 return;
             }
         }
@@ -419,12 +682,25 @@ public final class ScanEngine {
      * 只返回元信息，不带 items。
      * 原来把整个 items（大目录时是几 MB 的 JSON）用 evaluateJavascript 一次性推给 JS，
      * 会直接把进程压崩；改成 JS 先拿元信息、再分页同步拉取。
+     *
+     * `mode` 决定用哪套命名约定（见上面「资产命名约定」）。它参与**缓存键** ——
+     * 否则切到 Lost Sword 再切回来会拿到另一种约定的旧结果，表现为「切了没反应」。
      */
-    public static JSONObject scan(Context ctx, String rootId, boolean force) {
+    public static JSONObject scan(Context ctx, String rootId, boolean force, String mode) {
         long t0 = System.currentTimeMillis();
+        if (mode == null || mode.isEmpty()) mode = MODE_BD;
+        // 自动根按 mode 切到 BD2Viewer/{bd2,nikke,lostsword}；用户 SAF 根不动
+        if (rootId != null && rootId.startsWith("__")) {
+            synchronized (ROOTS_LOCK) {
+                bindModeRoots(ctx, mode);
+            }
+        } else {
+            boundMode = mode;
+        }
         Root root = rootById(rootId);
+        String key = cacheKey(rootId, mode);
         JSONArray items;
-        synchronized (SCAN_LOCK) { items = CACHE.get(rootId); }
+        synchronized (SCAN_LOCK) { items = CACHE.get(key); }
 
         if (force || items == null) {
             JSONArray fresh = new JSONArray();
@@ -433,17 +709,25 @@ public final class ScanEngine {
             synchronized (SCAN_LOCK) {
                 java.util.Iterator<String> it = DOCS.keySet().iterator();
                 while (it.hasNext()) if (it.next().startsWith(rootId + "|")) it.remove();
+                // 本次扫描会把这个 rootId 的 DOCS 整个重建，其它 mode 桶的缓存项
+                // 此刻已经指向不存在的索引了，必须一起丢掉，否则切回去会 404。
+                // 按 rootId| 前缀清（含 bd / lostsword / nikke），以后加 mode 不用再改这里。
+                java.util.Iterator<String> cit = CACHE.keySet().iterator();
+                while (cit.hasNext()) {
+                    String k = cit.next();
+                    if (k.equals(rootId) || k.startsWith(rootId + "|")) cit.remove();
+                }
             }
             if (root != null) {
                 if ("ms".equals(root.kind)) {
-                    walkMs(ctx, fresh, root);
+                    walkMs(ctx, fresh, root, mode);
                 } else if ("file".equals(root.kind) && root.path != null) {
-                    walkFile(new File(root.path), 0, fresh, root);
+                    walkFile(new File(root.path), 0, fresh, root, mode);
                 } else if (root.treeUri != null) {
-                    walkSaf(ctx, Uri.parse(root.treeUri), "", 0, fresh, root);
+                    walkSaf(ctx, Uri.parse(root.treeUri), "", 0, fresh, root, mode);
                 }
             }
-            synchronized (SCAN_LOCK) { CACHE.put(rootId, fresh); }
+            synchronized (SCAN_LOCK) { CACHE.put(key, fresh); }
             items = fresh;
         }
 
@@ -455,6 +739,7 @@ public final class ScanEngine {
         try {
             out.put("root", root == null ? new JSONObject() : root.toJson());
             out.put("rootId", rootId == null ? "" : rootId);
+            out.put("mode", mode == null ? MODE_BD : mode);
             out.put("itemCount", items.length());
             out.put("playableCount", playable);
             out.put("truncated", dirCount >= MAX_DIRS);
@@ -464,17 +749,21 @@ public final class ScanEngine {
         return out;
     }
 
-    public static int scanCount(String rootId) {
+    private static String cacheKey(String rootId, String mode) {
+        return rootId + "|" + (mode == null || mode.isEmpty() ? MODE_BD : mode);
+    }
+
+    public static int scanCount(String rootId, String mode) {
         synchronized (SCAN_LOCK) {
-            JSONArray a = CACHE.get(rootId);
+            JSONArray a = CACHE.get(cacheKey(rootId, mode));
             return a == null ? 0 : a.length();
         }
     }
 
     /** 分页取扫描结果：一次几十条，避免构造/传递超大 JSON 字符串 */
-    public static String scanPage(String rootId, int from, int count) {
+    public static String scanPage(String rootId, int from, int count, String mode) {
         JSONArray items;
-        synchronized (SCAN_LOCK) { items = CACHE.get(rootId); }
+        synchronized (SCAN_LOCK) { items = CACHE.get(cacheKey(rootId, mode)); }
         if (items == null) return "[]";
         JSONArray page = new JSONArray();
         int start = Math.max(0, from);
@@ -488,7 +777,7 @@ public final class ScanEngine {
 
     /* ------------------------------------------------- 直读文件模式 */
 
-    private static void walkFile(File dir, int depth, JSONArray out, Root root) {
+    private static void walkFile(File dir, int depth, JSONArray out, Root root, String mode) {
         if (depth > MAX_DEPTH || out.length() >= MAX_ITEMS) return;
         if (++dirCount > MAX_DIRS || System.currentTimeMillis() > deadline) return;
         File[] list = dir.listFiles();
@@ -500,14 +789,16 @@ public final class ScanEngine {
                 String n = f.getName().toLowerCase(Locale.ROOT);
                 if (!SKIP_DIRS.contains(n)) subdirs.add(f);
             } else if (f.isFile()) {
+                Role r = classify(f.getName(), mode);
+                if (r == null || r.bucket == null) continue;
                 Entry e = new Entry();
                 e.name = f.getName();
                 e.file = f;
-                byExt.computeIfAbsent(extOf(f.getName()), k -> new ArrayList<>()).add(e);
+                byExt.computeIfAbsent(r.bucket, k -> new ArrayList<>()).add(e);
             }
         }
-        emitEntries(null, root, relDirOf(root, dir), byExt, out);
-        for (File d : subdirs) walkFile(d, depth + 1, out, root);
+        emitEntries(null, root, relDirOf(root, dir), byExt, out, mode);
+        for (File d : subdirs) walkFile(d, depth + 1, out, root, mode);
     }
 
     /** 目录相对根目录的路径，"" 表示根 */
@@ -522,24 +813,41 @@ public final class ScanEngine {
     }
 
     private static void emitEntries(Context ctx, Root root, String dirRel,
-                                    Map<String, List<Entry>> byExt, JSONArray out) {
+                                    Map<String, List<Entry>> byExt, JSONArray out, String mode) {
         if (dirRel == null) dirRel = "";
         if (out.length() >= MAX_ITEMS) return;
-        List<Entry> atlases = byExt.getOrDefault(".atlas", new ArrayList<>());
+        List<Entry> atlases = byExt.getOrDefault(K_ATLAS, new ArrayList<>());
         for (Entry atlas : atlases) {
-            String base = baseName(atlas.name);
-            List<Entry> jsons = byExt.getOrDefault(".json", new ArrayList<>());
-            List<Entry> skels = byExt.getOrDefault(".skel", new ArrayList<>());
-            Entry skeleton = pickSkeleton(base, jsons, skels);
-            String kind = skeleton == null ? null
-                    : skeleton.name.toLowerCase(Locale.ROOT).endsWith(".skel") ? "skel" : "json";
+            String base = classifyBaseOf(atlas.name);
+            List<Entry> jsons = byExt.getOrDefault(K_JSON, new ArrayList<>());
+            List<Entry> skels = byExt.getOrDefault(K_SKEL, new ArrayList<>());
+            Entry skeleton = pickByBase(jsons, base, e -> e.name);
+            String kind = K_JSON;
+            if (skeleton == null) {
+                skeleton = pickByBase(skels, base, e -> e.name);
+                kind = K_SKEL;
+            }
+            if (skeleton == null) kind = null;
+            List<Entry> thumbs = byExt.getOrDefault(K_THUMB, new ArrayList<>());
+            Entry thumb = thumbs.isEmpty() ? null : thumbs.get(0);
 
             List<String> pages = parseAtlasPages(readTextEntry(ctx, atlas));
             List<Entry> imgs = new ArrayList<>();
             for (String e : IMG_EXT) imgs.addAll(byExt.getOrDefault(e, new ArrayList<>()));
             if (pages.isEmpty()) {
-                for (Entry f : imgs) if (baseName(f.name).startsWith(base)) pages.add(f.name);
-                if (pages.isEmpty() && !imgs.isEmpty()) pages.add(imgs.get(0).name);
+                // 兜底按基名前缀猜，但排除预算好的 thumb.png ——
+                // 否则 "Agravaine" 这种基名会把 thumb 当图集页（Lost Sword 实测有这个坑）
+                for (Entry f : imgs) {
+                    if (thumb != null && f.name.equals(thumb.name)) continue;
+                    if (baseName(f.name).startsWith(base)) pages.add(f.name);
+                }
+                if (pages.isEmpty()) {
+                    for (Entry f : imgs) {
+                        if (thumb != null && f.name.equals(thumb.name)) continue;
+                        pages.add(f.name);
+                        break;
+                    }
+                }
             }
             List<Entry> images = new ArrayList<>();
             List<String> missing = new ArrayList<>();
@@ -561,7 +869,11 @@ public final class ScanEngine {
                 o.put("relAtlas", relAtlas);
                 o.put("relSkeleton", skeleton == null ? null : relOf(dirRel, skeleton.name));
                 o.put("skeleton", skeleton == null ? null : skeleton.name);
-                o.put("skeletonKind", kind);
+                String spineMinor = spineMinorOfEntry(skeleton, kind);
+                o.put("skeletonKind", skeleton == null ? null : kindOfBucket(kind));
+                if (spineMinor != null) o.put("spineMinor", spineMinor);
+                else o.put("spineMinor", JSONObject.NULL);
+                o.put("relThumb", thumb == null ? null : relOf(dirRel, thumb.name));
                 JSONArray im = new JSONArray();
                 for (Entry f : images) im.put(f.name);
                 JSONArray rim = new JSONArray();
@@ -572,12 +884,13 @@ public final class ScanEngine {
                 o.put("relImages", rim);
                 o.put("missingImages", mi);
                 o.put("ok", skeleton != null && !images.isEmpty() && missing.isEmpty());
-                o.put("problems", problems(skeleton, images.isEmpty(), missing));
+                o.put("problems", problems(skeleton, images.isEmpty()));
                 // 文件改动时间：前端用它决定缩略图缓存要不要失效
                 o.put("mtime", mtimeOf(atlas));
                 out.put(o);
                 indexEntry(root, atlas, relAtlas);
                 if (skeleton != null) indexEntry(root, skeleton, relOf(dirRel, skeleton.name));
+                if (thumb != null) indexEntry(root, thumb, relOf(dirRel, thumb.name));
                 for (Entry f : images) indexEntry(root, f, relOf(dirRel, f.name));
             } catch (Exception e) {
                 Log.w(TAG, "json: " + e.getMessage());
@@ -647,9 +960,15 @@ public final class ScanEngine {
                     pruneEmptyDirs(root, relAtlas);
                 }
             }
-            // 扫描结果里还留着已删的条目 → 整个缓存作废，下次扫描重新走一遍
+            // 扫描结果里还留着已删的条目 → 所有 mode 桶的缓存都作废，下次扫描重新走一遍
             if (deleted.length() > 0) {
-                synchronized (SCAN_LOCK) { CACHE.remove(rootId); }
+                synchronized (SCAN_LOCK) {
+                    java.util.Iterator<String> cit = CACHE.keySet().iterator();
+                    while (cit.hasNext()) {
+                        String k = cit.next();
+                        if (k.equals(rootId) || k.startsWith(rootId + "|")) cit.remove();
+                    }
+                }
             }
             out.put("ok", true);
             out.put("deleted", deleted);
@@ -717,13 +1036,8 @@ public final class ScanEngine {
         return o;
     }
 
-    private static Entry pickSkeleton(String base, List<Entry> jsons, List<Entry> skels) {
-        for (Entry f : jsons) if (baseName(f.name).equals(base)) return f;
-        for (Entry f : skels) if (baseName(f.name).equals(base)) return f;
-        if (jsons.size() == 1) return jsons.get(0);
-        if (skels.size() == 1) return skels.get(0);
-        return null;
-    }
+    /* pickSkeleton / pickSkeletonSaf 已被通用的 pickByBase 取代 ——
+       它按「当前命名约定」算基名，两种游戏共用一套级联逻辑，不再各写一份。 */
 
     /** 文件修改时间（毫秒）：前端拿它判断缩略图缓存要不要失效 */
     private static long mtimeOf(Entry e) {
@@ -776,23 +1090,23 @@ public final class ScanEngine {
     /** MediaStore 备用通路读的位置（Download/BD2Viewer），只在没有直读权限时用得上 */
     private static final String MS_REL = "Download/" + DIR_NAME + "/";
 
-    private static void walkMs(Context ctx, JSONArray out, Root root) {
+    private static void walkMs(Context ctx, JSONArray out, Root root, String mode) {
         if (ctx == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return;
         ContentResolver cr = ctx.getContentResolver();
         Map<String, Map<String, List<Entry>>> byDir = new LinkedHashMap<>();
-        collectMs(cr, MediaStore.Files.getContentUri("external"), byDir);
-        collectMs(cr, MediaStore.Downloads.EXTERNAL_CONTENT_URI, byDir);
+        collectMs(cr, MediaStore.Files.getContentUri("external"), byDir, mode);
+        collectMs(cr, MediaStore.Downloads.EXTERNAL_CONTENT_URI, byDir, mode);
         List<String> dirs = new ArrayList<>(byDir.keySet());
         dirs.sort(Comparator.comparingInt((String s) -> s.isEmpty() ? 0 : 1).thenComparing(s -> s));
         for (String d : dirs) {
             if (++dirCount > MAX_DIRS || System.currentTimeMillis() > deadline) break;
-            emitEntries(ctx, root, d, byDir.get(d), out);
+            emitEntries(ctx, root, d, byDir.get(d), out, mode);
         }
         Log.i(TAG, "ms scan: " + byDir.size() + " 个目录 / " + out.length() + " 项");
     }
 
     private static void collectMs(ContentResolver cr, Uri base,
-                                  Map<String, Map<String, List<Entry>>> byDir) {
+                                  Map<String, Map<String, List<Entry>>> byDir, String mode) {
         String[] proj = {"_id", "_display_name", "relative_path"};
         try (Cursor c = cr.query(base, proj, "relative_path LIKE ?", new String[]{MS_REL + "%"}, null)) {
             if (c == null) return;
@@ -800,13 +1114,15 @@ public final class ScanEngine {
                 String name = c.getString(1);
                 String relDir = c.getString(2);
                 if (name == null || relDir == null) continue;
+                Role role = classify(name, mode);
+                if (role == null || role.bucket == null) continue;
                 String sub = relDir.startsWith(MS_REL) ? relDir.substring(MS_REL.length()) : relDir;
                 sub = sub.replaceAll("/+$", "");
                 Entry e = new Entry();
                 e.name = name;
                 e.uri = ContentUris.withAppendedId(base, c.getLong(0));
                 Map<String, List<Entry>> m = byDir.computeIfAbsent(sub, k -> new LinkedHashMap<>());
-                List<Entry> list = m.computeIfAbsent(extOf(name), k -> new ArrayList<>());
+                List<Entry> list = m.computeIfAbsent(role.bucket, k -> new ArrayList<>());
                 boolean dup = false;
                 for (Entry x : list) if (x.name.equals(name)) { dup = true; break; }
                 if (!dup) list.add(e);
@@ -818,7 +1134,7 @@ public final class ScanEngine {
 
     /* ------------------------------------------------- SAF 模式 */
 
-    private static void walkSaf(Context ctx, Uri tree, String relDir, int depth, JSONArray out, Root root) {
+    private static void walkSaf(Context ctx, Uri tree, String relDir, int depth, JSONArray out, Root root, String mode) {
         if (depth > MAX_DEPTH || out.length() >= MAX_ITEMS) return;
         if (++dirCount > MAX_DIRS || System.currentTimeMillis() > deadline) return;
         Uri dirUri;
@@ -835,32 +1151,49 @@ public final class ScanEngine {
                 String n = (e.name == null ? "" : e.name.toLowerCase(Locale.ROOT));
                 if (!SKIP_DIRS.contains(n)) subdirs.add(e);
             } else {
-                byExt.computeIfAbsent(extOf(e.name), k -> new ArrayList<>()).add(e);
+                Role r = classify(e.name, mode);
+                if (r == null || r.bucket == null) continue;
+                byExt.computeIfAbsent(r.bucket, k -> new ArrayList<>()).add(e);
             }
         }
-        emitSaf(ctx, tree, relDir, byExt, out, root);
+        emitSaf(ctx, tree, relDir, byExt, out, root, mode);
         for (SafEntry d : subdirs) {
-            walkSaf(ctx, tree, relDir.isEmpty() ? d.name : relDir + "/" + d.name, depth + 1, out, root);
+            walkSaf(ctx, tree, relDir.isEmpty() ? d.name : relDir + "/" + d.name, depth + 1, out, root, mode);
         }
     }
 
     private static void emitSaf(Context ctx, Uri tree, String relDir,
-                                Map<String, List<SafEntry>> byExt, JSONArray out, Root root) {
-        List<SafEntry> atlases = byExt.getOrDefault(".atlas", new ArrayList<>());
+                                Map<String, List<SafEntry>> byExt, JSONArray out, Root root, String mode) {
+        List<SafEntry> atlases = byExt.getOrDefault(K_ATLAS, new ArrayList<>());
         for (SafEntry atlas : atlases) {
-            String base = baseName(atlas.name);
-            List<SafEntry> jsons = byExt.getOrDefault(".json", new ArrayList<>());
-            List<SafEntry> skels = byExt.getOrDefault(".skel", new ArrayList<>());
-            SafEntry skeleton = pickSkeletonSaf(base, jsons, skels);
-            String kind = null;
-            if (skeleton != null) kind = skeleton.name.toLowerCase(Locale.ROOT).endsWith(".skel") ? "skel" : "json";
+            String base = classifyBaseOf(atlas.name);
+            List<SafEntry> jsons = byExt.getOrDefault(K_JSON, new ArrayList<>());
+            List<SafEntry> skels = byExt.getOrDefault(K_SKEL, new ArrayList<>());
+            SafEntry skeleton = pickByBase(jsons, base, e -> e.name);
+            String kind = K_JSON;
+            if (skeleton == null) {
+                skeleton = pickByBase(skels, base, e -> e.name);
+                kind = K_SKEL;
+            }
+            if (skeleton == null) kind = null;
+            List<SafEntry> thumbs = byExt.getOrDefault(K_THUMB, new ArrayList<>());
+            SafEntry thumb = thumbs.isEmpty() ? null : thumbs.get(0);
 
             List<String> pages = parseAtlasPages(readTextSaf(ctx, atlas.docId, tree));
             List<SafEntry> imgs = new ArrayList<>();
             for (String e : IMG_EXT) imgs.addAll(byExt.getOrDefault(e, new ArrayList<>()));
             if (pages.isEmpty()) {
-                for (SafEntry f : imgs) if (baseName(f.name).startsWith(base)) pages.add(f.name);
-                if (pages.isEmpty() && !imgs.isEmpty()) pages.add(imgs.get(0).name);
+                for (SafEntry f : imgs) {
+                    if (thumb != null && f.name.equals(thumb.name)) continue;
+                    if (baseName(f.name).startsWith(base)) pages.add(f.name);
+                }
+                if (pages.isEmpty()) {
+                    for (SafEntry f : imgs) {
+                        if (thumb != null && f.name.equals(thumb.name)) continue;
+                        pages.add(f.name);
+                        break;
+                    }
+                }
             }
             List<SafEntry> images = new ArrayList<>();
             List<String> missing = new ArrayList<>();
@@ -882,7 +1215,11 @@ public final class ScanEngine {
                 o.put("relAtlas", relAtlas);
                 o.put("relSkeleton", skeleton == null ? null : join(relDir, skeleton.name));
                 o.put("skeleton", skeleton == null ? null : skeleton.name);
-                o.put("skeletonKind", kind);
+                String spineMinor = spineMinorOfSafEntry(ctx, tree, skeleton, kind);
+                o.put("skeletonKind", skeleton == null ? null : kindOfBucket(kind));
+                if (spineMinor != null) o.put("spineMinor", spineMinor);
+                else o.put("spineMinor", JSONObject.NULL);
+                o.put("relThumb", thumb == null ? null : join(relDir, thumb.name));
                 JSONArray im = new JSONArray();
                 for (SafEntry f : images) im.put(f.name);
                 JSONArray rim = new JSONArray();
@@ -893,12 +1230,13 @@ public final class ScanEngine {
                 o.put("relImages", rim);
                 o.put("missingImages", mi);
                 o.put("ok", skeleton != null && !images.isEmpty() && missing.isEmpty());
-                o.put("problems", problems(skeleton, images.isEmpty(), missing));
+                o.put("problems", problems(skeleton, images.isEmpty()));
                 // 文件改动时间：前端用它决定缩略图缓存要不要失效
                 o.put("mtime", mtimeOf(atlas));
                 out.put(o);
                 indexSaf(root, tree, atlas.docId, relAtlas);
                 if (skeleton != null) indexSaf(root, tree, skeleton.docId, join(relDir, skeleton.name));
+                if (thumb != null) indexSaf(root, tree, thumb.docId, join(relDir, thumb.name));
                 for (SafEntry f : images) indexSaf(root, tree, f.docId, join(relDir, f.name));
             } catch (Exception e) {
                 Log.w(TAG, "json: " + e.getMessage());
@@ -913,13 +1251,7 @@ public final class ScanEngine {
         DOCS.put(root.id + "|" + rel, d);
     }
 
-    private static SafEntry pickSkeletonSaf(String base, List<SafEntry> jsons, List<SafEntry> skels) {
-        for (SafEntry f : jsons) if (baseName(f.name).equals(base)) return f;
-        for (SafEntry f : skels) if (baseName(f.name).equals(base)) return f;
-        if (jsons.size() == 1) return jsons.get(0);
-        if (skels.size() == 1) return skels.get(0);
-        return null;
-    }
+    /* pickSkeletonSaf 见上：已并入 pickByBase */
 
     /** SAF 目录列举。优先用 DocumentsContract 的 child documents 查询，更快也更稳。 */
     private static List<SafEntry> listSaf(Context ctx, Uri dirUri) {
@@ -988,18 +1320,16 @@ public final class ScanEngine {
         return i >= 0 ? relDir.substring(i + 1) : relDir;
     }
 
-    private static JSONArray problems(Object skeleton, boolean noImages, List<String> missing) {
+    /**
+     * problems 里只放**可翻译的简单键** —— 前端会逐条过 t()（R11）。
+     * 「缺哪几张图」不放这里，改由前端的 missingImages 字段拼，
+     * 这样原生侧不需要懂语言，也不会把「文案 + 变量」揉成一个翻不动的整串。
+     * （与服务端 server.mjs 的 problems 保持同一套键。）
+     */
+    private static JSONArray problems(Object skeleton, boolean noImages) {
         JSONArray a = new JSONArray();
-        if (skeleton == null) a.put("缺少 .json / .skel 骨架文件");
-        if (noImages) a.put("缺少图集贴图 .png");
-        if (!missing.isEmpty()) {
-            StringBuilder sb = new StringBuilder("atlas 引用了不存在的图：");
-            for (int i = 0; i < missing.size(); i++) {
-                if (i > 0) sb.append(", ");
-                sb.append(missing.get(i));
-            }
-            a.put(sb.toString());
-        }
+        if (skeleton == null) a.put("缺少骨架文件");
+        if (noImages) a.put("缺少贴图 .png");
         return a;
     }
 

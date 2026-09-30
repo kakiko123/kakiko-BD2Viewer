@@ -2,6 +2,7 @@
  * 桌面 Node 服务恰好也提供 /api/* 与 /spine/*，所以假桥直接转发它，
  * 前端用的就是 APK 里那份代码路径（NATIVE === true）。 */
 import { Cdp } from './cdp.mjs'
+import fs from 'node:fs'
 
 const BASE = 'http://127.0.0.1:8143'
 const results = []
@@ -18,43 +19,50 @@ window.BD2Native = {
     fetch('/api/config').then(function (r) { return r.json() })
       .then(function (c) {
         var roots = c.roots || []
-        roots.unshift({ id: '__default__', label: 'BD2Viewer（App 目录）', kind: 'file',
-                       path: '/sdcard/Android/data/com.kkk.bd2viewer/files/BD2Viewer', exists: true })
+        roots.unshift({ id: '__default__', label: 'BD2Viewer/bd2（App 目录）', kind: 'file',
+                       path: '/sdcard/Android/data/com.kkk.bd2viewer/files/BD2Viewer/bd2', exists: true })
         if (window.__EXT) {
-          roots.unshift({ id: '__public__', label: '手机存储 /BD2Viewer', kind: 'file',
-                         path: '/sdcard/BD2Viewer', exists: true })
+          roots.unshift({ id: '__public__', label: '手机存储 /BD2Viewer/bd2', kind: 'file',
+                         path: '/sdcard/BD2Viewer/bd2', exists: true })
         }
         window.__native.onRoots(roots)
       })
       .catch(function (e) { window.__native.onError('roots: ' + e.message) })
   },
-  // 真实 APK 只回元信息，items 走 scanPage 分页；假桥照这个协议实现
-  __scanCache: [],
-  requestScan(rootId, force) {
+  // 真实 APK 只回元信息，items 走 scanPage 分页；假桥照这个协议实现。
+  // __scanCache 按 (rootId, mode) 分桶 —— 真机 ScanEngine 就是这么分的，
+  // 假桥要是只存一份，切模式时「前端到底有没有把 mode 传下来」就测不出来了。
+  __scanCache: {},
+  __cacheKey(rootId, mode) { return String(rootId) + '|' + (mode || 'bd') },
+  requestScan(rootId, force, mode) {
     var self = this
     // 假桥把自动目录（__ 开头）映射到桌面服务的真实 root
     var real = String(rootId).startsWith('__') ? 'bd2-mods' : rootId
-    fetch('/api/scan?root=' + encodeURIComponent(real) + (force ? '&refresh=1' : ''))
+    var m = mode || 'bd'
+    fetch('/api/scan?root=' + encodeURIComponent(real) +
+          '&mode=' + encodeURIComponent(m) + (force ? '&refresh=1' : ''))
       .then(function (r) { return r.json() })
       .then(function (d) {
-        self.__scanCache = d.items || []
+        self.__scanCache[self.__cacheKey(rootId, m)] = d.items || []
         window.__native.onScanMeta({
           rootId: rootId,
           root: d.root,
-          itemCount: self.__scanCache.length,
+          mode: m,
+          itemCount: (d.items || []).length,
           playableCount: d.playableCount,
           scanMs: d.scanMs
         })
       })
       .catch(function (e) { window.__native.onError('scan: ' + e.message) })
   },
-  scanPage(rootId, from, count) {
-    return JSON.stringify((this.__scanCache || []).slice(from, from + count))
+  scanPage(rootId, from, count, mode) {
+    var all = this.__scanCache[this.__cacheKey(rootId, mode)] || []
+    return JSON.stringify(all.slice(from, from + count))
   },
-  scanCount(rootId) { return (this.__scanCache || []).length },
+  scanCount(rootId, mode) { return (this.__scanCache[this.__cacheKey(rootId, mode)] || []).length },
   defaultPath() {
-    return window.__EXT ? '/sdcard/BD2Viewer'
-      : '/sdcard/Android/data/com.kkk.bd2viewer/files/BD2Viewer'
+    return window.__EXT ? '/sdcard/BD2Viewer/bd2'
+      : '/sdcard/Android/data/com.kkk.bd2viewer/files/BD2Viewer/bd2'
   },
   importFile(rel, base64) { window.__imported.push({ rel: rel, bytes: Math.round(base64.length * 3 / 4) }); return true },
   // 删除：假桥只记录请求 + 回一份成功回执，**不碰磁盘**（真机上是 ScanEngine.deleteItems）。
@@ -69,7 +77,10 @@ window.BD2Native = {
     for (var i = 0; i < items.length; i++) {
       var k = items[i].relAtlas
       deleted.push(k)
-      api.__scanCache = (api.__scanCache || []).filter(function (x) { return x.relAtlas !== k })
+      // 缓存按 mode 分桶，删的时候要把所有桶里的这条都摘掉
+      Object.keys(api.__scanCache).forEach(function (bk) {
+        api.__scanCache[bk] = api.__scanCache[bk].filter(function (x) { return x.relAtlas !== k })
+      })
     }
     return JSON.stringify({ ok: true, deleted: deleted, failed: [] })
   },
@@ -77,12 +88,12 @@ window.BD2Native = {
   storageStatus() {
     var ext = window.__EXT
     return JSON.stringify({
-      defaultDir: ext ? '/sdcard/BD2Viewer'
-        : '/sdcard/Android/data/com.kkk.bd2viewer/files/BD2Viewer',
+      defaultDir: ext ? '/sdcard/BD2Viewer/bd2'
+        : '/sdcard/Android/data/com.kkk.bd2viewer/files/BD2Viewer/bd2',
       defaultExists: true,
       defaultIsPublic: ext,
-      appDir: '/sdcard/Android/data/com.kkk.bd2viewer/files/BD2Viewer',
-      publicPath: '/sdcard/BD2Viewer',
+      appDir: '/sdcard/Android/data/com.kkk.bd2viewer/files/BD2Viewer/bd2',
+      publicPath: '/sdcard/BD2Viewer/bd2',
       publicOk: ext,
       publicReason: ext ? '' : '系统拒绝了在手机存储根目录建文件夹（Android 11+ 分区存储）',
       allFilesAccess: ext,
@@ -407,7 +418,7 @@ try {
   check('⑦ 手机首页不再显示目录条，入口搬进设置',
     bar.barHidden === true && bar.boxVisible === true,
     `storageBar.hidden=${bar.barHidden} 设置里可见=${bar.boxVisible}`)
-  check('⑦ 设置里的文件目录指向外部路径', /\/sdcard\/BD2Viewer$/.test(bar.path.trim()),
+  check('⑦ 设置里的文件目录指向外部路径', /\/sdcard\/BD2Viewer\/bd2$/.test(bar.path.trim()),
     bar.path)
   check('⑦ 外部目录可用时给出放文件的指引', /文件管理/.test(bar.tip), bar.tip.slice(0, 40) + '…')
   check('⑦ 提供「复制路径 / 授权文件夹」入口',
@@ -1007,11 +1018,21 @@ try {
     ev('pointermove', dropX, dropY)
     await new Promise(r => requestAnimationFrame(r))
     ev('pointerup', dropX, dropY)
-    await new Promise(r => setTimeout(r, 600))
+    // 等「收尾完成」这个条件，而不是等固定时长：FLIP 的 200ms 收尾靠定时器，
+    // 主线程被占（178 张卡在生成缩略图）时 600ms 也能被挤过去，就误判成「残留垃圾」。
+    // 兜底 4 秒：真没清干净还是会读到非零值 → 断言照样红。
+    {
+      const deadline = Date.now() + 4000
+      while (Date.now() < deadline) {
+        const s = __bd2viewer.dragStats
+        if (s.placeholders === 0 && s.floating === 0 && s.stuckInline === 0) break
+        await new Promise(r => setTimeout(r, 60))
+      }
+    }
 
     const after = keysOf()
     const rid = document.getElementById('rootSelect').value
-    const stored = (() => { try { return JSON.parse(localStorage.getItem('bd2.order.' + rid) || '[]') } catch { return [] } })()
+    const stored = (() => { try { return JSON.parse(localStorage.getItem('bd2.order.' + rid + '.' + __bd2viewer.mode) || '[]') } catch { return [] } })()
     const rest = before.filter(k => k !== origFirst)
     const restAfter = after.filter(k => k !== origFirst)
     return {
@@ -1280,7 +1301,8 @@ try {
     const target = grid.querySelectorAll('.card')[1].getBoundingClientRect()
     const ev = (type, x, y) => src.dispatchEvent(new PointerEvent(type,
       { clientX: x, clientY: y, bubbles: true, pointerId: 3, isPrimary: true }))
-    const orderBefore = localStorage.getItem('bd2.order.' + document.getElementById('rootSelect').value)
+    const orderKey = 'bd2.order.' + document.getElementById('rootSelect').value + '.' + v.mode
+    const orderBefore = localStorage.getItem(orderKey)
     const keysBefore = keysOf()
     const dateFirstBefore = byDate[0]
     ev('pointerdown', hr.left + hr.width / 2, hr.top + hr.height / 2)
@@ -1292,7 +1314,7 @@ try {
     const afterDrag = {
       sort: v.sort, first: keysOf()[0],
       handleHidden, sortDuringDrag, liftedDuringDrag,
-      orderUntouched: orderBefore === localStorage.getItem('bd2.order.' + document.getElementById('rootSelect').value),
+      orderUntouched: orderBefore === localStorage.getItem(orderKey),
       layoutUntouched: keysBefore.join('|') === keysOf().join('|'),
       orderLen: v.order.length,
     }
@@ -2134,11 +2156,291 @@ try {
     searchTest.emptyCount === 0 && searchTest.emptyNote === true,
     `结果数=${searchTest.emptyCount} 提示=${searchTest.emptyNote}`)
 
+  /* ㉖ 资产类型切换（BD2 / Lost Sword）。
+     要验的是三件事，缺一条这个功能就是坏的：
+       ① 控件本身就是状态 —— 点击后 mode、localStorage、按钮高亮三者一致；
+       ② **mode 真的传到了原生层** —— 假桥按 (rootId, mode) 分桶，切过去之后
+          扫描结果必须只剩 .bytes 那套约定的资产（只改了 UI 没改传参的话，
+          这里会拿到上一套结果，也就是用户说的「切了没反应」）；
+       ③ 切回来能复原，且两种模式各自的缓存互不干扰。
+     注意断言只用单调量：这里等的是「items 全部符合新约定」这个条件，
+     不是等一个固定时长（异步链末端的值需要轮询，固定 sleep 会拿到旧值）。 */
+  const modeTest = await cdp.evaluate(`
+    const wait = ms => new Promise(r => setTimeout(r, ms))
+    const v = window.__bd2viewer
+    const rid = document.getElementById('rootSelect').value
+    const out = {}
+    const btns = Array.from(document.querySelectorAll('#galMode .gm-btn'))
+    const pressedList = () => btns.filter(b => b.getAttribute('aria-pressed') === 'true')
+      .map(b => b.dataset.assetMode)
+    const rels = () => v.state.items.map(x => x.relAtlas || x.id || '')
+    // 只认「属于该约定的资产」：空结果也算通过（result.every 对空数组恒真）——
+    // 这一条守的是「不该出现的约定一个都不许漏出来」，不是「必须有多少条」。
+    const onlyBytes = arr => arr.every(r => r.endsWith('.bytes'))
+
+    out.btnCount = btns.length
+    out.btnLabels = btns.map(b => b.textContent.trim())
+    out.keepMarked = btns.every(b => b.hasAttribute('data-i18n-keep'))
+    out.groupAria = (document.getElementById('galMode') || {}).getAttribute('aria-label') || ''
+    out.pressedBefore = pressedList()
+    out.modeBefore = v.mode
+    out.localBefore = localStorage.getItem('bd2.mode')
+
+    // 先强制重扫一次把基线抹平：前面 ㉑ 的删除只改了假桥的缓存，磁盘一个文件都没动，
+    // 不归一化的话「切回来数量复原」会比出 176 vs 178 这种跟被测代码无关的差值。
+    await v.scan(true)
+    await wait(300)
+    out.countBefore = v.state.items.length
+    out.gridCardsBefore = document.querySelectorAll('#galGrid .card').length
+
+    // ① 切到 Lost Sword，等扫描收敛（结果全部符合 .bytes 约定）
+    const lsBtn = btns.find(b => b.dataset.assetMode === 'lostsword')
+    lsBtn.click()
+    out.modeRightAfterClick = v.mode
+    // toast() 是同步的，点击的那一下就已经把 #toast 写好了（假桥的 __toasts 只收
+    // 原生层自己弹的那几条，前端 toast() 不经过它 —— 所以要看 DOM）
+    out.toastText = (document.getElementById('toast') || {}).textContent || ''
+    // setAssetMode 会先把 S.items 清空再 await scan —— 空数组 .every 恒真，
+    // 所以不能只凭「当前列表符合 .bytes」判断收敛；要等假桥把 rid|lostsword 桶写出来
+    // （那一刻才证明 mode 传到了原生层、扫描也跑完了）。空结果仍然算通过。
+    let ls = []
+    const lsKey = rid + '|lostsword'
+    for (let i = 0; i < 160; i++) {
+      ls = rels()
+      if (v.mode === 'lostsword' &&
+          Object.prototype.hasOwnProperty.call(window.BD2Native.__scanCache, lsKey) &&
+          ls.every(r => r.endsWith('.bytes'))) break
+      await wait(250)
+    }
+    out.modeAfter = v.mode
+    out.pressedAfter = pressedList()
+    out.localAfter = localStorage.getItem('bd2.mode')
+    out.lsCount = ls.length
+    out.lsOnlyBytes = onlyBytes(ls)
+    out.gridCardsLs = document.querySelectorAll('#galGrid .card').length
+    // 原生侧收到的是**带 mode 的两次请求**（假桥按 rootId|mode 分桶）
+    const key = rid + '|lostsword'
+    out.cacheKeys = Object.keys(window.BD2Native.__scanCache).sort()
+    out.cacheLsSeen = Object.prototype.hasOwnProperty.call(window.BD2Native.__scanCache, key)
+    out.cacheBd = (window.BD2Native.__scanCache[rid + '|bd'] || []).length
+    out.cacheLs = (window.BD2Native.__scanCache[key] || []).length
+    // 排序偏好落在 <root> 上（跨模式共用），手动顺序落在 <root>.<mode> 上
+    out.orderKeys = Object.keys(localStorage).filter(function (k) { return k.indexOf('bd2.order.') === 0 })
+    out.sortKey = localStorage.getItem('bd2.sort.' + rid)
+
+    // ② 切回 BD2，等数量复原
+    btns.find(b => b.dataset.assetMode === 'bd').click()
+    for (let i = 0; i < 160; i++) {
+      if (v.mode === 'bd' && v.state.items.length === out.countBefore) break
+      await wait(250)
+    }
+    out.modeBack = v.mode
+    out.pressedBack = pressedList()
+    out.countBack = v.state.items.length
+    out.gridCardsBack = document.querySelectorAll('#galGrid .card').length
+    out.localBack = localStorage.getItem('bd2.mode')
+    return out
+  `, 180000)
+
+  check('㉖ 资产页有 BD2 / Lost Sword / NIKKE 三段切换，组名可翻译、游戏名保留原文',
+    modeTest.btnCount === 3 && modeTest.btnLabels.join('|') === 'BD2|Lost Sword|NIKKE' &&
+    modeTest.keepMarked === true && modeTest.groupAria.length > 0,
+    `按钮=${JSON.stringify(modeTest.btnLabels)} keep=${modeTest.keepMarked} aria="${modeTest.groupAria}"`)
+  check('㉖ 默认停在 BD2，且按钮高亮就是状态本身',
+    modeTest.modeBefore === 'bd' && modeTest.localBefore === null &&
+    modeTest.pressedBefore.join() === 'bd',
+    `mode=${modeTest.modeBefore} localStorage=${modeTest.localBefore} 高亮=${modeTest.pressedBefore.join()}`)
+  check('㉖ 点 Lost Sword：mode / 落盘 / 按钮高亮三者同时变（不留半截状态）',
+    modeTest.modeAfter === 'lostsword' && modeTest.localAfter === 'lostsword' &&
+    modeTest.pressedAfter.join() === 'lostsword',
+    `mode=${modeTest.modeAfter} 落盘=${modeTest.localAfter} 高亮=${modeTest.pressedAfter.join()}`)
+  check('㉖ mode 真的传到了原生层：重扫结果只剩 .bytes 那套约定的资产',
+    modeTest.cacheLsSeen === true && modeTest.lsOnlyBytes === true &&
+    modeTest.cacheBd === modeTest.countBefore,
+    `原生缓存桶=${JSON.stringify(modeTest.cacheKeys)}（bd ${modeTest.cacheBd} 套 / lostsword ${modeTest.cacheLs} 套）；` +
+    `lostsword 结果里没有混入标准导出=${modeTest.lsOnlyBytes}`)
+  check('㉖ 卡片墙跟着重扫结果一起换，并给出提示（不是只改了个高亮）',
+    modeTest.gridCardsLs === modeTest.lsCount && modeTest.lsCount !== modeTest.countBefore &&
+    (modeTest.toastText || '').indexOf('Lost Sword') >= 0,
+    `卡片=${modeTest.gridCardsLs} 结果=${modeTest.lsCount}/${modeTest.countBefore} 提示="${modeTest.toastText}"`)
+  check('㉖ 手动顺序键带 mode 后缀，排序偏好键不带（切游戏不丢习惯）',
+    modeTest.orderKeys.length > 0 &&
+    modeTest.orderKeys.every(k => k.endsWith('.bd') || k.endsWith('.lostsword')) &&
+    !modeTest.orderKeys.some(k => k.endsWith('.lostsword')) && modeTest.sortKey !== null,
+    `顺序键=${JSON.stringify(modeTest.orderKeys)} sort=${modeTest.sortKey}`)
+  check('㉖ 切回 BD2：mode / 落盘 / 高亮 / 数量 / 卡片墙全部复原',
+    modeTest.modeBack === 'bd' && modeTest.localBack === 'bd' &&
+    modeTest.pressedBack.join() === 'bd' && modeTest.countBack === modeTest.countBefore &&
+    modeTest.gridCardsBack === modeTest.gridCardsBefore,
+    `mode=${modeTest.modeBack} 数量=${modeTest.countBack}/${modeTest.countBefore} ` +
+    `卡片=${modeTest.gridCardsBack}/${modeTest.gridCardsBefore}`)
+
+  /* ㉗ PC 专属入口在触屏模式下必须让位。
+     v1.02 给 PC 加了两个只在桌面上有意义的入口：播放页左上角的「返回列表」
+     （.stage-back）和卡片右键菜单里的「复制路径」。手机不该多出第一类控件，
+     同时**原来那个 ⊞ 悬浮回平铺键不能被顶掉** —— 否则手机用户回不去平铺页。
+     可见性条件是「随模式/指针类型变」的，按 R1 写在 CSS 里，所以这里量的是
+     computed style，不是 hidden 属性（两者不等价：author 的 display 会盖掉
+     UA 的 [hidden]{display:none}）。 */
+  const pcEntry = await cdp.evaluate(`
+    const wait = ms => new Promise(r => setTimeout(r, ms))
+    const v = window.__bd2viewer
+    const seen = el => !!el && getComputedStyle(el).display !== 'none'
+    const out = {}
+    const back = document.getElementById('stageBack')
+    const fab = document.getElementById('stageGrid')
+
+    // ① 平铺页：PC 返回键不该出现（它只属于播放页）
+    v.setView('grid')
+    await wait(150)
+    out.backOnGrid = seen(back)
+
+    // ② 播放页：触屏下 PC 返回键隐藏，而 ⊞ 悬浮键要顶上来
+    const item = v.state.items.find(x => x.ok) || v.state.items[0]
+    v.openItem(item)
+    await wait(250)
+    out.view = v.view
+    out.isTouch = document.body.classList.contains('is-touch')
+    out.backOnPlayer = seen(back)
+    out.fabOnPlayer = seen(fab)
+
+    // ③ 收尾回到平铺页，别把后面的用例留在播放页
+    v.setView('grid')
+    await wait(80)
+    out.endView = v.view
+    return out
+  `)
+  check('㉗ 触屏模式下 PC 的「返回列表」不出现（平铺页 / 播放页都不出现）',
+    pcEntry.isTouch === true && pcEntry.backOnGrid === false && pcEntry.backOnPlayer === false,
+    `is-touch=${pcEntry.isTouch} 平铺页=${pcEntry.backOnGrid} 播放页=${pcEntry.backOnPlayer}`)
+  check('㉗ 触屏模式下 ⊞ 悬浮回平铺键照旧出现在播放页（手机的入口没被顶掉）',
+    pcEntry.view === 'player' && pcEntry.fabOnPlayer === true && pcEntry.endView === 'grid',
+    `播放页=${pcEntry.view} ⊞可见=${pcEntry.fabOnPlayer} 收尾=${pcEntry.endView}`)
+
+  /* ㉘ NIKKE 模式（R18）：一个角色一套资产 + 姿势切换。
+     假桥的数据来自桌面服务的真实扫描，里面没有 NIKKE 形状的目录，
+     所以这里把 requestScan 对 mode=nikke 换成**合成数据**（c022 三件套 + 一套普通
+     BD2 名单件），验证的是前端这半边：
+       ① 三段按钮里 NIKKE 可点，mode / 落盘 / 高亮三者一致，且 mode 传到原生层（缓存键 rid|nikke）；
+       ② 归组 + 变体隐藏：c022 三件套在卡片墙收成 1 张卡；npc000001 仍可见
+          （产品不再按骨架世代隔离；姿势条不对无归组条目出现）；
+       ③ 成员表挂在主条目上（normal → aim → cover），姿势条只对分组条目出现；
+       ④ 切回 BD2 全部复原。
+     「姿势切换真的能换骨架并落到 aim_idle / cover_idle」依赖真骨架渲染，
+     由 e2e 在真实素材上覆盖（那边的 c022 是真的）。 */
+  const nikkeTest = await cdp.evaluate(`
+    const wait = ms => new Promise(r => setTimeout(r, ms))
+    const v = window.__bd2viewer
+    const rid = document.getElementById('rootSelect').value
+    const out = {}
+    const mk = (rel, base, folder, spineMinor) => ({
+      relAtlas: rel, base: base, folder: folder, ok: true, problems: [],
+      relSkeleton: rel.replace('.atlas', '.skel'), skeletonKind: 'skel',
+      spineMinor: spineMinor,
+      images: [rel.replace('.atlas', '.png')], relImages: [rel.replace('.atlas', '.png')],
+      relThumb: null,
+    })
+    const synth = [
+      mk('c022/c022_00.atlas', 'c022_00', 'c022', '4.0'),
+      mk('c022/aim/c022_aim_00.atlas', 'c022_aim_00', 'c022/aim', '4.0'),
+      mk('c022/cover/c022_cover_00.atlas', 'c022_cover_00', 'c022/cover', '4.0'),
+      mk('npc/npc000001.atlas', 'npc000001', 'npc', '4.1'),
+    ]
+    const origReq = window.BD2Native.requestScan.bind(window.BD2Native)
+    window.BD2Native.requestScan = function (rootId, force, mode) {
+      if (String(mode) === 'nikke') {
+        window.BD2Native.__scanCache[window.BD2Native.__cacheKey(rootId, mode)] = synth
+        window.__native.onScanMeta({ rootId: rootId, root: { path: 'X:\\\\nikke', exists: true },
+          mode: mode, itemCount: synth.length, playableCount: synth.length, scanMs: 1 })
+        return
+      }
+      return origReq(rootId, force, mode)
+    }
+
+    const btns = Array.from(document.querySelectorAll('#galMode .gm-btn'))
+    const pressed = () => btns.filter(b => b.getAttribute('aria-pressed') === 'true').map(b => b.dataset.assetMode)
+    const nkBtn = btns.find(b => b.dataset.assetMode === 'nikke')
+    out.hasNikkeBtn = !!nkBtn
+    nkBtn.click()
+    out.modeAfterClick = v.mode
+    out.localAfter = localStorage.getItem('bd2.mode')
+    out.pressedAfter = pressed()
+    // 等扫描收敛：可见 2 个 key（c022 归组 + npc）；变体归组吃掉 aim/cover，不再按世代挡 npc
+    let keys = []
+    for (let i = 0; i < 160; i++) {
+      keys = v.allKeys
+      if (v.mode === 'nikke' && keys.length === 2) break
+      await wait(250)
+    }
+    out.keys = keys
+    out.cacheNikke = (window.BD2Native.__scanCache[rid + '|nikke'] || []).length
+    const main = v.state.items.find(x => x.base === 'c022_00')
+    out.members = main && main.members ? main.members.map(m => m.pose + ':' + m.item.base) : null
+    out.groupId = main ? (main.groupId || null) : null
+    out.gridCards = document.querySelectorAll('#galGrid .card').length
+    out.toast = (document.getElementById('toast') || {}).textContent || ''
+
+    // 姿势条：把分组条目设为当前 → 渲染姿势条（渲染器数据是合成的，真骨架加载由 e2e 管）
+    v.state.current = main
+    v.renderPoseBar()
+    out.poseGroupHidden = document.getElementById('poseGroup').hidden
+    out.poseBtns = [...document.querySelectorAll('#poseBar .gm-btn')]
+      .map(b => b.dataset.pose + '/' + b.textContent + '/' + b.getAttribute('aria-pressed'))
+
+    // 纯 BD2 名单件：仍在原始 S.items 里，但不在可见列表；姿势条也不该出现
+    const npc = v.state.items.find(x => x.base === 'npc000001')
+    out.npcStillRaw = !!npc
+    out.npcVisible = keys.some(k => String(k).indexOf('npc000001') >= 0)
+    v.state.current = npc
+    v.renderPoseBar()
+    out.poseHiddenForPlain = document.getElementById('poseGroup').hidden
+
+    // 收尾：切回 BD2，等数量复原。
+    // setAssetMode 会先清空 S.items 再 await scan(true)；不能拿「清空后的 0」当收敛条件。
+    btns.find(b => b.dataset.assetMode === 'bd').click()
+    for (let i = 0; i < 200; i++) {
+      if (v.mode === 'bd' && v.state.items.length > 0) break
+      await wait(250)
+    }
+    out.modeBack = v.mode
+    out.pressedBack = pressed()
+    out.countBack = v.state.items.length
+    out.orderKeys = Object.keys(localStorage).filter(function (k) { return k.indexOf('bd2.order.') === 0 })
+    return out
+  `, 180000)
+
+  check('㉘ 模式开关有 NIKKE 一档，点击后 mode / 落盘 / 高亮三者一致',
+    nikkeTest.hasNikkeBtn === true && nikkeTest.modeAfterClick === 'nikke' &&
+    nikkeTest.localAfter === 'nikke' && nikkeTest.pressedAfter.join() === 'nikke',
+    `mode=${nikkeTest.modeAfterClick} 落盘=${nikkeTest.localAfter} 高亮=${nikkeTest.pressedAfter.join()}`)
+  check('㉘ mode 传到原生层：缓存键按 rid|nikke 分桶（4 个原始条目）',
+    nikkeTest.cacheNikke === 4,
+    `rid|nikke 桶=${nikkeTest.cacheNikke} 条`)
+  check('㉘ 归组+变体隐藏：c022 收成 1 卡；npc 仍可见（不再按世代挡）→ 可见 2 张',
+    nikkeTest.keys.length === 2 && nikkeTest.gridCards === 2 &&
+    nikkeTest.keys.join(',').indexOf('c022_aim') < 0 && nikkeTest.keys.join(',').indexOf('c022_cover') < 0 &&
+    nikkeTest.npcStillRaw === true && nikkeTest.npcVisible === true,
+    `可见=${JSON.stringify(nikkeTest.keys)} 卡片=${nikkeTest.gridCards} npcRaw=${nikkeTest.npcStillRaw} npcVis=${nikkeTest.npcVisible}`)
+  check('㉘ 成员表挂在主条目上（本体 → aim → cover），组 id 正确',
+    nikkeTest.members && nikkeTest.members.join(',') === 'normal:c022_00,aim:c022_aim_00,cover:c022_cover_00' &&
+    nikkeTest.groupId === 'c022',
+    `成员=${JSON.stringify(nikkeTest.members)} 组=${nikkeTest.groupId}`)
+  check('㉘ 姿势条只对分组条目出现（普通/瞄准/掩体，普通高亮）；纯 BD2 原始项也无姿势条',
+    nikkeTest.poseGroupHidden === false &&
+    nikkeTest.poseBtns.join(',') === 'normal/普通/true,aim/瞄准/false,cover/掩体/false' &&
+    nikkeTest.poseHiddenForPlain === true,
+    `分组=${JSON.stringify(nikkeTest.poseBtns)} 普通资产隐藏=${nikkeTest.poseHiddenForPlain}`)
+  check('㉘ 切回 BD2 复原（数量不变，高亮回 bd）',
+    nikkeTest.modeBack === 'bd' && nikkeTest.pressedBack.join() === 'bd' && nikkeTest.countBack > 0,
+    `mode=${nikkeTest.modeBack} 高亮=${nikkeTest.pressedBack.join()} 数量=${nikkeTest.countBack}`)
+
 } catch (e) {
   check('测试执行', false, e.message)
 } finally {
   console.log(results.join('\n'))
   console.log(`\n${failed === 0 ? '✅ 全部通过' : '❌ 失败 ' + failed}  （共 ${results.length} 项）`)
   await cdp.close()
+  // ⑰(2) 传入的 profile 归本套件管（cdp.close 不再替我们删）—— 收尾自己清掉
+  try { fs.rmSync(cdp.profile, { recursive: true, force: true }) } catch { /* ignore */ }
   process.exit(failed ? 1 : 0)
 }

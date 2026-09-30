@@ -22,11 +22,15 @@
 node --version      # 需要 >= 18；跑测试需要 >= 22
 ```
 
-**不需要 `npm install`。** 桌面服务只用 Node 内置模块，两个前端库已作为发行版文件放在
-`bd2-local-viewer/public/lib/`。
+**不需要 `npm install`。** 桌面服务只用 Node 内置模块，前端库已作为发行版文件放在
+`bd2-local-viewer/public/lib/`（Spine 运行时是**两套**：`spine-player.js` 4.1.55 +
+`spine-player-4.0.js` 4.0.31，见 [`TECHNICAL.md` §4.4](TECHNICAL.md#44-打了补丁的第三方库)）。
 
-`package.json` 里声明的 `dependencies` 是可选的 —— 只有你想用 npm 的版本替换掉
-`public/lib/` 里的文件时才需要装（`server.mjs` 会优先用 `public/lib/`，找不到才回落到 `node_modules`）。
+`package.json` 里现在只剩 `jszip` 一个可选项 —— 只有你想用 npm 的版本替换掉
+`public/lib/` 里的 jszip 时才需要装。**Spine 运行时不在 `dependencies` 里**：
+它是随仓库分发的产物，而且 npm 一个包名只能装一个版本，装不出「两套并存」，
+所以两套都由 `public/lib/` 提供（`server.mjs` 会优先用 `public/lib/`，
+找不到才回落到 `node_modules`）。
 
 ### 2.2 JDK + Android SDK
 

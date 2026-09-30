@@ -678,6 +678,22 @@ body.sort-locked .card-drag { display: none; }
 /* 长按菜单里的资产名 */
 .menu-title { font-size: 14px; font-weight: 600; word-break: break-all; }
 
+/* 卡片菜单里的绝对路径：等宽、允许任意位置换行（Windows 路径又长又没有空格），
+   并且**必须可选中** —— 复制失败时用户还能手动划选。 */
+.menu-path {
+  margin: 2px 0 4px;
+  padding: 7px 9px;
+  border-radius: 7px;
+  background: var(--g900);
+  border: 1px solid var(--g700);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--g300);
+  word-break: break-all;
+  user-select: text;
+}
+
 /* 确认弹窗：警告文案 + 待删清单 */
 .danger-note {
   margin: 0;
@@ -1014,6 +1030,45 @@ body.view-grid .mtabs { display: none !important; }
 }
 .gs-dir:active { transform: scale(.94); }
 
+/* 资产类型切换（BD2 / Lost Sword）。
+   不沿用上面 .gal-sort 的滑块指示器：那两个按钮文案长度差一倍（BD2 vs Lost Sword），
+   滑块要等宽才好平移，硬凑会把 BD2 那格撑得很空。改成「选中的那颗按钮自己上底色」，
+   宽度随文案自适应。视觉语言（深底、圆角、indigo 高亮）与排序控件保持一致。 */
+.gal-mode {
+  display: flex;
+  flex: none;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 9px;
+  background: var(--g850);
+  border: 1px solid rgba(255, 255, 255, .08);
+}
+.gm-btn {
+  appearance: none;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--g400);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  transition: background var(--dur-quick) var(--ease-out),
+              color var(--dur-quick) var(--ease-out);
+}
+.gm-btn[aria-pressed="true"] { background: var(--indigo); color: #fff; font-weight: 600; }
+@media (hover: hover) and (pointer: fine) {
+  .gm-btn:hover { color: var(--text); }
+  .gm-btn[aria-pressed="true"]:hover { color: #fff; }
+}
+.gm-btn:active { transform: scale(.96); }
+
 .gal-grid {
   flex: 1;
   min-width: 0;
@@ -1215,10 +1270,34 @@ body.is-touch .card-drag { opacity: .4; }
 body.is-touch .gal-sort { --gs-w: 54px; --gs-pad: 4px; }
 body.is-touch .gs-btn { padding: 8px 0; font-size: 13px; }
 body.is-touch .gs-dir { width: 34px; height: 34px; font-size: 14px; }
+/* 资产类型控件同步放大（可点目标 ≥34px） */
+body.is-touch .gm-btn { padding: 8px 11px; min-height: 34px; font-size: 13px; }
 
 /* 播放页左上角「回到平铺」图标 */
 body.is-touch:not(.view-grid) .grid-fab { display: flex; }
 .grid-fab { left: 10px; right: auto; }
+
+/* PC 播放页左上角的「返回列表」。
+   和上面那个 ⊞ 悬浮键是同一件事的两套入口，按指针类型二选一 ——
+   .kb-only 在触屏下 display:none（见文件上方的 .kb-only 规则），
+   所以手机上不会多出一个按钮。只在播放页出现、全屏时让位给画面。 */
+.stage-back {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 8;
+  padding: 7px 12px;
+  font-size: 13px;
+}
+body.view-grid .stage-back,
+body.is-touch .stage-back,
+body.is-immersive .stage-back { display: none; }
+@media (hover: hover) and (pointer: fine) {
+  .stage-back:hover { background: var(--g600); border-color: rgba(255, 255, 255, .18); }
+}
 
 /* 系统开了「减少动态效果」：去掉位移/缩放，只保留帮助理解的透明度与颜色变化。
    拖动排序本身照常工作，只是落位的飞入动画变成瞬移。 */
@@ -1228,7 +1307,8 @@ body.is-touch:not(.view-grid) .grid-fab { display: flex; }
   .card-drag,
   .card-fs,
   .gs-btn,
-  .gs-dir {
+  .gs-dir,
+  .gm-btn {
     transition-property: background-color, border-color, color, opacity !important;
   }
   .gs-pill { transition: none; }

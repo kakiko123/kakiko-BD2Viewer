@@ -64,7 +64,13 @@ def find_aapt2():
     found = shutil.which("aapt2")
     return found or ""
 
-FILES = ["app.bundle.html", "app.js", "styles.css", "index.html"]
+FILES = [
+    "app.bundle.html", "app.js", "styles.css", "index.html",
+    # lib/ 也要一起比：APK 里 bundle 是主通路，lib/ 是「bundle 读不出来」时的兜底通路
+    # （MainActivity 会退回 index.html，而 index.html 是外链 /lib/* 的）。
+    # 两套 Spine 运行时缺一不可 —— 少了 4.0 那份，NIKKE 资产在兜底通路上就渲染不了。
+    "lib/spine-player.js", "lib/spine-player-4.0.js", "lib/spine-player.css", "lib/jszip.min.js",
+]
 
 # android.content.pm.ActivityInfo.SCREEN_ORIENTATION_*
 ORIENT = {

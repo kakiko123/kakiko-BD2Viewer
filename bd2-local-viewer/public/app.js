@@ -11,7 +11,34 @@
  * 完整声明见仓库根目录 THIRD-PARTY-NOTICES.md。
  * ========================================================================== */
 
-const spine = window.spine
+/* ------------------------------------------------------ 两套 Spine 运行时
+
+   index.html 同时引入两套运行时（见那里的注释）：
+     · window.spine    —— spine-player 4.1.55，BD2 / Lost Sword 的骨架是 4.1.x 导出
+     · window.spine40  —— spine-player 4.0.31，NIKKE 的骨架是 4.0.x 导出
+
+   为什么要两套：Spine 的骨架与运行时只在 **major.minor 相同**时互通。4.1 运行时读 4.0
+   骨架不会报「版本不符」，而是照 4.1 的二进制布局去读，把字节读成 4.1 才有的 sequence
+   名，最后报一句看起来像图集缺图的假故障（实测：「Region not found in atlas: add_l_eye23
+   (sequence: add_l_eye)」，而图集里明明只有 add_l_eye）。
+
+   同一个 minor 内不受影响：4.0.31 能读 4.0.47 导出的骨架，4.1.55 能读 4.1.11 的。
+   所以只需要「按 minor 挑一套」，不需要精确到补丁号。
+
+   挑出来的一套会记在 S.spine 上，**整个播放会话（含自建相机、Vector2）都从它取类**。
+   绝不在载入过程中改全局 —— 缩略图队列与主播放器可能同时在跑，改全局会让两个会话
+   互相踩。 */
+const SPINE_DEFAULT = window.spine      // 4.1.55
+const SPINE40 = window.spine40 || null  // 4.0.31；老的无 4.0 产物里会是 null
+const SPINE_BY_MINOR = { '4.0': SPINE40 || SPINE_DEFAULT, '4.1': SPINE_DEFAULT }
+const spine = SPINE_DEFAULT             // 无会话时的默认运行时
+
+/** 骨架 minor 版本（'4.0' / '4.1'）→ 运行时。认不出来时用默认（4.1）。 */
+function spineRuntimeForVer(minor) { return SPINE_BY_MINOR[minor] || SPINE_DEFAULT }
+
+/** 当前播放会话的运行时。载入资产时定在 S.spine 上，没有会话时退回默认。 */
+function activeSpine() { return S.spine || SPINE_DEFAULT }
+
 const JSZip = window.JSZip
 
 const $ = id => document.getElementById(id)
@@ -22,12 +49,17 @@ const clamp = (v, a, b) => Math.min(Math.max(v, a), b)
 const S = {
   config: null,
   rootId: null,
+  // 当前根目录的**绝对路径**（扫描响应里带回来的）。资产条目只存相对路径，
+  // 想拼出「这个资产在硬盘哪一层」只能靠它。数据源不暴露路径时是空串。
+  rootPath: '',
   items: [],            // 服务端扫描到的资产
   customItems: [],      // 手动上传的资产
   current: null,
   player: null,
   camera: null,
   bounds: null,
+  // 当前播放会话使用的 Spine 运行时（4.1 或 4.0，随资产骨架版本挑）。见 activeSpine()。
+  spine: null,
   defaultPos: { x: 0, y: 0 },
   defaultZoom: 1,
   animations: [],
@@ -49,6 +81,9 @@ const S = {
   maxSize: 3000,
   fps: 60,
   busy: false,
+  // 资产类型（'bd' | 'lostsword'）——决定扫描用哪套文件名约定，全局一个。
+  // 真正的初值在 boot() 里从 localStorage 读（见 ASSET_MODES / loadMode）。
+  mode: 'bd',
   volDir: (function () {
     try { return localStorage.getItem('bd2.volDir') === 'prev' ? 'prev' : 'next' } catch { return 'next' }
   })(),   // 音量上键 = 下一个（next）还是上一个（prev）
@@ -165,8 +200,8 @@ const I18N_EN = {
   '删除所选': 'Delete Selected',
   '完成': 'Done',
   '退出选择': 'Exit selection',
-  '拖动卡片调整播放顺序（按住左上角 ⠿ 立刻拖）· 右键卡片可删除':
-    'Drag cards to reorder playback (hold ⠿ at top-left to drag immediately) · right-click a card to delete',
+  '拖动卡片调整播放顺序（按住左上角 ⠿ 立刻拖）· 右键卡片可复制路径 / 删除':
+    'Drag cards to reorder playback (hold ⠿ at top-left to drag immediately) · right-click a card to copy its path or delete it',
   '长按卡片拖动 = 调整播放顺序 · 按住不动弹删除菜单':
     'Long-press and drag a card = reorder · hold still = delete menu',
   '按{mode}（{dir}）· 切回「手动」才能拖动排序': 'By {mode} ({dir}) · switch back to Manual to drag-reorder',
@@ -275,6 +310,20 @@ const I18N_EN = {
   '资产操作': 'Asset Actions',
   '删除这个资产': 'Delete this asset',
   '批量选择…': 'Multi-select…',
+  '复制文件夹路径': 'Copy folder path',
+  '复制图集文件路径': 'Copy atlas file path',
+  '路径已复制': 'Path copied',
+  '复制失败，可手动选中路径复制': 'Copy failed — select the path below and copy it manually',
+  '这个数据源没有可复制的本地路径': 'This source has no local path to copy',
+  /* ---- 播放页返回（PC） ---- */
+  '回到项目选择页': 'Back to items',
+  '返回列表': 'Back',
+  /* ---- NIKKE 姿势（R18：同一角色的 aim / cover 变体） ---- */
+  '姿势 (Pose)': 'Pose',
+  '普通': 'Normal',
+  '瞄准': 'Aim',
+  '掩体': 'Cover',
+  '+{n} 个姿势文件': '+{n} pose file(s)',
   '确认删除': 'Confirm Delete',
   '删除这个资产？': 'Delete this asset?',
   '正在删除…': 'Deleting…',
@@ -328,8 +377,8 @@ const I18N_EN = {
   '骨架为空：请确认 .json 与 .atlas 是否匹配': 'Empty skeleton: check that the .json matches the .atlas',
   '这个骨架里没有任何动画': 'This skeleton has no animations',
   '没有可导出的动画': 'No animation to export',
-  '缺少 .atlas 文件': 'Missing .atlas file',
-  '缺少 .json 或 .skel 骨架文件': 'Missing .json or .skel skeleton file',
+  '缺少 .atlas / .atlas.bytes 图集文件': 'Missing .atlas / .atlas.bytes atlas file',
+  '缺少骨架文件（.json / .skel / .bytes）': 'Missing skeleton file (.json / .skel / .bytes)',
   '缺少贴图 .png': 'Missing texture .png',
   'atlas 引用了但没提供这些图：': 'atlas references these missing images: ',
   '缩略图 {done}/{total}': 'Thumbnails {done}/{total}',
@@ -413,6 +462,8 @@ const I18N_EN = {
   '输入要添加的本地目录绝对路径（例如 E:\\xxx\\mods）：':
     'Enter the absolute path of the local folder to add (e.g. E:\\xxx\\mods):',
   '上次运行崩溃了：\n': 'The previous run crashed:\n',
+  '资产类型': 'Asset type',
+  '资产类型：{name}': 'Asset type: {name}',
 }
 
 /** 当前语言：'zh' | 'en'。中文是源语言，也是任何异常情况下的兜底。 */
@@ -441,6 +492,71 @@ function saveLang(v) {
   LANG = v === 'en' ? 'en' : 'zh'
   try { localStorage.setItem(LANG_KEY, LANG) } catch { /* 存不下就算了，本次会话内仍生效 */ }
   applyLang()
+}
+
+/* ------------------------------------------------- 资产类型（全局单一切换）
+
+   两个游戏给同一批 Spine 文件起的扩展名不一样，认「一套资产」的规则也就不同：
+     · bd        —— 标准 Spine 导出：xxx.atlas + xxx.json / xxx.skel + 贴图
+     · lostsword —— Unity TextAsset 导出：xxx.atlas.bytes + xxx.skel.bytes
+                    （JSON 骨架是裸 xxx.bytes），目录里常带一张预算好的 thumb.png
+
+   这个值参与两处键，两处都不能省：
+     · 扫描缓存键（服务端 cacheKey、安卓 MODE_*）—— 省了就会拿到上一套规则的结果，
+       表现为「切了没反应」；
+     · 每个目录的手动播放顺序 bd2.order.<root>.<mode> —— 两套资产的文件名完全不同，
+       共用一份顺序只会得到一份对不上的列表。
+   排序偏好（bd2.sort.<root>）跨模式共用：那是用户习惯，不是资产数据。
+
+   全局单一切换（不分目录）：用户同一时间只在看一个游戏。
+   id 必须与 server.mjs 的 FORMATS 键、ScanEngine 的 MODE_* 一致。 */
+
+const MODE_KEY = 'bd2.mode'
+const ASSET_MODES = ['bd', 'lostsword', 'nikke']
+/** 专名：中英界面都写原文，不进翻译表（R11.1） */
+const MODE_LABEL = { bd: 'BD2', lostsword: 'Lost Sword', nikke: 'NIKKE' }
+
+function loadMode() {
+  try {
+    const v = localStorage.getItem(MODE_KEY)
+    if (ASSET_MODES.includes(v)) return v
+  } catch { /* 隐私模式下读不到 → 用默认 */ }
+  return 'bd'
+}
+
+/** 把 S.mode 同步到分段控件（唯一的状态来源是 S.mode，控件只是它的显示） */
+function syncModeUI() {
+  const box = $('galMode')
+  if (!box) return
+  for (const b of box.querySelectorAll('.gm-btn')) {
+    b.setAttribute('aria-pressed', String(b.dataset.assetMode === S.mode))
+  }
+}
+
+/**
+ * 切资产类型：落盘 → 刷控件 → 按新规则重扫。
+ * 重扫是必须的：S.items 是上一个模式扫出来的结论，留着就会摆出一堆
+ * 不属于当前类型的卡片（点开必然报错）。
+ */
+async function setAssetMode(mode) {
+  if (!ASSET_MODES.includes(mode) || mode === S.mode) return
+  S.mode = mode
+  try { localStorage.setItem(MODE_KEY, mode) } catch { /* 存不下就算了 */ }
+  syncModeUI()
+  // 上一个模式选中的那套资产已经不在新列表里了，先放掉 ——
+  // 否则播放页会继续挂着一套不属于当前类型的画面（而且它的文件按新规则根本不成立）。
+  if (S.current) { disposePlayer(); S.current = null }
+  S.currentPose = 'normal'
+  // 立刻清空可见列表并刷一帧：S.items 还是上一 mode 扫出来的结论，
+  // 若等 await scan 回来才清，切换瞬间会出现「NIKKE 档亮着、格子却仍是 BD2 卡」
+  // （大目录扫描要几百毫秒到数秒，截图像素级证据就是这么来的）。
+  S.items = []
+  nikkeView = null
+  refreshLists()
+  toast(t('资产类型：{name}', { name: MODE_LABEL[mode] }))
+  // 强制重扫：① Android 自动根会按 mode 切到 BD2Viewer/{bd2,nikke,lostsword}
+  // ② force 时原生会清掉该 rootId 下所有 mode 桶（见 ScanEngine.scan）
+  await scan(true)
 }
 
 /**
@@ -580,23 +696,35 @@ function safeName(s) {
  * 这一点是照搬原站 SpineViewer.vue 的做法。
  */
 
-let glPatchState = null
-function ensureGLTexturePatch() {
-  if (glPatchState) return glPatchState
-  const proto = spine.GLTexture.prototype
+let glPatchState = null           // 4.1 那份（保持原语义，别的地方可能读它）
+const glPatchStates = new Map()   // 运行时对象 → 该套的 {proto,original,patched}
+
+function makeGLTexturePatch(rt) {
+  const proto = rt.GLTexture.prototype
   const original = proto.update
   const patched = function (useMipMaps) {
     const gl = this.context.gl
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true)
     original.call(this, useMipMaps)
   }
-  glPatchState = { proto, original, patched }
+  return { proto, original, patched }
+}
+
+function ensureGLTexturePatch() {
+  if (!glPatchState) glPatchState = makeGLTexturePatch(SPINE_DEFAULT)
   return glPatchState
 }
 
 function applyGLTexturePatch(enabled) {
-  const { proto, original, patched } = ensureGLTexturePatch()
-  proto.update = enabled ? patched : original
+  // 两套运行时各有一份 GLTexture，只打一套的话切到另一代的资产就失效了
+  // （NIKKE 用 4.0，BD2 用 4.1，同一目录里可能混着）。两套的 patched/original
+  // 分开记，反复开关也不会把 patch 叠成两层。
+  for (const rt of new Set([SPINE_DEFAULT, SPINE40].filter(Boolean))) {
+    let st = glPatchStates.get(rt)
+    if (!st) { st = makeGLTexturePatch(rt); glPatchStates.set(rt, st) }
+    st.proto.update = enabled ? st.patched : st.original
+  }
+  glPatchState = glPatchStates.get(SPINE_DEFAULT)
 }
 
 /* ------------------------------------------------- 数据源：浏览器 / 原生 APK
@@ -621,10 +749,10 @@ function nativeAsk(kind, call, timeoutMs = 120000) {
   })
 }
 window.__native = {
-  onRoots(payload) { const t = nativeWaiters['roots:timer']; if (t) clearTimeout(t); nativeWaiters.roots?.(payload); nativeWaiters.roots = null },
+  onRoots(payload) { const tm = nativeWaiters['roots:timer']; if (tm) clearTimeout(tm); nativeWaiters.roots?.(payload); nativeWaiters.roots = null },
   // 原生只回元信息（几十字节），items 由 scanPage 分页同步取。
   // 一次性推几 MB 的 JSON 给 evaluateJavascript 会把进程压崩。
-  onScanMeta(payload) { const t = nativeWaiters['scan:timer']; if (t) clearTimeout(t); nativeWaiters.scan?.(payload); nativeWaiters.scan = null },
+  onScanMeta(payload) { const tm = nativeWaiters['scan:timer']; if (tm) clearTimeout(tm); nativeWaiters.scan?.(payload); nativeWaiters.scan = null },
   onError(msg) { showError(String(msg)) },
   onCrash(msg) { showError(t('上次运行崩溃了：\n') + String(msg).split('\n').slice(0, 6).join('\n')) },
   // 从系统权限设置页回到 App：权限可能刚开，重画目录提示并按需重扫
@@ -662,6 +790,10 @@ async function boot() {
   applyLang()
   $('setLang').value = LANG
   setupLangPicker()
+  // 资产类型同样要在**首次扫描之前**定下来：scan() 会带着它去要数据，
+  // 晚了第一次就会用 bd 的规则扫一遍 lostsword 的目录（结果是 0 个资产）。
+  S.mode = loadMode()
+  syncModeUI()
   if (NATIVE) applyTouchMode()
   bindUI()
   // 首屏必须在**这里**同步定下来 —— 不能等 scan() 收尾。
@@ -956,12 +1088,13 @@ function switchAnimation(dir) {
  *  原先叫 showFsToast、还包了一层同义的 notice()，名字把作用域说小了 ——
  *  它其实在全屏和平铺页都在用，所以收敛成这一个名字。 */
 function toast(text) {
-  const t = $('toast')
-  if (!t) return
-  t.textContent = text
-  t.hidden = false
+  // 局部变量别叫 t：全局 t() 是翻译函数，同作用域既声明又调用会炸 TDZ（已炸过两次）
+  const el = $('toast')
+  if (!el) return
+  el.textContent = text
+  el.hidden = false
   clearTimeout(toast._t)
-  toast._t = setTimeout(() => { t.hidden = true }, 1400)
+  toast._t = setTimeout(() => { el.hidden = true }, 1400)
 }
 
 function updateFsLabels() {
@@ -1097,8 +1230,8 @@ function animateCamera(to, anchor) {
   const dur = 200
   cancelAnimationFrame(zoomAnim)
   const step = () => {
-    const t = clamp((performance.now() - t0) / dur, 0, 1)
-    const e = 1 - Math.pow(1 - t, 3)          // easeOutCubic
+    const k = clamp((performance.now() - t0) / dur, 0, 1)
+    const e = 1 - Math.pow(1 - k, 3)          // easeOutCubic
     // 夹取范围按「起点↔目标」取，不用全局记录值：视口刚变过时记录值可能偏大，
     // 会把合法的放大目标裁掉。
     const zmin = Math.min(from.z, to.z) * 0.5
@@ -1108,7 +1241,7 @@ function animateCamera(to, anchor) {
     cam.position.y = from.y + (to.y - from.y) * e
     cam.update()
     p.drawFrame(false)
-    if (t < 1) zoomAnim = requestAnimationFrame(step)
+    if (k < 1) zoomAnim = requestAnimationFrame(step)
     else debugDump()
   }
   zoomAnim = requestAnimationFrame(step)
@@ -1318,7 +1451,7 @@ function renderStorageBar() {
 function storageHint(st) {
   if (st.defaultIsPublic) {
     return {
-      tip: t('用手机自带的「文件管理」把 .atlas + .json/.skel + .png 拷进这个目录（每套一个子文件夹），') +
+      tip: t('按当前模式读 BD2Viewer 下对应子目录（bd2 / nikke / lostsword）。用「文件管理」把 .atlas + .json/.skel + .png 拷进这个目录（每套一个子文件夹），') +
         t('回来点顶栏「重新扫描」就能看到；懒得找目录就用「导入文件」直接选文件。'),
       actions: [],
     }
@@ -1380,38 +1513,58 @@ function renderStorageSettings(st) {
   if (tip) tip.textContent = hint.tip
 }
 
+/* 扫描代次：只有**最后一次**发出的扫描允许把结果写进状态。
+   两次扫描重叠时（快速连点两个根目录、一边刷新一边切资产类型）网络回来的顺序不保证，
+   「谁后回来谁生效」会让 S.rootPath 与 S.rootId 对不上 —— 卡片菜单里的「复制路径」
+   会拿旧根的路径去拼新资产的相对路径，拼出一条根本不存在的路径（R15 的反面）。
+   过期的结果整包丢弃：不写 items、不写 rootPath、不更新计数、连错误提示都不弹，
+   也不去关 spinner（那是新一轮在用的）。 */
+let scanSeq = 0
+
 async function scan(force) {
+  const seq = ++scanSeq
   if (!S.rootId) {
     S.items = []
     refreshLists()
     return
   }
   setBusy(true, t('扫描中…'))
+  // 先清掉：换了目录 / 扫描失败时不能留着上一个目录的绝对路径，
+  // 否则菜单里会拿旧前缀去拼新资产的相对路径，拼出一条不存在的路径。
+  S.rootPath = ''
   try {
     let data
     if (NATIVE) {
-      const meta = await nativeAsk('scan', () => window.BD2Native.requestScan(S.rootId, !!force), 300000)
+      // mode 三个调用都要带上：原生侧按 (rootId, mode) 分两份缓存，
+      // 只给 scan 不带 scanPage/scanCount，取回来的会是另一套资产。
+      const meta = await nativeAsk('scan', () => window.BD2Native.requestScan(S.rootId, !!force, S.mode), 300000)
       const items = []
       const PAGE = 40
       for (let from = 0; from < (meta.itemCount || 0); from += PAGE) {
-        const chunk = JSON.parse(window.BD2Native.scanPage(meta.rootId, from, PAGE) || '[]')
+        const chunk = JSON.parse(window.BD2Native.scanPage(meta.rootId, from, PAGE, S.mode) || '[]')
         for (let i = 0; i < chunk.length; i++) items.push(chunk[i])
       }
       data = Object.assign({}, meta, { items })
       if (meta.truncated) showError(t('目录太大，扫描已截断：只覆盖了前 4000 个子目录。建议直接选到放 Spine 文件的那一层。'))
     } else {
-      const res = await fetch(`/api/scan?root=${encodeURIComponent(S.rootId)}${force ? '&refresh=1' : ''}`)
+      const res = await fetch(`/api/scan?root=${encodeURIComponent(S.rootId)}` +
+        `&mode=${encodeURIComponent(S.mode)}${force ? '&refresh=1' : ''}`)
       data = await res.json()
       if (!res.ok) throw new Error(data.error || t('扫描失败'))
     }
+    // 过期的一轮：请求已经被后来的一次取代，整包丢弃（下面 catch/finally 同样只看代次）
+    if (seq !== scanSeq) return
     S.items = data.items || []
+    // 绝对路径也一起收下：卡片菜单里的「复制路径」要靠它把相对路径拼成整条。
+    // 两个数据源（Node 服务 / 原生壳）的扫描响应里都带 root.path，没有就是空串。
+    S.rootPath = (data.root && data.root.path) || ''
     if (!data.exists) showError(t('目录不存在：{path}', { path: data.root.path }))
     $('assetCount').textContent = t('{ok}/{total} 可播放', { ok: data.playableCount, total: data.itemCount }) +
       (data.scanMs ? ` · ${data.scanMs}ms` : '')
   } catch (err) {
-    showError(t('扫描失败：') + err.message)
+    if (seq === scanSeq) showError(t('扫描失败：') + err.message)
   } finally {
-    setBusy(false)
+    if (seq === scanSeq) setBusy(false)
   }
   // 平铺页要用：先把 IndexedDB 里上次生成的缩略图读进内存，
   // 这样卡片一渲染就直接有图，不用每次启动都重新渲一遍。
@@ -1434,19 +1587,97 @@ async function scan(force) {
   }
 }
 
+/**
+ * 保留导出钩子（测试 / 调试用）。产品不再按骨架世代做跨模式隔离，
+ * 可见口径只靠「当前扫到的条目」+ NIKKE 姿势归组（R18）。
+ */
+function matchesAssetMode(item) {
+  return !!item
+}
+
 function allItems() {
-  return [...S.customItems, ...S.items]
+  const base = [...S.customItems, ...S.items]
+  if (S.mode !== 'nikke') return base
+  const v = nikkeViewFor()
+  // NIKKE 档：藏姿势变体（成员挂到主条目上，见 R18）
+  return base.filter(i => !v.variantKeys.has(itemKey(i)))
+}
+
+/* ---------------- NIKKE 模式：一个角色一套资产（R18） ----------------
+   `<id>_00` 是本体；`<id>_aim_00` / `<id>_cover_00` 是**同一个角色**的
+   「瞄准 / 掩体」姿势 —— 与参考站（Nikke-db）的组织方式一致：一个角色一份，
+   播放页里切姿势，而不是把三套骨架摆成三张卡。
+
+   分组 + 变体隐藏都只发生在「可见口径」这一层：
+   · `S.items` 始终存**原始条目** —— 删除 / 扫描缓存 / 上传 / 缩略图队列都不必知道分组存在；
+   · 变体从可见列表里隐藏，并把成员挂到主条目的 `members` 上（[自身, ...变体]，按
+     本体 → aim → cover 排序），删除时随主条目一起删（见 removeItemsOnDisk）；
+   · 播放姿势记在 `S.currentPose`，loadCurrent 按它取成员的文件（activeMemberOf）；
+   · 产品不要求跨模式完美隔离：不按命名形 / 骨架世代再挡其它条目。
+
+   为什么不让服务端/原生归组：那要把「成员列表」塞进扫描结果，三个实现
+   （server / ScanEngine / 前端）都得维护同一份分组语义；放前端一处就够了。 */
+
+let nikkeView = null   // { src, mode, variantKeys } —— S.items 或 S.mode 变了就重算
+
+/** 'c022_aim_00' → {id:'c022', pose:'aim'}；'c022_00' → {id:'c022', pose:'normal'}；
+ *  认不出尾缀时整个基名就是 id（pose=normal）。id 本身可以带下划线。 */
+function nikkeGroupOf(base) {
+  const b = String(base || '')
+  let m = /^(.+)_(aim|cover)(?:_\d+)?$/i.exec(b)
+  if (m) return { id: m[1], pose: m[2].toLowerCase() }
+  m = /^(.+)_(\d+)$/.exec(b)
+  if (m) return { id: m[1], pose: 'normal' }
+  return { id: b, pose: 'normal' }
+}
+
+function nikkeViewFor() {
+  if (nikkeView && nikkeView.src === S.items && nikkeView.mode === S.mode) return nikkeView
+  const variantKeys = new Set()
+  if (S.mode === 'nikke') {
+    const groups = new Map()
+    const sorted = [...S.items].sort((a, b) =>
+      String(a.relAtlas || '').localeCompare(String(b.relAtlas || '')))
+    for (const it of sorted) {
+      const g = nikkeGroupOf(it.base)
+      let grp = groups.get(g.id)
+      if (!grp) { grp = []; groups.set(g.id, grp) }
+      grp.push({ item: it, pose: g.pose })
+    }
+    for (const grp of groups.values()) {
+      // 本体在最前；其余按 pose 名排，保证顺序稳定
+      grp.sort((a, b) => (a.pose === 'normal' ? -1 : b.pose === 'normal' ? 1 : a.pose.localeCompare(b.pose)))
+      if (grp.length < 2) continue
+      const main = grp[0].item
+      main.members = grp
+      main.groupId = nikkeGroupOf(main.base).id
+      for (const m of grp.slice(1)) variantKeys.add(itemKey(m.item))
+    }
+  }
+  nikkeView = { src: S.items, mode: S.mode, variantKeys }
+  return nikkeView
+}
+
+/** 当前播放姿势实际指向的条目：主条目本身，或它 members 里的那个变体。 */
+function activeMemberOf(item) {
+  const pose = S.currentPose || 'normal'
+  if (!item || !Array.isArray(item.members) || pose === 'normal') return item
+  const m = item.members.find(x => x.pose === pose)
+  return m ? m.item : item
 }
 
 /* ------------------------------------------------------------------ 资产顺序
    三种来源，按目录分别记在 localStorage：
-     · manual —— 用户在平铺页拖动卡片排出来的顺序（bd2.order.<rootId> 存键序列）
+     · manual —— 用户在平铺页拖动卡片排出来的顺序（bd2.order.<rootId>.<mode> 存键序列）
      · name   —— 按目录名 / 文件名（自然序，illust_special2 排在 illust_special10 前面）
      · date   —— 按 atlas 文件改动时间
    orderedList() 是唯一入口：平铺页、左侧资产列表、播放页 ◀▶ 都走它，
-   所以「排序」改的是真正的播放顺序，而不是只把画面重排一下。 */
+   所以「排序」改的是真正的播放顺序，而不是只把画面重排一下。
 
-const orderKeyFor = rid => `bd2.order.${rid || 'default'}`
+   顺序键带 mode：两套资产的文件名完全不同，共用一份顺序只会排出一份对不上的列表。
+   排序偏好（mode/dir）不带 mode：那是用户习惯，切游戏不该被打回默认。 */
+
+const orderKeyFor = rid => `bd2.order.${rid || 'default'}.${S.mode || 'bd'}`
 const sortKeyFor = rid => `bd2.sort.${rid || 'default'}`
 
 const SORT_MODES = ['manual', 'name', 'date']
@@ -1599,7 +1830,7 @@ function applySortUI() {
     if (st.mode === 'manual') {
       hint.textContent = t(document.body.classList.contains('is-touch')
         ? '长按卡片拖动 = 调整播放顺序 · 按住不动弹删除菜单'
-        : '拖动卡片调整播放顺序（按住左上角 ⠿ 立刻拖）· 右键卡片可删除')
+        : '拖动卡片调整播放顺序（按住左上角 ⠿ 立刻拖）· 右键卡片可复制路径 / 删除')
     } else {
       const arrow = st.mode === 'date'
         ? t(st.dir === -1 ? '新的在前' : '旧的在前')
@@ -1651,6 +1882,13 @@ function searchHaystack(i) {
   if (i.relSkeleton) parts.push(i.relSkeleton)
   if (i.skeleton) parts.push(i.skeleton)
   if (Array.isArray(i.relImages)) parts.push(...i.relImages)
+  // NIKKE 模式下变体（aim/cover）属于同一张卡：变体的文件名也要能被搜到
+  if (Array.isArray(i.members)) {
+    for (const m of i.members) {
+      const it = m.item || m
+      if (it !== i) parts.push(it.base, it.relAtlas, it.relSkeleton)
+    }
+  }
   return parts.filter(Boolean).join(' ').toLowerCase()
 }
 
@@ -1756,6 +1994,8 @@ function renderAssetList() {
     el.querySelector('.ai-sub').textContent = sub
     if (item.problems?.length) el.querySelector('.ai-warn').textContent = '⚠ ' + item.problems.join('；')
     el.onclick = () => { openItem(item); closeSheet(); if (fsMode) toggleFsFiles(false) }
+    // PC：右键列表项也给同一个操作菜单（复制路径 / 删除）。触屏没有右键，行为不变。
+    el.addEventListener('contextmenu', e => { e.preventDefault(); openCardMenu(item) })
     list.appendChild(el)
     shown++
   }
@@ -2027,6 +2267,87 @@ function selectedItems() {
   return allItems().filter(i => selectedKeys.has(itemKey(i)))
 }
 
+/**
+ * 资产在磁盘上的绝对路径。
+ *   kind = 'dir'  → 这个资产**所在的目录**（BD2 的 mod 一个目录就是一套，日常最常用这个）
+ *   kind = 'file' → 图集文件本身
+ *
+ * 资产条目里存的是相对根目录的路径（`relAtlas`，用 `/` 分隔），
+ * 根目录的绝对路径在 `S.rootPath`（扫描响应带回来的）。
+ * 拿不到根路径（原生 SAF 数据源 / 会话内上传的资产）时返回 null ——
+ * 上层据此把复制按钮禁掉，而不是拼一条假的路径给用户。
+ */
+function absPathOf(item, kind = 'dir') {
+  if (!item || !S.rootPath) return null
+  const rel = String(item.relAtlas || item.id || '')
+  if (!rel) return null
+  // Windows 的根目录形如 `E:\a\b`，相对路径一律 `/` 分隔 —— 分隔符跟着根目录走
+  const sep = S.rootPath.includes('\\') ? '\\' : '/'
+  const root = S.rootPath.replace(/[\\/]+$/, '')
+  const parts = rel.split('/').filter(Boolean)
+  if (!parts.length) return null
+  if (kind === 'file') return root + sep + parts.join(sep)
+  const dir = parts.slice(0, -1)
+  // 资产就摆在根目录下（没有子目录）时，「所在目录」就是根目录本身
+  return dir.length ? root + sep + dir.join(sep) : root
+}
+
+/**
+ * 复制文本到剪贴板。三条路，按「哪条更可能成功」排：
+ *   ① 安卓壳的原生剪贴板口 —— WebView 里 navigator.clipboard 经常不可用
+ *      （照 setFullscreen 的写法：直接调，桌面没有这个口会被 try 吞掉）
+ *   ② 浏览器 Clipboard API —— 桌面版跑在 http://127.0.0.1，属于安全上下文，可用
+ *   ③ 临时 textarea + execCommand —— 非安全上下文 / 剪贴板权限被拒时的兜底
+ */
+async function copyToClipboard(text) {
+  if (!text) return false
+  try { window.BD2Native.copyText(text); return true } catch { /* 桌面版没有这个口 */ }
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch { /* 没权限 / 非安全上下文，往下兜 */ }
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    // 不能 display:none（选不中），放到屏幕外再选
+    ta.style.cssText = 'position:fixed;top:0;left:-10000px;opacity:0'
+    ta.setAttribute('readonly', '')
+    document.body.appendChild(ta)
+    ta.select()
+    const ok = document.execCommand('copy')
+    ta.remove()
+    return ok
+  } catch { return false }
+}
+
+/** 卡片菜单里那两颗「复制路径」按钮：有绝对路径才可点，顺手把路径摆在下面给人看 */
+function syncCardMenuPath(item) {
+  const box = $('cardMenuPath')
+  const dirBtn = $('cardMenuCopyDir')
+  const fileBtn = $('cardMenuCopyFile')
+  const dir = absPathOf(item, 'dir')
+  const file = absPathOf(item, 'file')
+
+  if (box) {
+    if (dir) {
+      box.hidden = false
+      box.textContent = dir           // 路径是用户数据，不进翻译表
+      box.title = file || dir
+    } else {
+      box.hidden = true
+      box.textContent = ''
+      box.title = ''
+    }
+  }
+  const why = t('这个数据源没有可复制的本地路径')
+  for (const [btn, val] of [[dirBtn, dir], [fileBtn, file]]) {
+    if (!btn) continue
+    btn.disabled = !val
+    btn.title = val || why
+  }
+  return { dir, file }
+}
+
 /** 长按 / 右键卡片弹出的操作菜单 */
 function openCardMenu(item) {
   if (!item) return
@@ -2044,6 +2365,8 @@ function openCardMenu(item) {
       info.textContent = t('本次会话上传的资产（不在磁盘上）')
     }
   }
+  // 绝对路径 + 两颗复制按钮的可用性，跟着当前这张卡走（每开一次都要重算）
+  syncCardMenuPath(item)
   $('cardMenu').hidden = false
 }
 
@@ -2073,6 +2396,14 @@ function confirmDelete(items) {
         if (it.relAtlas || it.id) bits.push(String(it.relAtlas || it.id))
         if (it.relSkeleton) bits.push(String(it.relSkeleton))
         if (it.relImages?.length) bits.push(t('+{n} 张贴图', { n: it.relImages.length }))
+        // 资产自带的缩略图（Lost Sword 的 thumb.png）也在这次删除范围内，别漏报
+        if (it.relThumb) bits.push(String(it.relThumb))
+        // NIKKE 分组（R18）：姿势变体的文件随这套一起删，要一并列出来给人核对
+        if (Array.isArray(it.members) && it.members.length > 1) {
+          bits.push(t('+{n} 个姿势文件', {
+            n: it.members.slice(1).map(m => m.item || m).filter(isDiskItem).length,
+          }))
+        }
       } else {
         bits.push(t('（会话内上传，不在磁盘上）'))
       }
@@ -2101,13 +2432,21 @@ function confirmDelete(items) {
   })
 }
 
-/** 交给原生 / 服务端真删磁盘文件。两边都返回 {deleted:[relAtlas..], failed:[{relAtlas,reason}]} */
+/** 交给原生 / 服务端真删磁盘文件。两边都返回 {deleted:[relAtlas..], failed:[{relAtlas,reason}]}
+ *  NIKKE 分组条目（R18）在这里摊开成成员 —— 变体的文件跟主条目一起删。 */
 async function removeItemsOnDisk(items) {
-  const payload = items.map(i => ({
-    relAtlas: i.relAtlas || i.id || '',
-    relSkeleton: i.relSkeleton || null,
-    relImages: i.relImages || [],
-  }))
+  const payload = []
+  for (const i of items) {
+    for (const m of (Array.isArray(i.members) ? i.members : [i])) {
+      const it = m.item || m
+      payload.push({
+        relAtlas: it.relAtlas || it.id || '',
+        relSkeleton: it.relSkeleton || null,
+        relThumb: it.relThumb || null,
+        relImages: it.relImages || [],
+      })
+    }
+  }
   if (NATIVE) {
     const raw = window.BD2Native.deleteItems(S.rootId || '', JSON.stringify(payload))
     return JSON.parse(raw || '{}')
@@ -2157,12 +2496,14 @@ async function runDelete(items) {
     // 手动顺序里的记录跟着清掉，否则记录会越攒越长
     const order = loadOrder()
     if (order.length) saveOrder(order.filter(k => !gone.has(k)))
-    // 缩略图缓存也跟着清，别白占空间
+    // 缩略图缓存也跟着清，别白占空间（NIKKE 分组的成员一并清，R18）
     for (const it of items) {
-      const tk = thumbKey(it)
-      thumbCache.delete(tk)
-      thumbFailed.delete(tk)
-      idbDel(tk)
+      for (const m of (Array.isArray(it.members) ? it.members : [it])) {
+        const tk = thumbKey(m.item || m)
+        thumbCache.delete(tk)
+        thumbFailed.delete(tk)
+        idbDel(tk)
+      }
     }
     // 正在看的就是被删的那个 → 退回平铺页
     if (S.current && gone.has(itemKey(S.current))) {
@@ -2231,8 +2572,12 @@ function galleryCard(item) {
   const thumb = el.querySelector('.card-thumb')
   const tk = thumbKey(item)
   const cached = thumbCache.get(tk)
+  // 资产自带 thumb.png 时直接用它：省掉一次离屏 WebGL 渲染，
+  // 也顺带把「坏文件渲染不出来」这类卡片救回来。缓存优先，其次是它。
+  const builtin = builtinThumbUrl(item)
   if (cached) setCardThumb(thumb, cached)
   else if (thumbFailed.has(tk)) setCardThumbFailed(thumb)   // 上次就失败了，直接摆出来，不再排队
+  else if (builtin) setCardThumb(thumb, builtin)
 
   el.addEventListener('click', e => {
     // 拖动结束时浏览器补的那一下 click：只吃掉「被拖那张卡」在 700ms 内的这一下，
@@ -2264,8 +2609,9 @@ function galleryCard(item) {
     startCardDrag(e, el)
   })
 
-  // 上次就失败的不再排队（否则每次启动都去重新拉一遍坏文件，还会拖慢队列）
-  if (!thumbFailed.has(tk)) {
+  // 上次就失败的不再排队（否则每次启动都去重新拉一遍坏文件，还会拖慢队列）；
+  // 自带 thumb.png 的也不用排队 —— 离屏渲染单元只留给真正需要渲的卡片。
+  if (!builtin && !thumbFailed.has(tk)) {
     if (thumbObserver) thumbObserver.observe(el)
     else el.__wantThumb = true
   }
@@ -2354,6 +2700,10 @@ async function makeThumb(item, size = 220) {
     try { JSON.parse(text) } catch (e) { throw new Error(t('JSON 损坏：{msg}', { msg: e.message })) }
   }
 
+  // ② 按骨架版本挑运行时（NIKKE 4.0 / BD2·Lost Sword 4.1）。缩略图队列和主播放器
+  //    可能同时在跑，所以这里用局部 rt，不去动 S.spine。
+  const rt = spineRuntimeForVer(await spineMinorFor(item))
+
   const host = document.createElement('div')
   host.style.cssText =
     `position:fixed;left:-10000px;top:0;width:${size}px;height:${Math.round(size * 0.72)}px;` +
@@ -2390,9 +2740,21 @@ async function makeThumb(item, size = 220) {
       else if (urls.skeletonUrl && urls.skeletonKind === 'json') cfg.jsonUrl = urls.skeletonUrl
       else if (urls.skeletonUrl) cfg.binaryUrl = urls.skeletonUrl
       if (Object.keys(urls.rawDataURIs || {}).length) cfg.rawDataURIs = urls.rawDataURIs
-      try { player = new spine.SpinePlayer(host, cfg) } catch (e) { reject(e) }
+      try { player = new rt.SpinePlayer(host, cfg) } catch (e) { reject(e) }
     })
     player = p
+    // 多皮肤骨架（Lost Sword 常见）的 default 皮肤只有零头：缩略图同样挑覆盖最全的
+    // 皮肤 + default 垫底合成，否则卡片上是个残缺角色。失败不影响出图。
+    try {
+      const data = p.skeleton?.data
+      if (data && (data.skins || []).length > 1) {
+        const best = fullestSkin(data)
+        const composed = composeSkin(rt, data, best.name)
+        if (composed) p.skeleton.setSkin(composed)
+        else p.skeleton.setSkinByName(best.name)
+        p.skeleton.setSlotsToSetupPose()
+      }
+    } catch { /* 尽力而为 */ }
     const anims = (p.animationState?.data?.skeletonData?.animations || []).map(a => a.name)
     const name = anims.find(n => /idle/i.test(n)) || anims[0] || null
     if (name) {
@@ -2884,6 +3246,10 @@ async function rebuildThumbs() {
   for (const c of document.querySelectorAll('#galGrid .card')) {
     const box = c.querySelector('.card-thumb')
     if (box) { box.innerHTML = ''; box.classList.remove('failed'); box.classList.add('pending') }
+    // 自带 thumb.png 的资产没有「缓存」这回事（图就在磁盘上），重新排队只会白开一次
+    // 离屏渲染器，还会顺带把好图换成渲出来的那张。直接摆回自带图。
+    const builtin = builtinThumbUrl(c.__item)
+    if (builtin) { setCardThumb(box, builtin); c.__wantThumb = false; continue }
     c.__wantThumb = true
   }
   toast(t('正在重新生成缩略图…'))
@@ -2892,25 +3258,106 @@ async function rebuildThumbs() {
 
 /* ------------------------------------------------------------------ 载入资产 */
 
+/** root 相对路径 → 可取的 URL。两个数据源（Node 服务 / WebView 拦截）都认 /spine/<rootId>/<rel>。 */
+function assetUrl(rel) {
+  if (!rel) return null
+  return `/spine/${S.rootId}/${rel.split('/').map(encodeURIComponent).join('/')}`
+}
+
+/** 资产目录里自带的缩略图（Lost Sword 的 thumb.png）。没有就返回 null。
+ *  有了它就不用开离屏播放器渲一帧 —— 更快，而且不受「骨架坏 / GL 上下文用满」影响。 */
+function builtinThumbUrl(item) {
+  return item && item.relThumb ? assetUrl(item.relThumb) : null
+}
+
 function urlsForItem(item) {
   if (item.blobUrls) return item.blobUrls
-  const enc = rel => rel.split('/').map(encodeURIComponent).join('/')
-  const atlasUrl = `/spine/${S.rootId}/${enc(item.relAtlas)}`
-  const skeletonUrl = item.relSkeleton ? `/spine/${S.rootId}/${enc(item.relSkeleton)}` : null
+  const atlasUrl = assetUrl(item.relAtlas)
+  const skeletonUrl = assetUrl(item.relSkeleton)
   // 给 spine-player 兜底：告诉它 atlas 里每个页名最终该从哪取。
   const rawDataURIs = {}
   const baseUrl = new URL(atlasUrl, location.href)
   for (let i = 0; i < item.images.length; i++) {
     const pageName = item.images[i].split('/').pop()
-    const abs = `/spine/${S.rootId}/${enc(item.images[i])}`
+    const abs = assetUrl(item.images[i])
     try { rawDataURIs[new URL(pageName, baseUrl).href] = abs } catch { /* ignore */ }
     rawDataURIs[pageName] = abs
   }
   return { atlasUrl, skeletonUrl, skeletonKind: item.skeletonKind, rawDataURIs }
 }
 
-function selectItem(item) {
+/**
+ * 读出骨架是哪个 minor 导出的（'4.0' / '4.1'），用来挑运行时。
+ *
+ * 二进制骨架（.skel / .skel.bytes）的版本串写在文件头里：
+ *   8 字节 hash（低/高各 4 字节）→ 1 字节长度 → "4.0.47\0"
+ * 所以读头 32 字节就够，不用把整个骨架拉下来（大骨架几百 KB ~ 几 MB）。
+ * 用 ReadableStream 只取第一块就 cancel：Range 头不一定被服务端/WebView 支持，
+ * 但分流读取到哪一层都管用；个别 WebView 对「被 shouldInterceptRequest 拦截的响应」
+ * 不给 body 流，那时退回整读一次（见下面的 ②）。
+ *
+ * JSON 骨架（.json，含 Lost Sword 那种实为 JSON 的裸 .bytes）不读文件 —— 这两条
+ * 线都是 4.1，直接按 4.1。真出了 4.0 的 JSON 骨架，回退到默认运行时也能跑（会报错，
+ * 但那是「这个组合本来就不受支持」，不是静默错渲染）。
+ *
+ * 结果按条目录在 item._spineMinor 上：缩略图与正片只会各测一次，之后命中缓存。
+ */
+async function spineMinorFor(item) {
+  if (item._spineMinor !== undefined) return item._spineMinor
+  if (item.skeletonKind !== 'skel') return (item._spineMinor = null)
+  // 走 urlsForItem 而不是直接拼 assetUrl：手动上传的条目只有 blob URL，
+  // 没有 relSkeleton / rootId，直接拼会拼出 null 再去 fetch 当前页面。
+  const url = (urlsForItem(item) || {}).skeletonUrl
+  if (!url) return (item._spineMinor = null)
+
+  let head = null
+  // ① 优先分流读，只取头部就 cancel（大骨架不必整份拉下来）
+  try {
+    const res = await fetch(url)
+    if (!res.ok) return (item._spineMinor = null)
+    if (res.body && typeof res.body.getReader === 'function') {
+      const reader = res.body.getReader()
+      let buf = new Uint8Array(0)
+      try {
+        while (buf.length < 32) {
+          const { value, done } = await reader.read()
+          if (done) break
+          const merged = new Uint8Array(buf.length + value.length)
+          merged.set(buf, 0)
+          merged.set(value, buf.length)
+          buf = merged
+        }
+        head = buf
+      } finally {
+        try { await reader.cancel() } catch { /* 已经读完/已取消 */ }
+      }
+    } else {
+      head = new Uint8Array(await res.arrayBuffer()).slice(0, 32)
+    }
+  } catch { /* 分流这条路不通（个别 WebView 对拦截响应不给 body 流）→ 下面整读兜底 */ }
+
+  // ② 兜底：重新整读。只在 ① 失败时发生，正常路径不会多下这一次。
+  if (!head) {
+    try {
+      const res = await fetch(url)
+      if (!res.ok) return (item._spineMinor = null)
+      head = new Uint8Array(await res.arrayBuffer()).slice(0, 32)
+    } catch {
+      return (item._spineMinor = null)
+    }
+  }
+
+  let text = ''
+  for (let i = 0; i < head.length; i++) text += String.fromCharCode(head[i])
+  const m = /4\.(\d)\.\d+/.exec(text)
+  return (item._spineMinor = m ? `4.${m[1]}` : null)
+}
+
+function selectItem(item, pose) {
   S.current = item
+  // NIKKE 分组条目：默认姿势 = 成员表第一项的 pose（通常是本体 normal；
+  // 只有 aim/cover 没有本体时，第一项就是那个姿势）
+  S.currentPose = pose || (Array.isArray(item?.members) ? (item.members[0].pose || 'normal') : 'normal')
   refreshLists()
   if (fsMode) updateFsLabels()
   // 同步到地址栏，方便直接分享 / 刷新回到同一套资产
@@ -2923,6 +3370,16 @@ function selectItem(item) {
   loadCurrent()
 }
 
+/** 播放页里切姿势（NIKKE 的 普通/瞄准/掩体）。S.current 不变（还是那张卡），
+ *  只是把「实际加载的骨架」指到对应成员再重走一遍载入。 */
+function switchPose(pose) {
+  const it = S.current
+  if (!it || !Array.isArray(it.members) || it.members.length < 2) return
+  if (pose === (S.currentPose || 'normal')) return
+  S.currentPose = pose
+  loadCurrent()
+}
+
 async function loadCurrent() {
   const item = S.current
   if (!item) return
@@ -2931,12 +3388,21 @@ async function loadCurrent() {
   resetMeta()
 
   $('currentName').textContent = item.folder
-  $('currentSub').textContent = [item.group, item.base, item.skeletonKind ? `.${item.skeletonKind}` : '']
+  // NIKKE 姿势变体：副标题里写明当前加载的是哪个成员（c022_aim_00），别让人以为还在本体上
+  const member = activeMemberOf(item)
+  $('currentSub').textContent = [item.group, member.base, item.skeletonKind ? `.${item.skeletonKind}` : '']
     .filter(Boolean).join(' · ')
   $('emptyState').hidden = true
   setBusy(true, t('载入中…'))
 
-  const urls = urlsForItem(item)
+  const urls = urlsForItem(member)
+
+  // 骨架版本 → 运行时。要 await（读骨架头），所以放在建播放器之前。
+  // 除了钉在 S.spine 上，还挂到 player 实例上（__spineRt）：onLoaded 是异步回调，
+  // 期间用户可能已经切到别的资产并把 S.spine 改成另一套，只有实例上的那份不会错。
+  const rt = spineRuntimeForVer(await spineMinorFor(member))
+  S.spine = rt
+
   const cfg = {
     showControls: false,
     showLoading: false,
@@ -2987,7 +3453,8 @@ async function loadCurrent() {
   }
 
   try {
-    S.player = new spine.SpinePlayer($('playerHost'), cfg)
+    S.player = new rt.SpinePlayer($('playerHost'), cfg)
+    S.player.__spineRt = rt
   } catch (err) {
     setBusy(false)
     showError(t('初始化播放器失败：') + err.message)
@@ -3013,6 +3480,8 @@ function resetMeta() {
   $('animList').innerHTML = ''
   $('skinSelect').innerHTML = ''
   $('layerList').innerHTML = ''
+  const pg = $('poseGroup')
+  if (pg) pg.hidden = true       // 姿势条随数据重挂（onLoaded → renderPoseBar）
   $('seek').value = 0
   syncStageNav()            // 动画清空了 → 两侧箭头跟着收起来
 }
@@ -3036,6 +3505,14 @@ function onLoaded(player) {
   S.slots = (skeleton.data?.slots || []).map(s => s.name)
   renderAnimList()
   renderSkinSelect()
+  renderPoseBar()
+  // 初始皮肤挑覆盖最全的（多皮肤骨架里 default 常常只有零头，见皮肤一节的说明），
+  // 必须在算取景框之前定下来，否则取景是按残缺身体量的。
+  const bestSkin = fullestSkin(skeleton.data)
+  if (bestSkin && S.skins.length > 1) {
+    $('skinSelect').value = bestSkin.name
+    applySkin(bestSkin.name, { redraw: false })
+  }
   renderLayerList()
   syncStageNav()            // 动画列表变了 → 两侧箭头的显隐跟着变
 
@@ -3058,15 +3535,17 @@ function onLoaded(player) {
     transitionTime: 0, animations: {},
   }
 
-  // 自建相机
+  // 自建相机。类必须和播放器同源（4.0 的播放器配 4.0 的 OrthoCamera）——
+  // 实例上记着的那套最准，S.spine 只作兜底。
+  const rt = player.__spineRt || activeSpine()
   const renderCam = player.sceneRenderer.camera
-  S.camera = new spine.OrthoCamera(renderCam.viewportWidth, renderCam.viewportHeight)
+  S.camera = new rt.OrthoCamera(renderCam.viewportWidth, renderCam.viewportHeight)
   S.camera.position.x = S.bounds.offset.x + S.bounds.size.x / 2
   S.camera.position.y = S.bounds.offset.y + S.bounds.size.y / 2
   S.camera.zoom = 1
   S.camera.update()
   fitToWindow()
-  new spine.CameraController(player.canvas, S.camera)
+  new rt.CameraController(player.canvas, S.camera)
 
   renderAnimList()
 
@@ -3078,10 +3557,16 @@ function onLoaded(player) {
   updateProgressReadout()
 }
 
-/** 默认动画优先级：idle → once → 含 idle 的 → 第一个 */
+/** 默认动画优先级：姿势专属的 idle（aim→aim_idle、cover→cover_idle，与参考站一致）
+ *  → idle → once → 含 idle 的 → 第一个 */
 function pickDefaultAnimation() {
   const a = S.animations
   if (!a.length) return null
+  const pose = S.currentPose || 'normal'
+  if (pose !== 'normal') {
+    const poseIdle = a.find(x => new RegExp(`^${pose}_idle$`, 'i').test(x))
+    if (poseIdle) return poseIdle
+  }
   const exact = n => a.find(x => x.toLowerCase() === n)
   return exact('idle') || exact('once') || a.find(x => /idle/i.test(x)) || a[0]
 }
@@ -3171,9 +3656,10 @@ function boundsFromBox(box, padding = 50) {
   const w = box.maxX - box.minX
   const h = box.maxY - box.minY
   if (!(w > 0) || !(h > 0)) return null
+  const V2 = activeSpine().Vector2
   return {
-    offset: new spine.Vector2(box.minX - padding, box.minY - padding),
-    size: new spine.Vector2(w + padding * 2, h + padding * 2),
+    offset: new V2(box.minX - padding, box.minY - padding),
+    size: new V2(w + padding * 2, h + padding * 2),
   }
 }
 
@@ -3228,8 +3714,9 @@ function computeBounds(skeleton) {
   if (setup) return setup
 
   // 4) 最后退回骨架自带 bounds
-  const offset = new spine.Vector2()
-  const size = new spine.Vector2()
+  const V2 = activeSpine().Vector2
+  const offset = new V2()
+  const size = new V2()
   try { skeleton.getBounds(offset, size) } catch { /* ignore */ }
   if (!(size.x > 0) || !(size.y > 0)) { offset.x = -500; offset.y = -500; size.x = 1000; size.y = 1000 }
   return { offset, size }
@@ -3287,8 +3774,8 @@ function updateProgressReadout() {
   if (!entry || !entry.animation) return
   const d = entry.animation.duration || 0
   if (d <= 0) return
-  const t = (entry.trackTime % d + d) % d
-  $('seek').value = String(t / d)
+  const cur = (entry.trackTime % d + d) % d
+  $('seek').value = String(cur / d)
 }
 
 /* ------------------------------------------------------------------ 动画 */
@@ -3394,6 +3881,71 @@ function renderAnimList() {
   if (fsMode) updateFsLabels()
 }
 
+/* ------------------------------------------------- 皮肤
+   Lost Sword 一类骨架的「default」皮肤常常只有零头：身体部件放在具名皮肤里
+   （实测 Elin：81 个槽位里 default 只带 11 个，"1" 带 33 个 —— 所以选 default
+   就只显示一小块）。两件事必须做：
+   ①初始皮肤挑「覆盖槽位最多」的那个，而不是照书选第一个（default）；
+   ②切到具名皮肤时把 default 垫在下面合成（default 皮肤放的是各套共用的部件）。
+   覆盖量数的是「槽位数」不是附件数 —— 一个槽位常挂好几个换装变体。 */
+
+function skinSlotCount(skin) {
+  const a = skin && skin.attachments
+  if (!a) return 0
+  if (typeof a.size === 'number' && typeof a.forEach === 'function') return a.size // Map 形态
+  return Object.keys(a).length
+}
+
+function fullestSkin(data) {
+  let best = null
+  let bestN = -1
+  for (const s of data.skins || []) {
+    const n = skinSlotCount(s)
+    if (n > bestN) { bestN = n; best = s }
+  }
+  return best
+}
+
+/** default 垫底 + 具名皮肤的合成皮。选的就是 default（或没有 default / 找不到）时返回 null。 */
+function composeSkin(rt, data, name) {
+  const def = data.defaultSkin
+  if (!def || !name || name === def.name) return null
+  const chosen = (data.skins || []).find(s => s.name === name)
+  if (!chosen || chosen === def) return null
+  const s = new rt.Skin(def.name + '+' + name)
+  s.addSkin(def)
+  s.addSkin(chosen)
+  return s
+}
+
+/* ------------------------------------------------- 姿势（NIKKE 的 aim / cover）
+   分组条目才有这一节（见 R18）：members 里有几个成员就摆几个按钮。
+   可见性随**数据**变（有没有变体），所以这里用 JS 摘 hidden，不走 CSS（R1）。 */
+
+const POSE_LABEL = { normal: '普通', aim: '瞄准', cover: '掩体' }
+
+function renderPoseBar() {
+  const bar = $('poseBar')
+  const group = $('poseGroup')
+  if (!bar || !group) return
+  const members = Array.isArray(S.current?.members) ? S.current.members : null
+  const show = !!(members && members.length > 1)
+  group.hidden = !show
+  bar.innerHTML = ''
+  if (!show) return
+  const cur = S.currentPose || members[0].pose || 'normal'
+  for (const m of members) {
+    const b = document.createElement('button')
+    b.type = 'button'
+    b.className = 'gm-btn'
+    b.dataset.pose = m.pose
+    b.setAttribute('aria-pressed', String(m.pose === cur))
+    b.textContent = t(POSE_LABEL[m.pose] || m.pose)
+    b.onclick = () => switchPose(m.pose)
+    bar.appendChild(b)
+  }
+}
+
 function renderSkinSelect() {
   const sel = $('skinSelect')
   sel.innerHTML = ''
@@ -3406,11 +3958,18 @@ function renderSkinSelect() {
   sel.disabled = S.skins.length <= 1
 }
 
-function applySkin(name) {
+/** opts.redraw = false 时不主动画帧 —— onLoaded（播放器载入上下文）里调 drawFrame
+ *  会弄坏它自己的渲染循环（实测：aim 骨架「Unable to render skeleton」，而它恰好是
+ *  唯一多皮肤的）。载入路径只设皮肤，让播放器自己的循环去画。 */
+function applySkin(name, opts) {
   const p = S.player
   if (!p || !p.skeleton) return
+  const redraw = !(opts && opts.redraw === false)
+  const rt = p.__spineRt || activeSpine()
   try {
-    p.skeleton.setSkinByName(name)
+    const composed = composeSkin(rt, p.skeleton.data, name)
+    if (composed) p.skeleton.setSkin(composed)
+    else p.skeleton.setSkinByName(name)
     p.skeleton.setSlotsToSetupPose()
   } catch (err) {
     showError(t('切换皮肤失败：') + err.message)
@@ -3420,7 +3979,7 @@ function applySkin(name) {
   S.hidden.clear()
   S.hiddenStack = []
   renderLayerList()
-  p.drawFrame(false)
+  if (redraw) p.drawFrame(false)
 }
 
 /* ------------------------------------------------------------------ 图层 */
@@ -4094,13 +4653,32 @@ async function exportFrames(transparent) {
 
 const uploaded = { files: [] }
 
+/**
+ * 认一个上传文件扮演什么角色。两套命名约定都要认 —— 语义与
+ * server.mjs 的 FORMATS / 安卓 ScanEngine 的 classify() 保持一致，改一边要改三边：
+ *   · bd        —— x.atlas / x.json / x.skel
+ *   · lostsword —— x.atlas.bytes（文本图集）/ x.skel.bytes（二进制骨架）/ x.bytes（JSON 骨架）
+ * 判断顺序要紧：`.atlas.bytes` 必须先于 `.bytes`，否则它会被当成骨架，基名也算错。
+ */
+function fileRole(name) {
+  const l = String(name || '').toLowerCase()
+  if (l.endsWith('.atlas.bytes')) return 'atlas'
+  if (l.endsWith('.skel.bytes')) return 'skel'
+  if (l.endsWith('.atlas')) return 'atlas'
+  if (l.endsWith('.skel')) return 'skel'
+  if (l.endsWith('.json')) return 'json'
+  if (l.endsWith('.bytes')) return 'json'
+  if (/\.(png|jpe?g|webp)$/.test(l)) return 'image'
+  return null
+}
+
 async function blobUrlsFromFiles(files, name) {
-  const atlas = files.find(f => f.name.toLowerCase().endsWith('.atlas'))
-  const json = files.find(f => f.name.toLowerCase().endsWith('.json'))
-  const skel = files.find(f => f.name.toLowerCase().endsWith('.skel'))
-  const textures = files.filter(f => /\.(png|jpe?g|webp)$/i.test(f.name))
-  if (!atlas) throw new Error(t('缺少 .atlas 文件'))
-  if (!json && !skel) throw new Error(t('缺少 .json 或 .skel 骨架文件'))
+  const atlas = files.find(f => fileRole(f.name) === 'atlas')
+  const json = files.find(f => fileRole(f.name) === 'json')
+  const skel = files.find(f => fileRole(f.name) === 'skel')
+  const textures = files.filter(f => fileRole(f.name) === 'image')
+  if (!atlas) throw new Error(t('缺少 .atlas / .atlas.bytes 图集文件'))
+  if (!json && !skel) throw new Error(t('缺少骨架文件（.json / .skel / .bytes）'))
   if (!textures.length) throw new Error(t('缺少贴图 .png'))
 
   const atlasText = await await_text(atlas)
@@ -4151,14 +4729,15 @@ async function doUpload() {
       key: 'custom-' + Date.now(),
       folder: label,
       group: t('已上传（本次会话）'),
-      base: uploaded.files.find(f => f.name.toLowerCase().endsWith('.atlas')).name,
-      images: uploaded.files.filter(f => /\.(png|jpe?g|webp)$/i.test(f.name)),
+      base: uploaded.files.find(f => fileRole(f.name) === 'atlas').name,
+      images: uploaded.files.filter(f => fileRole(f.name) === 'image'),
       skeletonKind: urls.skeletonKind,
       blobUrls: urls,
       ok: true,
       problems: [],
       relAtlas: null,
       relSkeleton: null,
+      relThumb: null,
     }
     S.customItems.unshift(item)
     $('uploadModal').hidden = true
@@ -4247,6 +4826,14 @@ function bindUI() {
   if (gridBtn) gridBtn.onclick = () => setView('grid')
   const galRebuild = $('galRebuild')
   if (galRebuild) galRebuild.onclick = () => rebuildThumbs()
+  // 资产类型：BD2 / Lost Sword（全局单一切换，切完按新规则重扫）
+  const galMode = $('galMode')
+  if (galMode) {
+    galMode.addEventListener('click', e => {
+      const b = e.target.closest('.gm-btn')
+      if (b && b.dataset.assetMode) setAssetMode(b.dataset.assetMode)
+    })
+  }
   // 播放顺序：手动 / 名称 / 日期 + 升降序
   const galSort = $('galSort')
   if (galSort) {
@@ -4291,6 +4878,22 @@ function bindUI() {
     setSelectMode(true)
     if (it) toggleSelectKey(itemKey(it))
   }
+  // 复制路径：**故意不关菜单** —— 目录和文件两条常要连着复制，也让人能核对
+  // 下面那行路径；菜单本身点蒙版 / ✕ 就能关。
+  const copyFromMenu = async kind => {
+    const p = absPathOf(menuItem, kind)
+    if (!p) return
+    const ok = await copyToClipboard(p)
+    toast(ok ? t('路径已复制') : t('复制失败，可手动选中路径复制'))
+  }
+  const cardMenuCopyDir = $('cardMenuCopyDir')
+  if (cardMenuCopyDir) cardMenuCopyDir.onclick = () => copyFromMenu('dir')
+  const cardMenuCopyFile = $('cardMenuCopyFile')
+  if (cardMenuCopyFile) cardMenuCopyFile.onclick = () => copyFromMenu('file')
+  // PC 播放页左上角的「返回列表」。触屏那套是 ⊞ 悬浮键（见 setupFullscreenUI），
+  // 两边都只调 setView('grid') —— 层级判断仍然只有 handleBack() 一份。
+  const stageBack = $('stageBack')
+  if (stageBack) stageBack.onclick = () => setView('grid')
   applySortUI()
   applySelectUI()
   $('btnAddRoot').onclick = async () => {
@@ -4628,6 +5231,12 @@ window.__bd2viewer = {
   setPlaying,
   get animation() { return currentAnimation()?.name || null },
   get animations() { return S.animations },
+  // Spine 运行时：4.1 常驻、4.0 供 NIKKE 用。distinct 用来证「没互相覆盖」。
+  get spineRuntimes() {
+    return { has41: !!SPINE_DEFAULT, has40: !!SPINE40, distinct: SPINE40 !== SPINE_DEFAULT }
+  },
+  /** 读骨架头判定 minor 版本（'4.0' / '4.1' / null）。测试与排障用。 */
+  spineMinorOf: item => spineMinorFor(item),
   setLayerHidden,
   pickLayerAt,
   screenshot,
@@ -4643,6 +5252,9 @@ window.__bd2viewer = {
   get view() { return viewMode },
   setView,
   openItem,
+  // 绝对路径：relAtlas 只是相对根目录的那一截，拼成整条要 rootPath + sep
+  absPathOf,
+  copyToClipboard,
   get order() { return loadOrder() },
   setOrder(keys) { saveOrder(keys); refreshLists() },
   rebuildThumbs,
@@ -4655,6 +5267,13 @@ window.__bd2viewer = {
   get sort() { return { ...sortState } },
   setSortMode,
   toggleSortDir,
+  // 资产类型（BD2 / Lost Sword / NIKKE）。setAssetMode 会落盘 + 重扫，测试用它代替点按钮。
+  get mode() { return S.mode },
+  setAssetMode, matchesAssetMode,
+  // NIKKE 姿势（R18）：测试与排障用。switchPose 走真实链路（重走 loadCurrent）。
+  get pose() { return S.currentPose || 'normal' },
+  switchPose,
+  renderPoseBar,
   /** 当前实际生效的播放顺序（键序列，已应用过滤 + 排序） */
   get visibleKeys() { return filteredItems().map(itemKey) },
   get allKeys() { return allItems().map(itemKey) },

@@ -60,6 +60,29 @@ try {
       extLinks === 0 && extScripts === 0, `link=${extLinks} scriptSrc=${extScripts}`)
   }
 
+  /* 双 Spine 运行时（1.03 起）：NIKKE 骨架是 4.0.x 导出、BD2/Lost Sword 是 4.1.x，
+     跨 minor 不能互读。两份 IIFE 默认都写全局 spine，后加载的会覆盖先加载的 ——
+     所以 4.0 那份被改成了 spine40。这几条断言拦的是两类静默事故：
+       ① 升级/重下 4.0 运行时后忘了改全局名 → 4.1 被顶掉，BD2 全线报错
+       ② bundle.mjs 的内联清单漏了 4.0 → 开发态好好的，装进 APK 就渲染不了 NIKKE */
+  {
+    const p40 = new URL('../public/lib/spine-player-4.0.js', import.meta.url)
+    let lib40 = ''
+    try { lib40 = readFileSync(p40, 'utf8') } catch { /* 缺失时下面会判 FAIL */ }
+    check('存在第二套运行时 lib/spine-player-4.0.js', lib40.length > 0)
+    check('4.0 运行时把结果写到全局 spine40（不能叫 spine，否则覆盖 4.1）',
+      /var spine40 = \(\(\) => \{/.test(lib40) && !/var spine = \(\(\) => \{/.test(lib40))
+    // 4.1 才有 Sequence，4.0 完全没有 —— 用它反证两份文件确实是不同的世代
+    check('两份运行时确实是不同世代（Sequence 只在 4.1 里）',
+      (lib40.match(/Sequence/g) || []).length === 0 &&
+      (readFileSync(new URL('../public/lib/spine-player.js', import.meta.url), 'utf8')
+        .match(/Sequence/g) || []).length > 0)
+
+    const bundle = readFileSync(new URL('../public/app.bundle.html', import.meta.url), 'utf8')
+    check('产物里内联了两套运行时（4.1 的 var spine + 4.0 的 var spine40）',
+      bundle.includes('var spine = (() => {') && bundle.includes('var spine40 = (() => {'))
+  }
+
   const errs = []
   cdp.onConsole = m => { if (m.type === 'error') errs.push(m.text) }
 
@@ -88,6 +111,28 @@ try {
   `)
   check('spine 运行时已内联可用', info.hasSpine)
   check('JSZip 已内联可用', info.hasJsZip)
+
+  /* 两套运行时都真的活在页面上，而且是两个不同对象；顺带验一次骨架版本探测
+     在真实 4.1 骨架上不会误判（真判错的代价是整个 BD2 库渲染全崩）。 */
+  const rt = await cdp.evaluate(`
+    const v = window.__bd2viewer
+    const it = v.state.items.find(i => i.skeletonKind === 'skel')
+    return {
+      has40: !!window.spine40,
+      has41: !!window.spine,
+      has40Player: !!(window.spine40 && window.spine40.SpinePlayer),
+      distinct: !!(window.spine40 && window.spine) &&
+        window.spine40.SpinePlayer !== window.spine.SpinePlayer,
+      minor: it ? await v.spineMinorOf(it) : null,
+      rel: it ? it.relSkeleton : null,
+    }
+  `)
+  check('两套运行时都已加载（window.spine / window.spine40）', rt.has40 && rt.has41,
+    `40=${rt.has40} 41=${rt.has41}`)
+  check('两套运行时是不同的构造器（4.0 没把 4.1 顶掉）', rt.distinct && rt.has40Player)
+  check('骨架版本探测：真实 4.1 骨架判成 4.1（不误判成 4.0）',
+    rt.minor === '4.1', `${rt.rel} → ${rt.minor}`)
+
   check('桌面模式下 isNative=false', info.isNative === false, `isNative=${info.isNative}`)
   check('资产列表非空', info.items > 0, `${info.items} 个`)
   check('动画已载入', info.anims > 0, `${info.anims} 个动画`)

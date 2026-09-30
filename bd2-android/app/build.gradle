@@ -38,9 +38,11 @@ android {
         // versionCode 是 Android 判定「能否覆盖安装」的唯一依据，必须单调递增。
         // 不能因为 versionName 看起来只是个小版本就不动它 —— 那样已经装过 1.0 的
         // 机器会拒绝安装这个包（INSTALL_FAILED_VERSION_DOWNGRADE）。
-        // 历史：1.0 = versionCode 1，本次 1.01 = versionCode 2。
-        versionCode 2
-        versionName '1.01'
+        // 历史：1.0 = versionCode 1，1.01 = versionCode 2，1.02 = versionCode 3，
+        //       1.03 = versionCode 4（支持 NIKKE 资产，内置 Spine 4.0 运行时），
+        //       1.04 = versionCode 5（NIKKE 独立模式：角色归组 + 姿势切换；多皮肤骨架合成）
+        versionCode 5
+        versionName '1.04'
     }
 
     compileOptions {

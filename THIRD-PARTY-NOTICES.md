@@ -8,15 +8,25 @@
 
 ---
 
-## 1. Spine Runtimes（`spine-player.js` / `spine-player.css`）
+## 1. Spine Runtimes（`spine-player.js` / `spine-player-4.0.js` / `spine-player.css`）
 
 **这是最重要的一条，请务必读完。**
 
-- 组件：`@esotericsoftware/spine-player` 4.1.55
-  （随仓库提供：`bd2-local-viewer/public/lib/spine-player.js`、`spine-player.css`）
-- 版权：Copyright (c) 2013-2023, Esoteric Software LLC
+本仓库内置**两套** Spine 运行时，因为在同一份资产库里可能同时存在两代导出的骨架
+（1.03 起支持 NIKKE，其骨架是 Spine 4.0.x 导出；BD2 / Lost Sword 是 4.1.x）：
+
+| 文件 | 组件 | 服务对象 |
+| --- | --- | --- |
+| `bd2-local-viewer/public/lib/spine-player.js` | `@esotericsoftware/spine-player` **4.1.55** | BD2、Lost Sword（骨架 4.1.x） |
+| `bd2-local-viewer/public/lib/spine-player-4.0.js` | `@esotericsoftware/spine-player` **4.0.31** | NIKKE（骨架 4.0.x） |
+
+- 版权：Copyright (c) 2013-2023, Esoteric Software LLC（4.0.31 的包内许可标注为 2013-2019）
 - 官网：https://esotericsoftware.com/
 - 仓库：https://github.com/EsotericSoftware/spine-runtimes
+
+两份都是上游 npm 包 `dist/iife/spine-player.js` 的**原样产物**，唯一改动是把
+`spine-player-4.0.js` 的全局变量名 `spine` 改成 `spine40`（唯一一处 `var` 声明），
+以便与 4.1 的那份在同一页面共存而不互相覆盖 —— 改动点已写在文件头部注释里。
 
 ### 许可原文
 
@@ -59,8 +69,9 @@ THE SPINE RUNTIMES, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
      本项目**不包含、也不能代替**这份授权。
    - **任何形式的分发都必须附带上面这份许可与版权声明。** 也就是说，
      如果你 fork 或再分发本项目，**不能删掉这个文件**。
-3. 上游 npm 包里的 `spine-player.js` 是压缩产物，**本身不含许可头** ——
-   这正是本文件存在的原因：许可要求声明随分发一起走。请勿删除。
+3. 上游 npm 包里的 `spine-player.js` / `spine-player-4.0.js` 是压缩产物，
+   **本身不含许可头** —— 这正是本文件存在的原因：许可要求声明随分发一起走。
+   请勿删除。（`spine-player-4.0.js` 的头部注释是我们自己加的改动说明，不是上游内容。）
 4. 本项目作者与 Esoteric Software 无隶属关系，本项目未获其背书。
 
 ---
@@ -117,7 +128,10 @@ THE SOFTWARE.
   背景 / 截图 / 导出 —— 这套「看什么、怎么操作」的设计来自上游。
 - **资产的组织方式**：如何把一堆散文件（`.atlas` + `.json`/`.skel` + 贴图）识别成
   「一套可播放的资产」，这个思路沿用上游。
-- **依赖选型**：`spine-player 4.1.55` 与 `jszip` 的版本跟随上游。
+- **依赖选型**：`jszip` 的版本跟随上游；Spine 运行时以上游所用的 **4.1.55** 为主。
+  （1.03 起另内置 **4.0.31** 一份，用于 NIKKE 的 4.0.x 骨架 —— 这是本项目自己加的，
+  上游没有；双运行时的做法参考了 [Nikke-db/nikke-db-vue](https://github.com/Nikke-db/nikke-db-vue)
+  的同一策略，但代码是独立写的，未复制其源码。）
 
 ### 3.2 本项目改了/加了什么（独立实现部分）
 

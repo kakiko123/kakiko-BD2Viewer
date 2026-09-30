@@ -32,7 +32,8 @@ const DEFAULT_CONFIG = {
   roots: [],
 }
 
-// 前端有两个第三方库文件。优先用项目自带的 public/lib（已经把官方发行版放进去），
+// 前端有两个第三方库文件（Spine 运行时是两套，见 app.js 的 R16 说明）。
+// 优先用项目自带的 public/lib（已经把官方发行版放进去），
 // 找不到再退回 node_modules（如果用户执行过 npm install）。
 function resolveLib(route) {
   const name = path.basename(route)
@@ -40,13 +41,18 @@ function resolveLib(route) {
   if (fs.existsSync(bundled)) return bundled
   const fromNodeModules = {
     'spine-player.js': path.join(NM, '@esotericsoftware/spine-player', 'dist', 'iife', 'spine-player.js'),
+    // 4.0 那份同理：装了 4.0.x 版本的 @esotericsoftware/spine-player 才能从 node_modules 拿到。
+    // 注意 npm 一个包名只能装一个版本，想同时拥有两套必须靠 public/lib/ 里的产物文件。
+    'spine-player-4.0.js': path.join(NM, '@esotericsoftware/spine-player', 'dist', 'iife', 'spine-player.js'),
     'spine-player.css': path.join(NM, '@esotericsoftware/spine-player', 'dist', 'spine-player.css'),
     'jszip.min.js': path.join(NM, 'jszip', 'dist', 'jszip.min.js'),
   }[name]
   return fromNodeModules && fs.existsSync(fromNodeModules) ? fromNodeModules : null
 }
 
-const LIB_ROUTES = ['/lib/spine-player.js', '/lib/spine-player.css', '/lib/jszip.min.js']
+const LIB_ROUTES = [
+  '/lib/spine-player.js', '/lib/spine-player-4.0.js', '/lib/spine-player.css', '/lib/jszip.min.js',
+]
 
 
 const MIME = {
@@ -66,6 +72,147 @@ const MIME = {
   '.ico': 'image/x-icon',
   '.woff2': 'font/woff2',
   '.wasm': 'application/wasm',
+}
+
+// ---------------------------------------------------------------- formats
+
+/**
+ * 游戏的资产命名约定。
+ *
+ * 为什么要有这一层：不同游戏（甚至同一游戏的不同导出工具）给同一批 Spine 文件起的
+ * 扩展名不一样。BD2 的 mod 是标准 Spine 导出（`x.atlas` / `x.skel` / `x.json`），
+ * 而 Lost Sword 是 Unity TextAsset 导出，多套了一层 `.bytes`
+ * （`x.atlas.bytes` / `x.skel.bytes`，JSON 骨架干脆叫裸 `x.bytes`）。
+ *
+ * **判据只写在这里，不要散进 walk()** —— 加第三种游戏时只加一条 format，
+ * 扫描主流程一行不用动。前后端与 Android 侧都遵循同一套 `classify()` 语义。
+ *
+ * `classify(name)` 返回 `null`（这个文件不参与资产识别）或：
+ *   `{ role: 'atlas'|'skeleton'|'image'|'thumb', base?, kind? }`
+ * 其中 `base` 是**资产的基名**（同名匹配用），`kind` 只对 skeleton 有意义
+ * （`'json'` 走 spine-player 的 `jsonUrl`，`'skel'` 走 `binaryUrl`）。
+ */
+
+const IMG_RE = /\.(png|jpg|jpeg|webp)$/i
+
+/** 去掉重名的 `.atlas` / `.skel` 中缀，拿到资产基名。 */
+function stripAtlasBytes(name) {
+  return name.slice(0, -'.atlas.bytes'.length)
+}
+function stripSkelBytes(name) {
+  return name.slice(0, -'.skel.bytes'.length)
+}
+
+const FORMATS = {
+  /**
+   * BD2 / 标准 Spine 导出。
+   * `illust.atlas` + `illust.json`（或 `illust.skel`）+ `illust.png`
+   */
+  bd: {
+    id: 'bd',
+    classify(name) {
+      const l = name.toLowerCase()
+      if (l.endsWith('.atlas')) return { role: 'atlas', base: name.slice(0, -'.atlas'.length) }
+      if (l.endsWith('.skel')) return { role: 'skeleton', base: name.slice(0, -'.skel'.length), kind: 'skel' }
+      if (l.endsWith('.json')) return { role: 'skeleton', base: name.slice(0, -'.json'.length), kind: 'json' }
+      if (IMG_RE.test(name)) return { role: 'image' }
+      return null
+    },
+  },
+
+  /**
+   * Lost Sword / Unity TextAsset 导出。
+   * `Agravaine.atlas.bytes` + `Agravaine.skel.bytes`（二进制 4.1）
+   * 或 `beirin.bytes`（JSON 骨架，裸 .bytes）+ 同目录 `*.png`。
+   * 目录里常带一张预算好的 `thumb.png`。
+   *
+   * 注意 `x.atlas.bytes` / `x.skel.bytes` 必须先于裸 `.bytes` 判断 ——
+   * 否则 `path.extname` 只能看到最后一段 `.bytes`，基名会算成 `x.atlas`。
+   */
+  lostsword: {
+    id: 'lostsword',
+    classify(name) {
+      const l = name.toLowerCase()
+      if (l.endsWith('.atlas.bytes')) return { role: 'atlas', base: stripAtlasBytes(name) }
+      if (l.endsWith('.skel.bytes')) return { role: 'skeleton', base: stripSkelBytes(name), kind: 'skel' }
+      if (l.endsWith('.bytes')) return { role: 'skeleton', base: name.slice(0, -'.bytes'.length), kind: 'json' }
+      if (l === 'thumb.png') return { role: 'thumb' }
+      if (IMG_RE.test(name)) return { role: 'image' }
+      return null
+    },
+  },
+
+  /**
+   * NIKKE。文件命名与 BD2 完全一样（`c022_00.atlas` + `c022_00.skel` + `c022_00.png`），
+   * 所以归桶规则就是 bd 那一套（classify 直接复用）。它和 bd 的差别在**前端怎么组织**：
+   * 同一角色的 `<id>_00`（本体）与 `<id>_aim_00` / `<id>_cover_00`（瞄准/掩体姿势）
+   * 归成一套资产，播放页里切姿势 —— 分组逻辑在 app.js（一处实现，见 R18），
+   * 这里只负责让 `mode=nikke` 拥有独立的扫描缓存与独立的模式档位。
+   * 骨架多为 Spine 4.0.x；扫描仍读骨架头写入 spineMinor（给前端选 4.0/4.1 运行时，见 R16），
+   * **不再**按世代丢掉条目——产品不要求跨模式完美隔离，各模式在对应素材在场时能正确查看即可。
+   */
+  nikke: {
+    id: 'nikke',
+    classify(name) { return FORMATS.bd.classify(name) },
+  },
+}
+
+const DEFAULT_FORMAT = 'bd'
+
+function formatOf(id) {
+  return FORMATS[id] || FORMATS[DEFAULT_FORMAT]
+}
+
+/**
+ * 从二进制骨架文件头读出 minor（'4.0' / '4.1'）。
+ * 布局：8 字节 hash → 1 字节长度 → "4.x.y\0"。读前 32 字节足够。
+ * JSON 骨架（.json / 裸 .bytes）不读文件，返回 null（按 4.1 线处理）。
+ */
+function spineMinorFromHead(buf) {
+  if (!buf || !buf.length) return null
+  let text = ''
+  const n = Math.min(buf.length, 32)
+  for (let i = 0; i < n; i++) text += String.fromCharCode(buf[i])
+  const m = /4\.(\d)\.\d+/.exec(text)
+  return m ? `4.${m[1]}` : null
+}
+
+async function spineMinorOfFile(absPath, kind) {
+  if (kind !== 'skel') return null
+  try {
+    const fh = await fsp.open(absPath, 'r')
+    try {
+      const buf = Buffer.alloc(32)
+      const { bytesRead } = await fh.read(buf, 0, 32, 0)
+      return spineMinorFromHead(buf.subarray(0, bytesRead))
+    } finally {
+      await fh.close()
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 从候选骨架里挑出与 atlas 配对的那个。
+ *
+ * 三级级联，越靠前越可信（实测 Lost Sword 的 430 套里 429 套命中第一级）：
+ *   ① 基名精确相同 —— `Agravaine.atlas.bytes` ↔ `Agravaine.skel.bytes`
+ *   ② 骨架基名是 atlas 基名的前缀（取最长者）——
+ *      处理 `skull_Soldier_Green.atlas.bytes` ↔ `skull_Soldier.skel.bytes`
+ *   ③ 目录里只有一个候选 —— 兜底，仅在① ② 都落空时用（目录里有多个候选时宁可报缺骨架）
+ *
+ * 为什么不能只用③：实测有 40 个目录里放着 2~3 个骨架，随便挑一个会张冠李戴。
+ */
+function pickSkeleton(cands, base) {
+  if (!cands.length) return null
+  const exact = cands.find(c => c.base === base)
+  if (exact) return exact
+  const prefixed = cands
+    .filter(c => c.base && base.startsWith(c.base))
+    .sort((a, b) => b.base.length - a.base.length)
+  if (prefixed.length) return prefixed[0]
+  return cands.length === 1 ? cands[0] : null
 }
 
 // ---------------------------------------------------------------- config
@@ -128,7 +275,8 @@ async function mtimeOf(file) {
   try { return Math.round((await fsp.stat(file)).mtimeMs) } catch { return 0 }
 }
 
-/** 从 atlas 文本里提取所有页（page）图片名。Atlas 里每一页的头部就是单独一行的文件名。 */function parseAtlasPages(atlasText) {
+/** 从 atlas 文本里提取所有页（page）图片名。Atlas 里每一页的头部就是单独一行的文件名。 */
+function parseAtlasPages(atlasText) {
   const pages = []
   for (const rawLine of atlasText.split(/\r?\n/)) {
     const line = rawLine.trim()
@@ -138,47 +286,37 @@ async function mtimeOf(file) {
   return [...new Set(pages)]
 }
 
-async function walk(dir, depth, maxDepth, out, rootPath) {
+async function walk(dir, depth, maxDepth, out, rootPath, fmt) {
   if (depth > maxDepth) return
   const entries = await listDir(dir)
-  const filesByExt = new Map()
+
+  // 按「资产角色」归类，而不是按扩展名 —— 扩展名的差异已经被 fmt.classify 吃掉了。
+  // 这正是支持第二种游戏命名的关键：主流程只认角色，不认扩展名。
+  const atlases = []      // [{ name, base }]
+  const skeletons = []    // [{ name, base, kind }]
+  const images = []       // [name]
+  let thumb = null        // 预算好的缩略图文件名（Lost Sword 的 thumb.png）
   const subdirs = []
 
   for (const entry of entries) {
     if (entry.isDirectory()) {
       if (SKIP_DIRS.has(entry.name.toLowerCase())) continue
       subdirs.push(path.join(dir, entry.name))
-    } else if (entry.isFile()) {
-      const ext = path.extname(entry.name).toLowerCase()
-      if (!filesByExt.has(ext)) filesByExt.set(ext, [])
-      filesByExt.get(ext).push(entry.name)
+      continue
     }
+    if (!entry.isFile()) continue
+    const c = fmt.classify(entry.name)
+    if (!c) continue
+    if (c.role === 'atlas') atlases.push({ name: entry.name, base: c.base })
+    else if (c.role === 'skeleton') skeletons.push({ name: entry.name, base: c.base, kind: c.kind })
+    else if (c.role === 'thumb') thumb = entry.name
+    else if (c.role === 'image') images.push(entry.name)
   }
 
-  const atlases = filesByExt.get('.atlas') || []
-  for (const atlasName of atlases) {
-    const base = path.basename(atlasName, path.extname(atlasName))
-    const jsons = filesByExt.get('.json') || []
-    const skels = filesByExt.get('.skel') || []
-
-    // 骨架文件：优先同名，其次目录里唯一的一个
-    let skeleton = null
-    let skeletonKind = null
-    const sameJson = jsons.find(f => path.basename(f, '.json') === base)
-    const sameSkel = skels.find(f => path.basename(f, '.skel') === base)
-    if (sameJson) {
-      skeleton = sameJson
-      skeletonKind = 'json'
-    } else if (sameSkel) {
-      skeleton = sameSkel
-      skeletonKind = 'skel'
-    } else if (jsons.length === 1) {
-      skeleton = jsons[0]
-      skeletonKind = 'json'
-    } else if (skels.length === 1) {
-      skeleton = skels[0]
-      skeletonKind = 'skel'
-    }
+  for (const atlas of atlases) {
+    const base = atlas.base
+    const atlasName = atlas.name
+    const skel = pickSkeleton(skeletons, base)
 
     let pages = []
     try {
@@ -188,24 +326,21 @@ async function walk(dir, depth, maxDepth, out, rootPath) {
       /* 读不了就退回同目录同名 png */
     }
 
-    const allImages = new Set([
-      ...(filesByExt.get('.png') || []),
-      ...(filesByExt.get('.jpg') || []),
-      ...(filesByExt.get('.jpeg') || []),
-      ...(filesByExt.get('.webp') || []),
-    ])
-
     if (pages.length === 0) {
-      const guess = [...allImages].filter(n => path.basename(n, path.extname(n)).startsWith(base))
-      pages = guess.length ? guess : [...allImages].slice(0, 1)
+      // 兜底：按基名前缀猜。注意排除预算好的 thumb.png，
+      // 否则「Agravaine」这种基名会把 thumb 当成图集页（实测 Lost Sword 有这个坑）。
+      const guess = images.filter(
+        n => n !== thumb && path.basename(n, path.extname(n)).startsWith(base),
+      )
+      pages = guess.length ? guess : images.filter(n => n !== thumb).slice(0, 1)
     }
 
-    const images = []
+    const found_ = []
     const missing = []
     for (const page of pages) {
-      const found = [...allImages].find(n => n === page) ||
-        [...allImages].find(n => path.basename(n) === path.basename(page))
-      if (found) images.push(found)
+      const hit = images.find(n => n === page) ||
+        images.find(n => path.basename(n) === path.basename(page))
+      if (hit) found_.push(hit)
       else missing.push(page)
     }
 
@@ -214,6 +349,9 @@ async function walk(dir, depth, maxDepth, out, rootPath) {
     // 分组用相对根目录的第一段（顶层文件夹）；直接放在根目录里的归到「（根目录）」
     const group = relAtlas.includes('/') ? relAtlas.split('/')[0] : '（根目录）'
 
+    const spineMinor = skel
+      ? await spineMinorOfFile(path.join(dir, skel.name), skel.kind)
+      : null
     out.push({
       id: relAtlas,
       dir,
@@ -222,25 +360,27 @@ async function walk(dir, depth, maxDepth, out, rootPath) {
       base,
       atlas: atlasName,
       relAtlas,
-      relSkeleton: skeleton ? relOf(skeleton) : null,
-      skeleton,
-      skeletonKind,
-      images,
-      relImages: images.map(relOf),
+      relSkeleton: skel ? relOf(skel.name) : null,
+      skeleton: skel ? skel.name : null,
+      skeletonKind: skel ? skel.kind : null,
+      spineMinor,
+      images: found_,
+      relImages: found_.map(relOf),
+      // 预算好的缩略图（Lost Sword 的 thumb.png）。有的话前端直接取，不用离屏渲染。
+      relThumb: thumb ? relOf(thumb) : null,
       missingImages: missing,
-      ok: !!skeleton && images.length > 0 && missing.length === 0,
+      ok: !!skel && found_.length > 0 && missing.length === 0,
       // 文件改动时间：前端用它决定缩略图缓存要不要失效
       mtime: await mtimeOf(path.join(dir, atlasName)),
       problems: [
-        ...(skeleton ? [] : ['缺少 .json / .skel 骨架文件']),
-        ...(images.length ? [] : ['缺少图集贴图 .png']),
-        ...(missing.length ? [`atlas 引用了不存在的图：${missing.join(', ')}`] : []),
+        ...(skel ? [] : ['缺少骨架文件']),
+        ...(found_.length ? [] : ['缺少贴图 .png']),
       ],
     })
   }
 
   for (const sub of subdirs) {
-    await walk(sub, depth + 1, maxDepth, out, rootPath)
+    await walk(sub, depth + 1, maxDepth, out, rootPath, fmt)
   }
 }
 
@@ -253,15 +393,24 @@ function resolveRootId(id) {
   return id
 }
 
-async function scanRoot(root, force = false) {
-  const cached = scanCache.get(root.id)
+/**
+ * 扫描一个根目录。
+ *
+ * `mode` 决定用哪套命名约定（见 FORMATS）。它必须参与**缓存键** ——
+ * 否则「切到 Lost Sword 模式再切回来」会拿到另一种约定的旧结果，
+ * 表现为「切了没反应」。这是全局单一切换方案下最容易漏的一处。
+ */
+async function scanRoot(root, force = false, mode = DEFAULT_FORMAT) {
+  const fmt = formatOf(mode)
+  const cacheKey = `${root.id}|${fmt.id}`
+  const cached = scanCache.get(cacheKey)
   if (!force && cached && Date.now() - cached.time < 15000) return cached.payload
 
   const t0 = Date.now()
   const items = []
   const exists = fs.existsSync(root.path)
   if (exists) {
-    await walk(root.path, 0, config.maxDepth || 5, items, root.path)
+    await walk(root.path, 0, config.maxDepth || 5, items, root.path, fmt)
   }
 
   items.sort((a, b) => {
@@ -273,14 +422,22 @@ async function scanRoot(root, force = false) {
 
   const payload = {
     root: { id: root.id, label: root.label, path: root.path },
+    mode: fmt.id,
     exists,
     itemCount: items.length,
     playableCount: items.filter(i => i.ok).length,
     scanMs: Date.now() - t0,
     items,
   }
-  scanCache.set(root.id, { time: Date.now(), payload })
+  scanCache.set(cacheKey, { time: Date.now(), payload })
   return payload
+}
+
+/** 根目录删/改之后要把两种约定的缓存都清掉，否则另一种模式还留着旧列表 */
+function invalidateScanCache(rootId) {
+  for (const key of [...scanCache.keys()]) {
+    if (key === rootId || key.startsWith(`${rootId}|`)) scanCache.delete(key)
+  }
 }
 
 // ---------------------------------------------------------------- helpers
@@ -294,8 +451,19 @@ function sendJson(res, status, data) {
   send(res, status, JSON.stringify(data), { 'Content-Type': 'application/json; charset=utf-8' })
 }
 
+/**
+ * Content-Type。
+ *
+ * 必须看**完整文件名**而不只是 extname：Lost Sword 的 `x.atlas.bytes` 是纯文本 atlas，
+ * 而 `x.skel.bytes` / `x.bytes` 是二进制（或 JSON）骨架 —— 三个都是 `.bytes` 结尾。
+ * 一律按 extname 走会把 atlas 也发成 octet-stream，前端确实还能读，
+ * 但那属于「靠运气」，`<link>` / 预检 之类的场景会翻车。
+ */
 function contentTypeFor(filePath) {
-  return MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream'
+  const lower = filePath.toLowerCase()
+  if (lower.endsWith('.atlas.bytes')) return 'text/plain; charset=utf-8'
+  if (lower.endsWith('.bytes')) return 'application/octet-stream'
+  return MIME[path.extname(lower)] || 'application/octet-stream'
 }
 
 async function streamFile(res, absPath, { allowOutside = false } = {}) {
@@ -348,7 +516,9 @@ function deleteItems(root, items) {
   const rootAbs = path.resolve(root.path)
 
   for (const it of items) {
-    const rels = [it.relAtlas, it.relSkeleton, ...(Array.isArray(it.relImages) ? it.relImages : [])]
+    // thumb.png 也算这套资产的一部分（它是该资产预算出来的缩略图）。
+    // 不删的话目录永远清不掉，removedDirs 里也不会带上这一层。
+    const rels = [it.relAtlas, it.relSkeleton, it.relThumb, ...(Array.isArray(it.relImages) ? it.relImages : [])]
       .filter(r => typeof r === 'string' && r.trim())
     if (!rels.length) {
       failed.push({ relAtlas: String(it.relAtlas || ''), reason: '缺少文件路径' })
@@ -464,13 +634,14 @@ async function handle(req, res) {
   if (pathname === '/api/scan') {
     const rootId = url.searchParams.get('root')
     const force = url.searchParams.get('refresh') === '1'
+    const mode = url.searchParams.get('mode') || DEFAULT_FORMAT
     const root = rootId ? rootById(resolveRootId(rootId)) : config.roots[0]
     if (!root) {
       sendJson(res, 404, { error: '没有可用的根目录，请先在 viewer.config.json 里配置 roots' })
       return
     }
     try {
-      sendJson(res, 200, await scanRoot(root, force))
+      sendJson(res, 200, await scanRoot(root, force, mode))
     } catch (err) {
       sendJson(res, 500, { error: err.message })
     }
@@ -489,9 +660,9 @@ async function handle(req, res) {
       }
       const items = Array.isArray(body.items) ? body.items : []
       const out = deleteItems(root, items)
-      // 扫描结果有缓存，删完必须让它失效 —— 否则下一次「不强制刷新」的扫描
-      // 会把刚删掉的资产又从缓存里列出来（看着像删除失败）。
-      if (out.deleted.length) scanCache.delete(root.id)
+      // 扫描结果按「根目录 + 约定」双键缓存，删完两种约定都要失效 ——
+      // 否则下一次「不强制刷新」的扫描会把刚删掉的资产又从缓存里列出来（看着像删除失败）。
+      if (out.deleted.length) invalidateScanCache(root.id)
       sendJson(res, 200, out)
     } catch (err) {
       sendJson(res, 400, { error: err.message })

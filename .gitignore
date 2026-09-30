@@ -111,6 +111,7 @@ bd2-local-viewer/_test/shot*.png
 bd2-local-viewer/_test/pick_*.png
 bd2-local-viewer/_test/zoom*.png
 bd2-local-viewer/_test/e2e.png
+bd2-local-viewer/_test/e2e_*.png
 
 # ------------------------------------------------------------
 # 界面截图一律不随仓库分发
