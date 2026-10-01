@@ -114,16 +114,33 @@ public final class Host {
     }
 
     private static WebResourceResponse serveSpine(Context ctx, String rootId, String rel) {
+        if (rel == null) return text(404, "empty spine path");
         if (rel.contains("..") || rel.startsWith("/")) return text(403, "bad path");
-        ScanEngine.Doc doc = ScanEngine.find(rootId, rel);
+        // Normalize: WebView / spine-player sometimes emit //, \, or ./ segments.
+        String look = rel.replace('\\', '/');
+        while (look.contains("//")) look = look.replace("//", "/");
+        while (look.startsWith("./")) look = look.substring(2);
+        if (look.startsWith("/")) look = look.substring(1);
+
+        String alt = ScanEngine.altJczxCacheRel(look);
+        ScanEngine.Doc doc = ScanEngine.find(rootId, look);
+        if (doc == null && alt != null) doc = ScanEngine.find(rootId, alt);
+        // Desktop parity: resolve from disk when DOCS miss (import / race / case)
+        if (doc == null) doc = ScanEngine.resolveFile(rootId, look);
+        if (doc == null && alt != null) doc = ScanEngine.resolveFile(rootId, alt);
+        // Bare leaf (e.g. /spine/__public__/foo.png) after a bad rawDataURIs remap:
+        // search DOCS / bd2viewer-jczx/* / leaf.
+        if (doc == null) doc = ScanEngine.resolveLeaf(rootId, look);
         if (doc == null) {
-            Log.w(TAG, "no doc for " + rootId + "/" + rel);
+            Log.w(TAG, "no doc for " + rootId + "/" + rel + " (look=" + look + ")");
             return text(404, "not scanned: " + rel);
         }
         try {
             InputStream in = ScanEngine.open(ctx, doc);
             if (in == null) return text(404, "cannot open: " + rel);
-            return ok(mimeOf(rel), in);
+            // Prefer on-disk name for MIME when look was a bare leaf.
+            String mimePath = doc.rel != null ? doc.rel : rel;
+            return ok(mimeOf(mimePath), in);
         } catch (Exception e) {
             Log.w(TAG, "open failed " + rel + ": " + e.getMessage());
             return text(500, "open failed: " + e.getMessage());

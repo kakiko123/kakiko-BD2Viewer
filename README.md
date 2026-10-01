@@ -4,13 +4,14 @@
 把 `.atlas` + `.json/.skel` + 贴图识别成一套套可播放的资产，然后播放、切动画、切皮肤、
 显隐图层、截图和导出。
 
-支持三种资产命名约定，资产页右上角一键切换（详见 [§2.1](#21-桌面版)）：
+支持多种资产命名约定，资产页右上角一键切换（详见 [§2.1](#21-桌面版)）：
 
 | 资产类型 | 文件长什么样 | 骨架世代 |
 |---|---|---|
 | **BD2**（标准 Spine 导出） | `xxx.atlas` + `xxx.json` / `xxx.skel` + 贴图 | Spine 4.1.x |
 | **Lost Sword**（Unity TextAsset 导出） | `xxx.atlas.bytes` + `xxx.skel.bytes`（或裸 `xxx.bytes` 的 JSON 骨架）+ 贴图，目录里常带一张 `thumb.png` 直接当缩略图 | Spine 4.1.x |
 | **NIKKE**（标准 Spine 导出） | 与 BD2 同一套命名：`xxx.atlas` + `xxx.skel` + 贴图；一个角色常分几个子目录（本体 / `aim/` / `cover/`） | Spine 4.0.x |
+| **JCZX**（交错战线，桌面） | `prefabs_spine_*` / `.ab` 等双 UnityFS AssetBundle；扫描时自动抽成标准 `.atlas`+`.json`+`.png` | Spine 4.2.x |
 
 > **NIKKE 是独立的第三档模式**（资产页的三段开关）。它的文件命名与 BD2 一样，
 > 但组织方式不同：`c022_00` 是本体，`c022_aim_00` / `c022_cover_00` 是**同一个角色**
@@ -68,6 +69,8 @@ node server.mjs --open                              # ② 启动并打开浏览�
 
 Windows 上也可以直接双击 **`bd2-local-viewer/start.bat`**（会自动找 Node）。
 
+若要用 **JCZX（交错战线）** 模式：本机需 Python 3.10+。首次扫描会自动建仓库旁 `.venv-jczx` 并安装 UnityPy（需联网一次），或先跑 `bd2-local-viewer/setup_jczx.bat` / `setup_jczx.sh`。**不需要**设置环境变量。
+
 配置项的含义、多目录怎么加，见 [`docs/TECHNICAL.md` §5](docs/TECHNICAL.md#5-桌面版配置文件)。
 
 ### 1.2 手机端（APK）：装完还得做两件事，否则用不了
@@ -95,10 +98,11 @@ Android 11+ 的分区存储限制下，**App 没法自己在手机存储根目�
 
 1. 左栏是资产列表（按目录分组），右边是平铺卡片墙。缩略图是**后台逐个生成**的，
    首次进一个大目录会一张张冒出来，属正常现象（生成过的会缓存）。
-2. 卡片墙标题行右侧有 **BD2 / Lost Sword / NIKKE** 三段开关，选你资产用的是哪套。
+2. 卡片墙标题行右侧有 **BD2 / Lost Sword / NIKKE / JCZX** 资产类型开关，选你资产用的是哪套。
    它是全局设置（不分目录），切完会立即按新规则重扫，选择记在本地、下次启动沿用。
    选错了不会崩，只是列表为空 —— 因为各套约定认的文件名不同。
    **NIKKE 档**下同一角色的本体与瞄准 / 掩体姿势归成一张卡，播放页里切「姿势」。
+   **JCZX（桌面）**：首次切到该模式时若本机还没有 UnityPy，查看器会自动在仓库旁建 `.venv-jczx` 并 `pip install`（需联网一次；也可先双击 `bd2-local-viewer/setup_jczx.bat` 或跑 `setup_jczx.sh`）。**不必**设置 `BD2_JCZX_PYTHON`。
 3. 点任意一张卡片进入播放页：左侧是动画列表 / 皮肤 / 图层，底部是播放控制与速度，
    右侧是截图与导出。
 4. 要批量删：在卡片墙或列表里**长按（或右键）**进入多选 → 勾选 → 删除。
@@ -211,8 +215,8 @@ NIKKE 的标准导出），并且能同时吃 **Spine 4.0 与 4.1 两代骨架**
 搜索过滤（目录名 / 文件名 / **资产内部资源文件名**）、只显示可播放的、
 按 手动顺序 / 名称 / 日期 排序；**手动顺序下**卡片可拖动排序。
 
-**资产类型** — BD2（标准 Spine 导出）、Lost Sword（Unity TextAsset 导出）与 NIKKE
-三段开关一键切换，扫描规则随之更换；带 `thumb.png` 的资产直接拿它当缩略图，不再现场渲染。
+**资产类型** — BD2（标准 Spine 导出）、Lost Sword（Unity TextAsset 导出）、NIKKE 与
+JCZX（桌面；UnityFS → UnityPy 提取）一键切换，扫描规则随之更换；带 `thumb.png` 的资产直接拿它当缩略图，不再现场渲染。
 **NIKKE 档**按角色归组：`c022_00`（本体）与 `c022_aim_00` / `c022_cover_00`（瞄准 / 掩体）
 归成一张卡，播放页里用「姿势」按钮切换，默认动画落到 `idle` / `aim_idle` / `cover_idle`；
 它的骨架是 Spine 4.0.x 导出，查看器会自己认出版本并换上 4.0 运行时，

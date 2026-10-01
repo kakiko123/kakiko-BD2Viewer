@@ -1,0 +1,12 @@
+# Desktop JCZX extract (Phase A).
+# Preferred (no env var): from bd2-local-viewer/
+#   Windows:  setup_jczx.bat
+#   Unix:     ./setup_jczx.sh
+# Or manually:
+#   python3 -m venv ../.venv-jczx
+#   ../.venv-jczx/bin/pip install -r requirements-jczx.txt   # Win: ..\.venv-jczx\Scripts\pip
+# The viewer auto-discovers repo-local / bd2-local-viewer-local .venv-jczx.
+# Optional override only: BD2_JCZX_PYTHON=/path/to/python
+# First install needs internet once; .venv-jczx/ is gitignored.
+UnityPy>=1.20
+Pillow>=10.0

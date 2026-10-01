@@ -200,7 +200,29 @@ Node 的输出在重定向到文件时是**块缓冲**。前台跑一个长任�
 
 ---
 
-## 7. 相关文档
+---
+
+## 7. JCZX 桌面提取（无需 BD2_JCZX_PYTHON）
+
+桌面 `mode=jczx` 用 `jczx_support.mjs` 调 `_tools/jczx_extract.py`（UnityPy）。
+
+**发现顺序**（`ensureJczxPython`）：
+
+1. 可选覆盖：`BD2_JCZX_PYTHON`
+2. 仓库根或 `bd2-local-viewer/` 旁的 `.venv-jczx`（Win: `Scripts/python.exe`；Unix: `bin/python`）
+3. PATH 上能 `import UnityPy` 的 `python3` / `python`
+
+都没有时，首次扫描 / ingest 会自动 `python -m venv <repo>/.venv-jczx` + `pip install -r _tools/requirements-jczx.txt`（需联网一次）。也可手动：
+
+```bash
+cd bd2-local-viewer
+./setup_jczx.sh          # Windows: setup_jczx.bat
+```
+
+`.venv-jczx/` 已进 `.gitignore`；`requirements-jczx.txt` 留在仓库里。
+
+
+## 8. 相关文档
 
 | 文档 | 内容 |
 |---|---|

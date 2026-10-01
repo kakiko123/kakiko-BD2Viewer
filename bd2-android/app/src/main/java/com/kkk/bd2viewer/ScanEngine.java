@@ -1,5 +1,7 @@
 package com.kkk.bd2viewer;
 
+import com.kkk.bd2viewer.jczx.JczxExtractor;
+
 import android.content.ContentResolver;
 import android.content.ContentUris;
 import android.content.ContentValues;
@@ -49,7 +51,8 @@ public final class ScanEngine {
     private static final int MAX_ITEMS = 2000;
 
     private static final Set<String> SKIP_DIRS = new HashSet<>(Arrays.asList(
-            "node_modules", ".git", ".svn", "__pycache__", "$recycle.bin", "cache", "code_cache"));
+            "node_modules", ".git", ".svn", "__pycache__", "$recycle.bin", "cache", "code_cache",
+            ".venv-jczx"));
     private static final Set<String> IMG_EXT = new HashSet<>(Arrays.asList(".png", ".jpg", ".jpeg", ".webp"));
 
     /* ------------------------------------------------------------ 资产命名约定
@@ -76,6 +79,8 @@ public final class ScanEngine {
     static final String MODE_LOSTSWORD = "lostsword";
     /** NIKKE：文件命名与 bd 完全一样（差别在前端怎么归组 + 骨架是 4.0），归桶直接复用 bd 那套。 */
     static final String MODE_NIKKE = "nikke";
+    /** JCZX：打包 AB 先解到 bd2viewer-jczx/，再按 bd 规则扫抽出的 atlas/json/png（Spine 4.2）。 */
+    static final String MODE_JCZX = "jczx";
 
     /** classify() 的结果：这个文件在资产里扮演什么角色 */
     static final class Role {
@@ -101,8 +106,8 @@ public final class ScanEngine {
             if (IMG_EXT.contains(extOf(name))) return new Role(extOf(name), null);
             return null;
         }
-        // bd 与 nikke 共用同一套归桶规则（NIKKE 的文件命名与 BD2 相同，
-        // 差别在前端归组与骨架世代，见 server.mjs FORMATS.nikke 的注释）。
+        // bd / nikke / jczx（抽出后）共用同一套归桶规则。
+        // NIKKE 差别在前端归组与骨架世代；JCZX 差别在扫描前先解包 AB。
         if (l.endsWith(".atlas")) return new Role(K_ATLAS, baseName(name));
         if (l.endsWith(".skel")) return new Role(K_SKEL, baseName(name));
         if (l.endsWith(".json")) return new Role(K_JSON, baseName(name));
@@ -283,17 +288,19 @@ public final class ScanEngine {
     public static final String SUB_BD = "bd2";
     public static final String SUB_NIKKE = "nikke";
     public static final String SUB_LOSTSWORD = "lostsword";
+    public static final String SUB_JCZX = "jczx";
     /** 最近一次扫描/绑定的 mode，storageStatus / writeImport 用它挑子目录 */
     private static volatile String boundMode = MODE_BD;
 
     public static String modeFolderName(String mode) {
         if (MODE_NIKKE.equals(mode)) return SUB_NIKKE;
         if (MODE_LOSTSWORD.equals(mode)) return SUB_LOSTSWORD;
+        if (MODE_JCZX.equals(mode)) return SUB_JCZX;
         return SUB_BD;
     }
 
     public static String[] allModeFolders() {
-        return new String[]{SUB_BD, SUB_NIKKE, SUB_LOSTSWORD};
+        return new String[]{SUB_BD, SUB_NIKKE, SUB_LOSTSWORD, SUB_JCZX};
     }
 
     /** MediaStore 里拿到的一个文件条目（没有「全部文件访问」时只能这么读） */
@@ -506,6 +513,7 @@ public final class ScanEngine {
     private static String modeFolderToMode(String folder) {
         if (SUB_NIKKE.equals(folder)) return MODE_NIKKE;
         if (SUB_LOSTSWORD.equals(folder)) return MODE_LOSTSWORD;
+        if (SUB_JCZX.equals(folder)) return MODE_JCZX;
         return MODE_BD;
     }
 
@@ -521,20 +529,18 @@ public final class ScanEngine {
     }
 
     private static String readmeText() {
-        return "BD2Viewer 按游戏分三个子目录（App 会自动创建）：\r\n"
+        return "BD2Viewer 按游戏分子目录（App 会自动创建）：\r\n"
                 + "\r\n"
-                + "    BD2Viewer/bd2/        ← BD2 模式读取这里\r\n"
-                + "    BD2Viewer/nikke/      ← NIKKE 模式读取这里\r\n"
-                + "    BD2Viewer/lostsword/  ← Lost Sword 模式读取这里\r\n"
+                + "    BD2Viewer/bd2/        ← BD2 模式\r\n"
+                + "    BD2Viewer/nikke/      ← NIKKE 模式\r\n"
+                + "    BD2Viewer/lostsword/  ← Lost Sword 模式\r\n"
+                + "    BD2Viewer/jczx/       ← 交错战线 JCZX（可直接放打包 AB）\r\n"
                 + "\r\n"
-                + "每个子目录里，一套 Spine 资产一个子文件夹：\r\n"
+                + "BD2 / NIKKE / Lost Sword：一套 Spine 一个子文件夹（atlas + json/skel + png）。\r\n"
+                + "JCZX：把 prefabs_spine_* / UnityFS 包丢进 jczx/，App 扫描时自动解包到\r\n"
+                + "bd2viewer-jczx/ 缓存后再播放（Spine 4.2）。大文件建议用文件管理器拷贝。\r\n"
                 + "\r\n"
-                + "    xxx.atlas\r\n"
-                + "    xxx.json  或  xxx.skel\r\n"
-                + "    xxx.png（图集页，可能不止一张）\r\n"
-                + "\r\n"
-                + "Lost Sword 是 Unity TextAsset：xxx.atlas.bytes + xxx.skel.bytes（或裸 xxx.bytes）+ xxx.png，\r\n"
-                + "目录里还可以带一张预算好的 thumb.png。\r\n"
+                + "Lost Sword 是 Unity TextAsset：xxx.atlas.bytes + xxx.skel.bytes（或裸 xxx.bytes）+ xxx.png。\r\n"
                 + "\r\n"
                 + "懒得用数据线的话，也可以直接用 App 里的「导入文件」。\r\n";
     }
@@ -702,16 +708,19 @@ public final class ScanEngine {
         JSONArray items;
         synchronized (SCAN_LOCK) { items = CACHE.get(key); }
 
+        JSONObject jczxMeta = null;
         if (force || items == null) {
             JSONArray fresh = new JSONArray();
             dirCount = 0;
-            deadline = System.currentTimeMillis() + SCAN_BUDGET_MS;
+            // JCZX 解包（LZMA→百兆级）在中端机上可能要几十秒；放宽预算避免扫一半被掐
+            long budget = MODE_JCZX.equals(mode) ? Math.max(SCAN_BUDGET_MS, 180_000L) : SCAN_BUDGET_MS;
+            deadline = System.currentTimeMillis() + budget;
             synchronized (SCAN_LOCK) {
                 java.util.Iterator<String> it = DOCS.keySet().iterator();
                 while (it.hasNext()) if (it.next().startsWith(rootId + "|")) it.remove();
                 // 本次扫描会把这个 rootId 的 DOCS 整个重建，其它 mode 桶的缓存项
                 // 此刻已经指向不存在的索引了，必须一起丢掉，否则切回去会 404。
-                // 按 rootId| 前缀清（含 bd / lostsword / nikke），以后加 mode 不用再改这里。
+                // 按 rootId| 前缀清（含 bd / lostsword / nikke / jczx），以后加 mode 不用再改这里。
                 java.util.Iterator<String> cit = CACHE.keySet().iterator();
                 while (cit.hasNext()) {
                     String k = cit.next();
@@ -719,12 +728,44 @@ public final class ScanEngine {
                 }
             }
             if (root != null) {
+                // JCZX：扫描前把根下双 UnityFS AB 解到 bd2viewer-jczx/（纯 Java，无 Python）
+                if (MODE_JCZX.equals(mode) && "file".equals(root.kind) && root.path != null) {
+                    try {
+                        JczxExtractor.migrateLegacyCache(new File(root.path));
+                        jczxMeta = JczxExtractor.prepareRoot(new File(root.path));
+                        Log.i(TAG, "jczx prepare: " + jczxMeta);
+                    } catch (Throwable e) {
+                        Log.e(TAG, "jczx prepare failed", e);
+                        try {
+                            jczxMeta = new JSONObject();
+                            jczxMeta.put("ok", false);
+                            jczxMeta.put("bundles", 0);
+                            jczxMeta.put("extracted", new JSONArray());
+                            jczxMeta.put("reused", new JSONArray());
+                            JSONArray errs = new JSONArray();
+                            errs.put(new JSONObject().put("src", JSONObject.NULL)
+                                    .put("error", String.valueOf(e.getMessage())));
+                            jczxMeta.put("errors", errs);
+                        } catch (Exception ignored) { /* */ }
+                    }
+                }
                 if ("ms".equals(root.kind)) {
                     walkMs(ctx, fresh, root, mode);
                 } else if ("file".equals(root.kind) && root.path != null) {
                     walkFile(new File(root.path), 0, fresh, root, mode);
                 } else if (root.treeUri != null) {
                     walkSaf(ctx, Uri.parse(root.treeUri), "", 0, fresh, root, mode);
+                }
+                // jczx 模式只保留缓存目录里抽出的条目（与桌面 server.mjs 一致）
+                if (MODE_JCZX.equals(mode)) {
+                    JSONArray filtered = new JSONArray();
+                    for (int i = 0; i < fresh.length(); i++) {
+                        JSONObject o = fresh.optJSONObject(i);
+                        if (o == null) continue;
+                        String rel = o.optString("relAtlas", o.optString("id", ""));
+                        if (JczxExtractor.isCacheRel(rel)) filtered.put(o);
+                    }
+                    fresh = filtered;
                 }
             }
             synchronized (SCAN_LOCK) { CACHE.put(key, fresh); }
@@ -744,6 +785,7 @@ public final class ScanEngine {
             out.put("playableCount", playable);
             out.put("truncated", dirCount >= MAX_DIRS);
             out.put("scanMs", (int) (System.currentTimeMillis() - t0));
+            if (jczxMeta != null) out.put("jczx", jczxMeta);
         } catch (Exception ignored) {
         }
         return out;
@@ -787,7 +829,10 @@ public final class ScanEngine {
         for (File f : list) {
             if (f.isDirectory()) {
                 String n = f.getName().toLowerCase(Locale.ROOT);
-                if (!SKIP_DIRS.contains(n)) subdirs.add(f);
+                if (SKIP_DIRS.contains(n)) continue;
+                // JCZX 解包缓存（含旧版 .bd2viewer-jczx）：仅 jczx 模式进入
+                if (JczxExtractor.isCacheDirName(f.getName()) && !MODE_JCZX.equals(mode)) continue;
+                subdirs.add(f);
             } else if (f.isFile()) {
                 Role r = classify(f.getName(), mode);
                 if (r == null || r.bucket == null) continue;
@@ -853,7 +898,13 @@ public final class ScanEngine {
             List<String> missing = new ArrayList<>();
             for (String p : pages) {
                 Entry hit = null;
-                for (Entry f : imgs) if (f.name.equals(p) || f.name.equals(new File(p).getName())) { hit = f; break; }
+                String pageBase = new File(p).getName();
+                for (Entry f : imgs) {
+                    if (f.name.equals(p) || f.name.equals(pageBase)
+                            || f.name.equalsIgnoreCase(p) || f.name.equalsIgnoreCase(pageBase)) {
+                        hit = f; break;
+                    }
+                }
                 if (hit != null) images.add(hit);
                 else missing.add(p);
             }
@@ -1149,7 +1200,9 @@ public final class ScanEngine {
         for (SafEntry e : kids) {
             if (e.isDir) {
                 String n = (e.name == null ? "" : e.name.toLowerCase(Locale.ROOT));
-                if (!SKIP_DIRS.contains(n)) subdirs.add(e);
+                if (SKIP_DIRS.contains(n)) continue;
+                if (JczxExtractor.isCacheDirName(e.name) && !MODE_JCZX.equals(mode)) continue;
+                subdirs.add(e);
             } else {
                 Role r = classify(e.name, mode);
                 if (r == null || r.bucket == null) continue;
@@ -1373,14 +1426,161 @@ public final class ScanEngine {
     /* ------------------------------------------------------------ 取文件 */
 
     public static Doc find(String rootId, String rel) {
-        if (rootId == null) return null;
+        if (rootId == null || rel == null) return null;
         Doc d = DOCS.get(rootId + "|" + rel);
         if (d != null) return d;
-        // 有些 atlas 里写的页名带目录前缀，做一次后缀匹配
+        String alt = altJczxCacheRel(rel);
+        if (alt != null) {
+            d = DOCS.get(rootId + "|" + alt);
+            if (d != null) return d;
+        }
+        String prefix = rootId + "|";
+        String wantExactLower = (prefix + rel).toLowerCase(Locale.ROOT);
+        String wantAltLower = alt != null ? (prefix + alt).toLowerCase(Locale.ROOT) : null;
+        String wantSuffixLower = ("/" + rel).toLowerCase(Locale.ROOT);
         for (Map.Entry<String, Doc> e : DOCS.entrySet()) {
-            if (e.getKey().startsWith(rootId + "|") && e.getKey().endsWith("/" + rel)) return e.getValue();
+            String k = e.getKey();
+            if (!k.regionMatches(true, 0, prefix, 0, prefix.length())) continue;
+            String kl = k.toLowerCase(Locale.ROOT);
+            if (kl.equals(wantExactLower) || (wantAltLower != null && kl.equals(wantAltLower)))
+                return e.getValue();
+            if (kl.endsWith(wantSuffixLower)) return e.getValue();
         }
         return null;
+    }
+
+    /** Swap bd2viewer-jczx ↔ .bd2viewer-jczx prefix; null if not a cache rel. */
+    static String altJczxCacheRel(String rel) {
+        if (rel == null) return null;
+        String a = JczxExtractor.CACHE_DIRNAME;
+        String b = JczxExtractor.CACHE_DIRNAME_LEGACY;
+        if (rel.equals(a) || rel.startsWith(a + "/"))
+            return b + rel.substring(a.length());
+        if (rel.equals(b) || rel.startsWith(b + "/"))
+            return a + rel.substring(b.length());
+        return null;
+    }
+
+    /**
+     * Desktop-style resolve: open root.path + rel when DOCS miss (case-insensitive leaf).
+     * Keeps JCZX / large trees loadable even if index drifted.
+     */
+    public static Doc resolveFile(String rootId, String rel) {
+        if (rootId == null || rel == null || rel.contains("..") || rel.startsWith("/")) return null;
+        Root root = rootById(rootId);
+        if (root == null || root.path == null) return null;
+        try {
+            File base = new File(root.path).getCanonicalFile();
+            File f = new File(base, rel).getCanonicalFile();
+            if (!f.getPath().equals(base.getPath())
+                    && !f.getPath().startsWith(base.getPath() + File.separator)) {
+                return null;
+            }
+            if (!f.isFile()) {
+                // try alternate cache prefix
+                String alt = altJczxCacheRel(rel);
+                if (alt != null) {
+                    f = new File(base, alt).getCanonicalFile();
+                    if (!f.getPath().startsWith(base.getPath() + File.separator) || !f.isFile()) {
+                        f = caseInsensitiveResolve(base, rel);
+                    }
+                } else {
+                    f = caseInsensitiveResolve(base, rel);
+                }
+            }
+            if (f == null || !f.isFile()) return null;
+            Doc d = new Doc();
+            d.rel = rel;
+            d.file = f;
+            // warm index for subsequent page requests
+            DOCS.put(rootId + "|" + rel, d);
+            return d;
+        } catch (Exception e) {
+            Log.w(TAG, "resolveFile: " + e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Resolve a bare filename (or any rel) by suffix against DOCS, then by
+     * scanning bd2viewer-jczx/* /leaf on disk. Covers bad rawDataURIs remaps
+     * that drop the JCZX cache prefix.
+     */
+    public static Doc resolveLeaf(String rootId, String rel) {
+        if (rootId == null || rel == null || rel.isEmpty()) return null;
+        String leaf = rel.replace('\\', '/');
+        int slash = leaf.lastIndexOf('/');
+        if (slash >= 0) leaf = leaf.substring(slash + 1);
+        if (leaf.isEmpty()) return null;
+        String prefix = rootId + "|";
+        Doc hit = null;
+        int hits = 0;
+        for (Map.Entry<String, Doc> e : DOCS.entrySet()) {
+            String k = e.getKey();
+            if (!k.regionMatches(true, 0, prefix, 0, prefix.length())) continue;
+            String name = k.substring(prefix.length());
+            int ns = name.lastIndexOf('/');
+            String base = ns >= 0 ? name.substring(ns + 1) : name;
+            if (base.equalsIgnoreCase(leaf)) {
+                hit = e.getValue();
+                hits++;
+                if (hits > 1) break;
+            }
+        }
+        if (hits == 1) return hit;
+        // Disk: root/bd2viewer-jczx/*/leaf (and legacy dot cache)
+        Root root = rootById(rootId);
+        if (root == null || root.path == null) return hits == 1 ? hit : null;
+        File baseDir = new File(root.path);
+        for (String cacheName : new String[]{
+                JczxExtractor.CACHE_DIRNAME, JczxExtractor.CACHE_DIRNAME_LEGACY}) {
+            File cacheRoot = new File(baseDir, cacheName);
+            if (!cacheRoot.isDirectory()) continue;
+            File[] kids = cacheRoot.listFiles();
+            if (kids == null) continue;
+            for (File sub : kids) {
+                if (!sub.isDirectory()) continue;
+                File f = new File(sub, leaf);
+                if (!f.isFile()) {
+                    File[] files = sub.listFiles();
+                    f = null;
+                    if (files != null) {
+                        for (File cand : files) {
+                            if (cand.isFile() && cand.getName().equalsIgnoreCase(leaf)) {
+                                f = cand; break;
+                            }
+                        }
+                    }
+                }
+                if (f != null && f.isFile()) {
+                    Doc d = new Doc();
+                    d.rel = cacheName + "/" + sub.getName() + "/" + f.getName();
+                    d.file = f;
+                    DOCS.put(rootId + "|" + d.rel, d);
+                    return d;
+                }
+            }
+        }
+        return hits >= 1 ? hit : null;
+    }
+
+    /** Walk path segments with case-insensitive match (exFAT / sdcard). */
+    private static File caseInsensitiveResolve(File base, String rel) {
+        File cur = base;
+        for (String seg : rel.replace('\\', '/').split("/")) {
+            if (seg.isEmpty()) continue;
+            File next = new File(cur, seg);
+            if (next.exists()) { cur = next; continue; }
+            File[] kids = cur.listFiles();
+            if (kids == null) return null;
+            File hit = null;
+            for (File k : kids) {
+                if (k.getName().equalsIgnoreCase(seg)) { hit = k; break; }
+            }
+            if (hit == null) return null;
+            cur = hit;
+        }
+        return cur;
     }
 
     public static InputStream open(Context ctx, Doc d) {

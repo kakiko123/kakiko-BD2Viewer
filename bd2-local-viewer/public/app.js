@@ -16,6 +16,7 @@
    index.html 同时引入两套运行时（见那里的注释）：
      · window.spine    —— spine-player 4.1.55，BD2 / Lost Sword 的骨架是 4.1.x 导出
      · window.spine40  —— spine-player 4.0.31，NIKKE 的骨架是 4.0.x 导出
+     · window.spine42  —— spine-player 4.2.120，交错战线 (JCZX) 等 4.2.x 骨架
 
    为什么要两套：Spine 的骨架与运行时只在 **major.minor 相同**时互通。4.1 运行时读 4.0
    骨架不会报「版本不符」，而是照 4.1 的二进制布局去读，把字节读成 4.1 才有的 sequence
@@ -30,14 +31,35 @@
    互相踩。 */
 const SPINE_DEFAULT = window.spine      // 4.1.55
 const SPINE40 = window.spine40 || null  // 4.0.31；老的无 4.0 产物里会是 null
-const SPINE_BY_MINOR = { '4.0': SPINE40 || SPINE_DEFAULT, '4.1': SPINE_DEFAULT }
+const SPINE42 = window.spine42 || null  // 4.2.120；JCZX 等 4.2.x 骨架
+const SPINE_BY_MINOR = {
+  '4.0': SPINE40 || SPINE_DEFAULT,
+  '4.1': SPINE_DEFAULT,
+  '4.2': SPINE42 || SPINE_DEFAULT,
+}
 const spine = SPINE_DEFAULT             // 无会话时的默认运行时
 
-/** 骨架 minor 版本（'4.0' / '4.1'）→ 运行时。认不出来时用默认（4.1）。 */
+/** 骨架 minor 版本（'4.0' / '4.1' / '4.2'）→ 运行时。认不出来时用默认（4.1）。 */
 function spineRuntimeForVer(minor) { return SPINE_BY_MINOR[minor] || SPINE_DEFAULT }
 
 /** 当前播放会话的运行时。载入资产时定在 S.spine 上，没有会话时退回默认。 */
 function activeSpine() { return S.spine || SPINE_DEFAULT }
+
+
+/** Spine 4.2+：Skeleton#updateWorldTransform(physics) 必传 Physics 枚举；
+ *  漏传会抛 "physics is undefined"，而 onLoaded 跑在 spine-player 的 drawFrame
+ *  try/catch 里 → 被包成「Unable to render skeleton」。4.0/4.1 无此参，原样空调。
+ *  mode 省略时用 Physics.update（与官方 player 渲染循环一致）。 */
+function skeletonUpdateWorld(skeleton, mode) {
+  if (!skeleton) return
+  const Physics = (S.spine || SPINE_DEFAULT)?.Physics
+  if (Physics != null) {
+    skeleton.updateWorldTransform(mode != null ? mode : Physics.update)
+  } else {
+    skeleton.updateWorldTransform()  // 4.0 / 4.1：无 physics 参数
+  }
+}
+
 
 const JSZip = window.JSZip
 
@@ -176,7 +198,7 @@ const I18N_EN = {
   /* ---- 舞台 ---- */
   '加载中…': 'Loading…',
   '从右侧选一个资产开始查看': 'Pick an asset on the right to start',
-  '也可以直接点「上传文件」或把文件夹拖进这个窗口': 'Or click "Upload Files" / drag a folder into this window',
+  '也可以点「上传文件」，再在投放区拖入文件夹': 'Or tap Upload, then drop a folder onto the drop zone',
   '上一个动画': 'Previous animation',
   '下一个动画': 'Next animation',
 
@@ -398,6 +420,13 @@ const I18N_EN = {
   '有 {n} 个资产没能删除：': '{n} asset(s) could not be deleted: ',
   '有 {n} 个文件没导入成功：{list}': '{n} file(s) failed to import: {list}',
   '已导入 {n} 个文件': '{n} file(s) imported',
+  '正在提取 JCZX 资产…': 'Extracting JCZX assets…',
+  'JCZX 提取完成，正在刷新列表…': 'JCZX extract done, refreshing…',
+  'JCZX 提取失败：{msg}': 'JCZX extract failed: {msg}',
+  '正在准备 JCZX 环境（首次需联网安装 UnityPy）…': 'Preparing JCZX env (first time needs network for UnityPy)…',
+  'JCZX 环境已就绪': 'JCZX environment ready',
+  'JCZX 环境未就绪：{msg}': 'JCZX env not ready: {msg}',
+  'JCZX 提取：新建 {n}，复用 {m}': 'JCZX extract: {n} new, {m} reused',
   '已接收 {n} 个文件，点「载入」开始': '{n} file(s) received — click Load to start',
   '导入 {i}/{total} · {name}': 'Importing {i}/{total} · {name}',
   '导入 0/{total} …': 'Importing 0/{total} …',
@@ -426,6 +455,8 @@ const I18N_EN = {
   '+{n} 张贴图': '+{n} textures',
   ' · {n} 图': ' · {n} images',
   '超过 12MB': 'over 12MB',
+  '超过 48MB（更大请拷到手机存储 /BD2Viewer/jczx/ 后点重新扫描）':
+    'Over 48MB (for larger files, copy into /BD2Viewer/jczx/ then Rescan)',
   '未知原因': 'unknown reason',
 
   /* ---- 手机端存储条 ---- */
@@ -512,9 +543,9 @@ function saveLang(v) {
    id 必须与 server.mjs 的 FORMATS 键、ScanEngine 的 MODE_* 一致。 */
 
 const MODE_KEY = 'bd2.mode'
-const ASSET_MODES = ['bd', 'lostsword', 'nikke']
+const ASSET_MODES = ['bd', 'lostsword', 'nikke', 'jczx']
 /** 专名：中英界面都写原文，不进翻译表（R11.1） */
-const MODE_LABEL = { bd: 'BD2', lostsword: 'Lost Sword', nikke: 'NIKKE' }
+const MODE_LABEL = { bd: 'BD2', lostsword: 'Lost Sword', nikke: 'NIKKE', jczx: 'JCZX' }
 
 function loadMode() {
   try {
@@ -719,7 +750,7 @@ function applyGLTexturePatch(enabled) {
   // 两套运行时各有一份 GLTexture，只打一套的话切到另一代的资产就失效了
   // （NIKKE 用 4.0，BD2 用 4.1，同一目录里可能混着）。两套的 patched/original
   // 分开记，反复开关也不会把 patch 叠成两层。
-  for (const rt of new Set([SPINE_DEFAULT, SPINE40].filter(Boolean))) {
+  for (const rt of new Set([SPINE_DEFAULT, SPINE40, SPINE42].filter(Boolean))) {
     let st = glPatchStates.get(rt)
     if (!st) { st = makeGLTexturePatch(rt); glPatchStates.set(rt, st) }
     st.proto.update = enabled ? st.patched : st.original
@@ -735,6 +766,10 @@ function applyGLTexturePatch(enabled) {
  */
 
 const NATIVE = typeof window.BD2Native !== 'undefined' && !!window.BD2Native
+/** UI / about version — keep in sync with package.json + Android versionName. */
+const APP_VERSION = (NATIVE && window.BD2Native.appVersion)
+  ? (window.BD2Native.appVersion() || '1.05')
+  : '1.05'
 
 const nativeWaiters = {}
 function nativeAsk(kind, call, timeoutMs = 120000) {
@@ -1002,7 +1037,7 @@ function setupFullscreenUI() {
 
   // 蒙版：抽屉状态下点空白收起
   $('sheetScrim').addEventListener('click', () => { if (fsMode) toggleFsFiles(false) })
-  $('stageInner').addEventListener('pointerdown', () => { wakeFsBar(); revealCleanUI() })
+  $('stageInner').addEventListener('pointerdown', () => { if (cleanUI) revealCleanUI(); else wakeFsBar() })
 
   // 双击定点放大（全屏里最常用，播放页也顺手支持）
   setupDoubleTapZoom()
@@ -1081,7 +1116,8 @@ function switchAnimation(dir) {
   const name = S.animations[i]
   if (!name) return
   playAnimation(name)
-  toast(`${name}　${i + 1}/${S.animations.length}`)
+  // 隐藏界面（只看画面）时别弹 toast：内容和底栏一样，看起来像控件又露出来了
+  if (!cleanUI) toast(`${name}　${i + 1}/${S.animations.length}`)
 }
 
 /** 全局轻提示（保存顺序 / 删除资产 / 切资产 / 缩放倍数都走它）。
@@ -1128,7 +1164,9 @@ let cleanUI = false
 let cleanRevealTimer = 0
 
 function setCleanUI(on) {
-  cleanUI = !!on
+  on = !!on
+  if (on === cleanUI) return
+  cleanUI = on
   document.body.classList.toggle('is-cleanui', cleanUI)
   if (!cleanUI) {
     document.body.classList.remove('fs-reveal')
@@ -1185,9 +1223,8 @@ function syncCameraViewport() {
 
 /** 双击放大的档位：每次双击往上走一档，到顶档再双击才还原。
  *  不能写成「放大 / 还原」的二值开关 —— 那样第二下就弹回去了。
- *  顶档取 12.4 而不是 2.6³≈17.7：currentZoomRatio() 把比值夹在 [0.08, 4]，
- *  也就是最多只能读出 12.5×；档位一旦超过它就会「量不出来」，导致永远判定不到顶、
- *  第四下也还原不了（2026-09-25 实测踩到）。 */
+ *  顶档取 12.4（约等于旧 UI 按钮/夹取上限 1/0.08=12.5×）作为双击阶梯的终点；
+ *  双指捏合仍可越过此档——切动画 / 转屏时必须按真实比例保留，不能再夹回 12.5×。 */
 const ZOOM_LADDER = [2.6, 6.8, 12.4]
 const ZOOM_TOP = ZOOM_LADDER[ZOOM_LADDER.length - 1]
 
@@ -1266,7 +1303,8 @@ function switchItem(dir) {
   const item = list[i]
   if (!item || itemKey(item) === cur) return
   selectItem(item)
-  toast(`${item.folder}　${i + 1}/${list.length}`)
+  // 隐藏界面模式下别用 toast 当「顶栏替代品」，否则看起来像 chrome 又回来了
+  if (!cleanUI) toast(`${item.folder}　${i + 1}/${list.length}`)
   syncStageNav()
 }
 
@@ -1299,13 +1337,14 @@ async function loadConfig() {
   }
   if (NATIVE) {
     const dir = nativeDefaultPath()
-    $('envInfo').textContent = dir
+    const base = dir
       ? t('文件目录：{path}', { path: dir })
       : t('APK 模式 · 从手机存储读取 · 扫描深度 {depth}', { depth: S.config.maxDepth || 6 })
+    $('envInfo').textContent = base + ' · v' + APP_VERSION
   } else {
     $('envInfo').textContent = t('本地服务 {host}:{port} · 扫描深度 {depth}', {
       host: S.config.host, port: S.config.port, depth: S.config.maxDepth,
-    })
+    }) + ' · v' + APP_VERSION
   }
   renderRootOptions()
   renderStorageBar()
@@ -1528,7 +1567,7 @@ async function scan(force) {
     refreshLists()
     return
   }
-  setBusy(true, t('扫描中…'))
+  setBusy(true, S.mode === 'jczx' ? t('正在提取 JCZX 资产…') : t('扫描中…'))
   // 先清掉：换了目录 / 扫描失败时不能留着上一个目录的绝对路径，
   // 否则菜单里会拿旧前缀去拼新资产的相对路径，拼出一条不存在的路径。
   S.rootPath = ''
@@ -1561,6 +1600,20 @@ async function scan(force) {
     if (!data.exists) showError(t('目录不存在：{path}', { path: data.root.path }))
     $('assetCount').textContent = t('{ok}/{total} 可播放', { ok: data.playableCount, total: data.itemCount }) +
       (data.scanMs ? ` · ${data.scanMs}ms` : '')
+    if (data.jczx) {
+      const jz = data.jczx
+      if (jz.setup && jz.setup.message) {
+        if (jz.setup.ok) toast(jz.setup.message)
+        else toast(t('JCZX 环境未就绪：{msg}', { msg: jz.setup.message }))
+      }
+      if (jz.errors && jz.errors.length && !(jz.setup && jz.setup.message)) {
+        toast(t('JCZX 提取失败：{msg}', { msg: jz.errors[0].error || String(jz.errors.length) }))
+      } else if ((jz.extracted && jz.extracted.length) || (jz.reused && jz.reused.length)) {
+        const n = (jz.extracted || []).length
+        const m = (jz.reused || []).length
+        if (n || m) toast(t('JCZX 提取：新建 {n}，复用 {m}', { n, m }))
+      }
+    }
   } catch (err) {
     if (seq === scanSeq) showError(t('扫描失败：') + err.message)
   } finally {
@@ -2032,7 +2085,43 @@ let thumbDone = 0
 
 /** 缩略图缓存 key：同一套资产文件换了（mtime 变）就换 key，等于自动失效 */
 function thumbKey(item) {
-  return `${S.rootId || ''}|${itemKey(item)}|${item.mtime || 0}|${item.images.length}`
+  return `${S.rootId || ''}|${itemKey(item)}|${item.mtime || 0}|${(item.images || []).length}`
+}
+
+/** 前缀：同一 root + 同一资产（忽略 mtime / 图数漂移）。用于复用已生成的本地缓存。 */
+function thumbKeyPrefix(item) {
+  return `${S.rootId || ''}|${itemKey(item)}|`
+}
+
+/**
+ * 优先读已有缓存。精确 key 命中即用；
+ * 仅当 mtime 不可靠（0，SAF/部分机型）时，才回退到同资产的旧 key，避免无意义重渲。
+ * 真有 mtime 时仍靠 key 失效 —— 文件改了就该重生成。
+ * @returns {{ url: string } | { failed: true } | null}
+ */
+function thumbCacheLookup(item) {
+  const exact = thumbKey(item)
+  const hit = thumbCache.get(exact)
+  if (typeof hit === 'string' && hit) return { url: hit }
+  if (thumbFailed.has(exact)) return { failed: true }
+  // mtime 可靠时不模糊匹配，否则改文件后还会贴旧图
+  if ((item.mtime || 0) !== 0 || !itemKey(item)) return null
+  const prefix = thumbKeyPrefix(item)
+  for (const [k, v] of thumbCache) {
+    if (typeof k === 'string' && k.startsWith(prefix) && typeof v === 'string' && v) {
+      thumbCache.set(exact, v)
+      idbPut(exact, v)
+      return { url: v }
+    }
+  }
+  for (const k of thumbFailed) {
+    if (typeof k === 'string' && k.startsWith(prefix)) {
+      thumbFailed.add(exact)
+      idbPut(exact, '')
+      return { failed: true }
+    }
+  }
+  return null
 }
 
 /* IndexedDB：缩略图比 localStorage 大得多，放这儿不会撑爆 5MB 配额 */
@@ -2046,7 +2135,10 @@ function idb() {
       rq.onsuccess = () => resolve(rq.result)
       rq.onerror = () => reject(rq.error)
     } catch (e) { reject(e) }
-  }).catch(() => null)
+  }).catch(() => {
+    idbPromise = null   // 下次再试：WebView 偶发第一次 open 失败
+    return null
+  })
   return idbPromise
 }
 
@@ -2091,7 +2183,11 @@ function loadThumbCache() {
   if (thumbLoadPromise) return thumbLoadPromise
   thumbLoadPromise = (async () => {
     const db = await idb()
-    if (!db) { thumbLoaded = true; return }
+    if (!db) {
+      thumbLoaded = true
+      thumbLoadPromise = null   // 允许下次 scan 再读盘上的已生成缩略图
+      return
+    }
     await new Promise(resolve => {
       let rq
       try { rq = db.transaction('thumbs').objectStore('thumbs').openCursor() } catch { resolve(); return }
@@ -2570,13 +2666,12 @@ function galleryCard(item) {
   }
 
   const thumb = el.querySelector('.card-thumb')
-  const tk = thumbKey(item)
-  const cached = thumbCache.get(tk)
-  // 资产自带 thumb.png 时直接用它：省掉一次离屏 WebGL 渲染，
-  // 也顺带把「坏文件渲染不出来」这类卡片救回来。缓存优先，其次是它。
+  // 优先：内存/IndexedDB 已生成的图 → 磁盘自带 thumb.png → 再离屏渲。
+  // 有现成的就绝不进队列（以前缓存命中仍 observe，偶发会重渲）。
+  const lookup = thumbCacheLookup(item)
   const builtin = builtinThumbUrl(item)
-  if (cached) setCardThumb(thumb, cached)
-  else if (thumbFailed.has(tk)) setCardThumbFailed(thumb)   // 上次就失败了，直接摆出来，不再排队
+  if (lookup && lookup.url) setCardThumb(thumb, lookup.url)
+  else if (lookup && lookup.failed) setCardThumbFailed(thumb)
   else if (builtin) setCardThumb(thumb, builtin)
 
   el.addEventListener('click', e => {
@@ -2609,9 +2704,8 @@ function galleryCard(item) {
     startCardDrag(e, el)
   })
 
-  // 上次就失败的不再排队（否则每次启动都去重新拉一遍坏文件，还会拖慢队列）；
-  // 自带 thumb.png 的也不用排队 —— 离屏渲染单元只留给真正需要渲的卡片。
-  if (!builtin && !thumbFailed.has(tk)) {
+  // 已有缓存 / 失败标记 / 磁盘 thumb.png：都不进离屏渲染队列
+  if (!(lookup && (lookup.url || lookup.failed)) && !builtin) {
     if (thumbObserver) thumbObserver.observe(el)
     else el.__wantThumb = true
   }
@@ -2651,6 +2745,30 @@ function thumbKick() {
   const item = itemMap.get(card.dataset.key)
   if (!item || !item.ok) { card.__wantThumb = false; updateThumbStatus(); setTimeout(thumbKick, 0); return }
   const key = thumbKey(item)
+  // 已有本地缓存（含 mtime 漂移后的旧 key）→ 直接贴上，绝不重渲/重拉
+  const existing = thumbCacheLookup(item)
+  if (existing && existing.url) {
+    card.__wantThumb = false
+    setCardThumb(card.querySelector('.card-thumb'), existing.url)
+    updateThumbStatus()
+    setTimeout(thumbKick, 0)
+    return
+  }
+  if (existing && existing.failed) {
+    card.__wantThumb = false
+    setCardThumbFailed(card.querySelector('.card-thumb'))
+    updateThumbStatus()
+    setTimeout(thumbKick, 0)
+    return
+  }
+  const disk = builtinThumbUrl(item)
+  if (disk) {
+    card.__wantThumb = false
+    setCardThumb(card.querySelector('.card-thumb'), disk)
+    updateThumbStatus()
+    setTimeout(thumbKick, 0)
+    return
+  }
   thumbAsked.add(key)
   thumbRunning = true
   makeThumb(item).then(url => {
@@ -3275,13 +3393,31 @@ function urlsForItem(item) {
   const atlasUrl = assetUrl(item.relAtlas)
   const skeletonUrl = assetUrl(item.relSkeleton)
   // 给 spine-player 兜底：告诉它 atlas 里每个页名最终该从哪取。
+  // 必须用 relImages（相对根的完整路径）。images[] 只有文件名；
+  // JCZX 缓存在 bd2viewer-jczx/<hash>_…/ 下，用裸文件名会拼成
+  // /spine/<root>/foo.png（丢前缀）→ WebView 404 → Assets could not be loaded。
   const rawDataURIs = {}
   const baseUrl = new URL(atlasUrl, location.href)
-  for (let i = 0; i < item.images.length; i++) {
-    const pageName = item.images[i].split('/').pop()
-    const abs = assetUrl(item.images[i])
-    try { rawDataURIs[new URL(pageName, baseUrl).href] = abs } catch { /* ignore */ }
+  const imgs = item.images || []
+  for (let i = 0; i < imgs.length; i++) {
+    const pageName = String(imgs[i]).split('/').pop()
+    let rel = (item.relImages && item.relImages[i]) || null
+    if (!rel || !String(rel).includes('/')) {
+      // 从 atlas 同目录推导（嵌套缓存 / 旧扫描缺 relImages）
+      if (item.relAtlas && String(item.relAtlas).includes('/')) {
+        rel = String(item.relAtlas).replace(/[^/]+$/, pageName)
+      } else {
+        rel = rel || imgs[i]
+      }
+    }
+    const abs = assetUrl(rel)
+    try {
+      const absUrl = new URL(pageName, baseUrl)
+      rawDataURIs[absUrl.href] = abs
+      rawDataURIs[absUrl.pathname] = abs
+    } catch { /* ignore */ }
     rawDataURIs[pageName] = abs
+    if (abs) rawDataURIs[abs] = abs
   }
   return { atlasUrl, skeletonUrl, skeletonKind: item.skeletonKind, rawDataURIs }
 }
@@ -3304,6 +3440,23 @@ function urlsForItem(item) {
  */
 async function spineMinorFor(item) {
   if (item._spineMinor !== undefined) return item._spineMinor
+  // 服务端扫描已读过骨架头 / JSON 的 spine 字段（含 JCZX 4.2）
+  if (item.spineMinor === '4.0' || item.spineMinor === '4.1' || item.spineMinor === '4.2') {
+    return (item._spineMinor = item.spineMinor)
+  }
+  if (item.skeletonKind === 'json') {
+    const url = (urlsForItem(item) || {}).skeletonUrl
+    if (!url) return (item._spineMinor = null)
+    try {
+      const res = await fetch(url)
+      if (!res.ok) return (item._spineMinor = null)
+      const text = await res.text()
+      const m = /"spine"\s*:\s*"4\.(\d)\./.exec(text.slice(0, 4096))
+      return (item._spineMinor = m ? `4.${m[1]}` : null)
+    } catch {
+      return (item._spineMinor = null)
+    }
+  }
   if (item.skeletonKind !== 'skel') return (item._spineMinor = null)
   // 走 urlsForItem 而不是直接拼 assetUrl：手动上传的条目只有 blob URL，
   // 没有 relSkeleton / rootId，直接拼会拼出 null 再去 fetch 当前页面。
@@ -3497,7 +3650,7 @@ function onLoaded(player) {
   }
 
   skeleton.setToSetupPose()
-  skeleton.updateWorldTransform()
+  skeletonUpdateWorld(skeleton)
 
   // 动画 / 皮肤 / 图层
   S.animations = (player.animationState?.data?.skeletonData?.animations || []).map(a => a.name)
@@ -3635,7 +3788,7 @@ function measureAnimationBox(skeleton, entry, samples = 16) {
       } else {
         skeleton.setToSetupPose()
       }
-      skeleton.updateWorldTransform()
+      skeletonUpdateWorld(skeleton)
     } catch { continue }
     const b = contentBoxOf(skeleton)
     if (b) frames.push(b)
@@ -3645,7 +3798,7 @@ function measureAnimationBox(skeleton, entry, samples = 16) {
       entry.trackTime = savedTime
       entry.animationLast = -1
       st.apply(skeleton)
-      skeleton.updateWorldTransform()
+      skeletonUpdateWorld(skeleton)
     } catch { /* ignore */ }
   }
   return unionBoxes(frames)
@@ -3708,7 +3861,7 @@ function computeBounds(skeleton) {
   // 3) 绑定姿势
   try {
     skeleton.setToSetupPose()
-    skeleton.updateWorldTransform()
+    skeletonUpdateWorld(skeleton)
   } catch { /* ignore */ }
   const setup = boundsFromBox(contentBoxOf(skeleton))
   if (setup) return setup
@@ -3853,7 +4006,7 @@ function stepFrame(dir) {
   const fps = S.fps || 60
   entry.trackTime = Math.max(0, (entry.trackTime || 0) + dir / fps)
   p.animationState.apply(p.skeleton)
-  p.skeleton.updateWorldTransform()
+  skeletonUpdateWorld(p.skeleton)
   p.drawFrame(false)
   updateProgressReadout()
 }
@@ -3975,7 +4128,7 @@ function applySkin(name, opts) {
     showError(t('切换皮肤失败：') + err.message)
     return
   }
-  p.skeleton.updateWorldTransform()
+  skeletonUpdateWorld(p.skeleton)
   S.hidden.clear()
   S.hiddenStack = []
   renderLayerList()
@@ -4158,13 +4311,17 @@ function drawOverlay() {
  * 用户当前的放大程度 = cam.zoom / 「刚好铺满视口」的 zoom。
  * 记这个比例而不是绝对值：换动画后取景框大小会变，按同一个比例换算，
  * 用户看到的画面占比就不变 —— 也就不会「一切换动画就被打回原始大小」。
+ *
+ * 注意：不要把比值夹在 [0.08, 4]（对应最多 12.5×）。CameraController 的
+ * 双指捏合没有上限；夹取会让「捏到 >12.5× 再切动画」被 refitBounds 打回 12.5×。
+ * 这里只做数值合法性检查（非正 / 非有限 → 当作 1）。
  */
 function currentZoomRatio() {
   const cam = S.camera
   if (!cam || !S.bounds) return 1
   const fit = defaultZoomFor(Math.max(cam.viewportWidth, 1), Math.max(cam.viewportHeight, 1))
-  if (!(fit > 0) || !Number.isFinite(cam.zoom)) return 1
-  return clamp(cam.zoom / fit, 0.08, 4)
+  if (!(fit > 0) || !Number.isFinite(cam.zoom) || !(cam.zoom > 0)) return 1
+  return cam.zoom / fit
 }
 
 function fitToWindow(zoomRatio = 1, keepPos = false) {
@@ -4234,11 +4391,16 @@ function resetCamera() {
   p.drawFrame(false)
 }
 
+/** 按钮 +/- 的软夹取：比旧的 12.5× 宽很多，与捏合可越过 12.5× 的行为对齐。
+ *  仅防极端值；真正「保留用户缩放」的路径（切动画 / 转屏）不走这里。 */
+const ZOOM_BTN_RATIO_MIN = 0.02   // ≈50× 放大
+const ZOOM_BTN_RATIO_MAX = 8      // ≈0.125× 缩小
+
 function setZoom(z) {
   const p = S.player, cam = S.camera
   if (!p || !cam) return
-  const min = S.defaultZoom * 0.08
-  const max = S.defaultZoom * 4
+  const min = S.defaultZoom * ZOOM_BTN_RATIO_MIN
+  const max = S.defaultZoom * ZOOM_BTN_RATIO_MAX
   cam.zoom = clamp(z, min, max)
   cam.update()
   p.drawFrame(false)
@@ -4261,9 +4423,10 @@ function onStageResize() {
   cam.viewportWidth = rc.viewportWidth
   cam.viewportHeight = rc.viewportHeight
   if (changed && S.bounds) {
-    // 只换 zoom，位置不动 —— 用户当前盯着的那一点继续停在屏幕中心
+    // 只换 zoom，位置不动 —— 用户当前盯着的那一点继续停在屏幕中心。
+    // 不要夹回 [0.08, 4]：否则捏合超过 12.5× 后一转屏/一进全屏就被打回去。
     const fit = defaultZoomFor(Math.max(rc.viewportWidth, 1), Math.max(rc.viewportHeight, 1))
-    cam.zoom = clamp(fit * ratio, fit * 0.08, fit * 4)
+    if (fit > 0 && Number.isFinite(ratio) && ratio > 0) cam.zoom = fit * ratio
     S.defaultZoom = fit
   }
   cam.update()
@@ -4510,7 +4673,7 @@ async function exportWebm(transparent) {
     // 先画好第 0 帧再开录，避免首帧空白
     if (entry) { entry.trackTime = 0; entry.animationLast = -1; entry.nextAnimationLast = -1 }
     p.animationState.apply(p.skeleton)
-    p.skeleton.updateWorldTransform()
+    skeletonUpdateWorld(p.skeleton)
     p.drawFrame(false)
     paintBgAndSource(outCtx, p.canvas, transparent, out.width, out.height)
 
@@ -4537,7 +4700,7 @@ async function exportWebm(transparent) {
       const trackT = (i + 1) / fps
       if (entry) { entry.trackTime = trackT; entry.animationLast = -1; entry.nextAnimationLast = -1 }
       p.animationState.apply(p.skeleton)
-      p.skeleton.updateWorldTransform()
+      skeletonUpdateWorld(p.skeleton)
       p.drawFrame(false)
       paintBgAndSource(outCtx, p.canvas, transparent, out.width, out.height)
       if (manual) track.requestFrame()
@@ -4624,7 +4787,7 @@ async function exportFrames(transparent) {
         entry.nextAnimationLast = -1
       }
       p.animationState.apply(p.skeleton)
-      p.skeleton.updateWorldTransform()
+      skeletonUpdateWorld(p.skeleton)
       p.drawFrame(false)
       const composed = composeToCanvas(p.canvas, transparent, p.canvas.width, p.canvas.height)
       const blob = await new Promise(r => composed.toBlob(r, 'image/png'))
@@ -4755,12 +4918,15 @@ async function doUpload() {
 
 /* APK 里替代「选择文件夹」：选中的文件直接写进 App 自己的目录，之后照常扫描 */
 const IMPORT_MAX_BYTES = 12 * 1024 * 1024
+/** JCZX 打包 AB 常见 20–40MB；Base64 过桥仍吃内存，超大请用文件管理器拷到 BD2Viewer/jczx/ */
+const IMPORT_MAX_BYTES_JCZX = 48 * 1024 * 1024
 
 async function onImportFiles(e) {
   const files = [...(e.target.files || [])]
   e.target.value = ''
   if (!files.length || !NATIVE) return
 
+  const maxBytes = S.mode === 'jczx' ? IMPORT_MAX_BYTES_JCZX : IMPORT_MAX_BYTES
   setBusy(true, t('导入 0/{total} …', { total: files.length }))
   let ok = 0
   const failed = []
@@ -4768,7 +4934,11 @@ async function onImportFiles(e) {
     const f = files[i]
     setBusy(true, t('导入 {i}/{total} · {name}', { i: i + 1, total: files.length, name: f.name }))
     try {
-      if (f.size > IMPORT_MAX_BYTES) throw new Error(t('超过 12MB'))
+      if (f.size > maxBytes) {
+        throw new Error(S.mode === 'jczx'
+          ? t('超过 48MB（更大请拷到手机存储 /BD2Viewer/jczx/ 后点重新扫描）')
+          : t('超过 12MB'))
+      }
       const b64 = await fileToBase64(f)
       if (!window.BD2Native.importFile(f.name, b64)) throw new Error(t('写入失败'))
       ok++
@@ -5139,20 +5309,65 @@ function bindUI() {
     }
   })
 
-  // 拖动上传
+  // 拖动上传：整窗 preventDefault（避免浏览器打开文件），但只在 #dropzone 内真正接收
+  function isOverDropzone(e) {
+    const zone = $('dropzone')
+    if (!zone) return false
+    const path = typeof e.composedPath === 'function' ? e.composedPath() : null
+    if (path && path.includes(zone)) return true
+    return zone === e.target || zone.contains(e.target)
+  }
   ;['dragenter', 'dragover'].forEach(ev => {
     window.addEventListener(ev, e => {
       if (!e.dataTransfer?.types?.includes('Files')) return
       e.preventDefault()
-      $('dropzone')?.classList.add('over')
+      if (isOverDropzone(e)) $('dropzone')?.classList.add('over')
+      else $('dropzone')?.classList.remove('over')
     })
   })
-  window.addEventListener('dragleave', () => $('dropzone')?.classList.remove('over'))
+  window.addEventListener('dragleave', e => {
+    if (!isOverDropzone(e)) $('dropzone')?.classList.remove('over')
+  })
   window.addEventListener('drop', async e => {
     if (!e.dataTransfer?.files?.length) return
     e.preventDefault()
     $('dropzone')?.classList.remove('over')
+    // 项目页 / 舞台上随便拖：只挡默认行为，不触发导入
+    if (!isOverDropzone(e)) return
     const files = [...e.dataTransfer.files]
+    // JCZX 一键：拖入 UnityFS / prefabs_spine_* → POST /api/jczx/ingest → 重扫
+    if (S.mode === 'jczx' && !NATIVE) {
+      const abs = files.filter(f => {
+        const n = f.name || ''
+        if (/\.(atlas|json|skel|png)$/i.test(n)) return false
+        return /^prefabs_spine_/i.test(n) || /\.(ab|unity3d|bundle|assets)$/i.test(n) || !/\.[a-z0-9]+$/i.test(n)
+      })
+      if (abs.length) {
+        try {
+          setDropText(t('正在提取 JCZX 资产…'))
+          for (const f of abs) {
+            const buf = await f.arrayBuffer()
+            const q = new URLSearchParams({
+              root: S.rootId || '',
+              name: f.name || 'bundle',
+            })
+            const res = await fetch(`/api/jczx/ingest?${q}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': f.name || 'bundle' },
+              body: buf,
+            })
+            const data = await res.json().catch(() => ({}))
+            if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`)
+          }
+          setDropText(t('JCZX 提取完成，正在刷新列表…'))
+          await scan(true)
+          setDropText(t('拖到这里'))
+        } catch (err) {
+          setDropText(t('JCZX 提取失败：{msg}', { msg: err.message || String(err) }))
+        }
+        return
+      }
+    }
     const hasSpine = files.some(f => /\.(atlas|json|skel)$/i.test(f.name))
     if (!hasSpine) return
     uploaded.files = files
@@ -5199,7 +5414,7 @@ function bindUI() {
     updatePlayButton()
     entry.trackTime = Number(e.target.value) * d
     p.animationState.apply(p.skeleton)
-    p.skeleton.updateWorldTransform()
+    skeletonUpdateWorld(p.skeleton)
     p.drawFrame(false)
   })
 
@@ -5233,7 +5448,12 @@ window.__bd2viewer = {
   get animations() { return S.animations },
   // Spine 运行时：4.1 常驻、4.0 供 NIKKE 用。distinct 用来证「没互相覆盖」。
   get spineRuntimes() {
-    return { has41: !!SPINE_DEFAULT, has40: !!SPINE40, distinct: SPINE40 !== SPINE_DEFAULT }
+    return {
+      has41: !!SPINE_DEFAULT,
+      has40: !!SPINE40,
+      has42: !!SPINE42,
+      distinct: SPINE40 !== SPINE_DEFAULT && SPINE42 !== SPINE_DEFAULT && SPINE40 !== SPINE42,
+    }
   },
   /** 读骨架头判定 minor 版本（'4.0' / '4.1' / null）。测试与排障用。 */
   spineMinorOf: item => spineMinorFor(item),

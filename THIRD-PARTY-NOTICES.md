@@ -8,25 +8,26 @@
 
 ---
 
-## 1. Spine Runtimes（`spine-player.js` / `spine-player-4.0.js` / `spine-player.css`）
+## 1. Spine Runtimes（`spine-player.js` / `spine-player-4.0.js` / `spine-player-4.2.js` / `spine-player.css`）
 
 **这是最重要的一条，请务必读完。**
 
-本仓库内置**两套** Spine 运行时，因为在同一份资产库里可能同时存在两代导出的骨架
-（1.03 起支持 NIKKE，其骨架是 Spine 4.0.x 导出；BD2 / Lost Sword 是 4.1.x）：
+本仓库内置**三套** Spine 运行时，因为同一份资产库里可能同时存在三代导出的骨架
+（NIKKE=4.0.x；BD2 / Lost Sword=4.1.x；交错战线 JCZX=4.2.x）：
 
 | 文件 | 组件 | 服务对象 |
 | --- | --- | --- |
 | `bd2-local-viewer/public/lib/spine-player.js` | `@esotericsoftware/spine-player` **4.1.55** | BD2、Lost Sword（骨架 4.1.x） |
 | `bd2-local-viewer/public/lib/spine-player-4.0.js` | `@esotericsoftware/spine-player` **4.0.31** | NIKKE（骨架 4.0.x） |
+| `bd2-local-viewer/public/lib/spine-player-4.2.js` | `@esotericsoftware/spine-player` **4.2.120** | JCZX 等（骨架 4.2.x） |
 
-- 版权：Copyright (c) 2013-2023, Esoteric Software LLC（4.0.31 的包内许可标注为 2013-2019）
+- 版权：Copyright (c) 2013-2023, Esoteric Software LLC（各包内许可年份标注可能略有不同）
 - 官网：https://esotericsoftware.com/
 - 仓库：https://github.com/EsotericSoftware/spine-runtimes
 
-两份都是上游 npm 包 `dist/iife/spine-player.js` 的**原样产物**，唯一改动是把
-`spine-player-4.0.js` 的全局变量名 `spine` 改成 `spine40`（唯一一处 `var` 声明），
-以便与 4.1 的那份在同一页面共存而不互相覆盖 —— 改动点已写在文件头部注释里。
+三份都是上游 npm 包 `dist/iife/spine-player.js` 的**原样产物**，唯一改动是把
+`spine-player-4.0.js` / `spine-player-4.2.js` 的全局变量名分别改成 `spine40` / `spine42`
+（各唯一一处 `var` 声明），以便与 4.1 的那份在同一页面共存而不互相覆盖 —— 改动点已写在文件头部注释里。
 
 ### 许可原文
 
@@ -75,6 +76,27 @@ THE SPINE RUNTIMES, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 4. 本项目作者与 Esoteric Software 无隶属关系，本项目未获其背书。
 
 ---
+
+## 1b. UnityPy（桌面 JCZX 提取，可选运行时依赖）
+
+- 包：[`UnityPy`](https://pypi.org/project/UnityPy/)（及依赖 `Pillow`）
+- 用途：桌面端 `mode=jczx` 时，把双 UnityFS AssetBundle **strip 到第二个 UnityFS** 后解析 TextAsset / Texture2D，写出 `.atlas` / `.json` / `.png` 到 `.bd2viewer-jczx/` 缓存。
+- 许可：**MIT License**
+- 仓库：https://github.com/K0lb3/UnityPy
+- 本仓库脚本：`bd2-local-viewer/_tools/jczx_extract.py`、`jczx_support.mjs`（MIT，与主项目相同）
+- **不**随 APK 打包；仅桌面 Node 服务在本机调用。默认自动发现仓库旁 `.venv-jczx` 或 PATH 上的 UnityPy；`BD2_JCZX_PYTHON` 仅可选覆盖。
+
+> 探针阶段评估过 MIT 的 `unityfs-js`；其在纯 Node 下因 Vite `?worker` 导入失败，故 Phase A 桌面提取走 UnityPy。
+
+## 1c. Android JCZX 解包（APK 内置）
+
+- `org.tukaani:xz` 1.9 — public domain（XZ / LZMA）
+  - https://tukaani.org/xz/java.html
+- `org.lz4:lz4-java` 1.8.0 — Apache-2.0 / BSD（LZ4）
+  - https://github.com/lz4/lz4-java
+- `com.kkk.bd2viewer.jczx.*` — 本仓库 MIT：UnityFS strip + 块解压 + TextAsset/RGBA32 启发式导出。
+  **不是**完整 UnityPy；**不**包含 GPL 的 JCZX_AssetTool 代码。
+
 
 ## 2. JSZip（`jszip.min.js`）
 

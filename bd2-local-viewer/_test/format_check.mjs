@@ -16,6 +16,7 @@
  *   · problems 是简单键（不带文件名变量拼接）
  *   · nikke 模式（1.04）：服务端用 bd 那套命名认文件、有独立缓存键；
  *     「角色归组 + 姿势」在前端（R18），由 native_mode 用假桥数据覆盖
+ *   · jczx 模式（1.05）：双 UnityFS AB → 提取缓存 → 按 bd 规则认 .atlas/.json/.png
  */
 import { spawn } from 'node:child_process'
 import net from 'node:net'
@@ -249,6 +250,37 @@ try {
   const nkAgain = await scan('nikke')
   check('nikke 有独立的缓存键（不带 refresh 再扫结果一致）',
     nkAgain.itemCount === 4 && nkAgain.mode === 'nikke', `itemCount=${nkAgain.itemCount}`)
+
+  /* ---------------------------------------------------- JCZX 模式（1.05 Phase A）
+   * 真实样例 AB（双 UnityFS）→ MIT strip + UnityPy → `bd2viewer-jczx/` 下标准三件套。
+   * 样例路径可通过 BD2_JCZX_SAMPLE 指定；缺失则整段跳过（不红）。 */
+  {
+    const sample = process.env.BD2_JCZX_SAMPLE
+      || '/workspace/_scratch_jczx/prefabs_spine_30490_skin_mareerouge04_spine'
+    if (!fs.existsSync(sample)) {
+      check('jczx 样例缺失时跳过（不红）', true, `missing ${sample}`)
+    } else {
+      const jdir = path.join(dataRoot, 'jczx_in')
+      fs.mkdirSync(jdir, { recursive: true })
+      const dest = path.join(jdir, 'prefabs_spine_30490_skin_mareerouge04_spine')
+      fs.copyFileSync(sample, dest)
+      const jz = await scan('jczx', true)
+      check('jczx 模式返回 mode=jczx', jz.mode === 'jczx', String(jz.mode))
+      check('jczx 抽出至少 1 套可播放资产', jz.playableCount >= 1,
+        `playable=${jz.playableCount} items=${jz.itemCount} meta=${JSON.stringify(jz.jczx || {}).slice(0, 200)}`)
+      const one = (jz.items || []).find(i => i.ok)
+      check('jczx 条目落在 bd2viewer-jczx 缓存下',
+        !!(one && /(?:^|\/)\.?bd2viewer-jczx\//.test(String(one.relAtlas || ''))),
+        one && one.relAtlas)
+      check('jczx JSON 骨架标 spineMinor=4.2',
+        !!(one && one.skeletonKind === 'json' && one.spineMinor === '4.2'),
+        one && `${one.skeletonKind}/${one.spineMinor}`)
+      const bdNoJ = await scan('bd', true)
+      check('bd 模式扫不到 jczx 缓存（不串味）',
+        !(bdNoJ.items || []).some(i => /(?:^|\/)\.?bd2viewer-jczx\//.test(String(i.relAtlas || ''))),
+        rels(bdNoJ).join(', '))
+    }
+  }
 } catch (e) {
   check('测试执行', false, e.stack || e.message)
 } finally {

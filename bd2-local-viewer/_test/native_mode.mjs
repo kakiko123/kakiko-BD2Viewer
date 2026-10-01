@@ -894,6 +894,37 @@ try {
     dz.revealed === true && dz.restored === true,
     `唤出=${dz.revealed} 恢复=${dz.restored}`)
 
+  // ⑮(b) 隐藏界面时切动画：顶/底栏必须继续藏着，也不能靠 toast 冒充 chrome
+  const cleanAnim = await cdp.evaluate(`
+    if (!__bd2viewer.isFullscreen) document.getElementById('stageFs').click()
+    await new Promise(r => setTimeout(r, 600))
+    if (!__bd2viewer.cleanUI) document.getElementById('fsHide').click()
+    await new Promise(r => setTimeout(r, 300))
+    document.body.classList.remove('fs-reveal')
+    const barVisible = () => getComputedStyle(document.getElementById('fsBar')).display !== 'none'
+    const animVisible = () => getComputedStyle(document.getElementById('fsAnimBar')).display !== 'none'
+    const toastEl = document.getElementById('toast')
+    if (toastEl) toastEl.hidden = true
+    const nAnim = (__bd2viewer.animations || []).length
+    const a0 = __bd2viewer.animation
+    __bd2viewer.onVolumeKey(1)
+    await new Promise(r => setTimeout(r, 500))
+    const a1 = __bd2viewer.animation
+    return {
+      clean: __bd2viewer.cleanUI === true,
+      stillHidden: barVisible() === false && animVisible() === false,
+      noReveal: !document.body.classList.contains('fs-reveal'),
+      toastHidden: !toastEl || toastEl.hidden === true,
+      animOk: nAnim <= 1 || (!!a1 && a1 !== a0),
+      nAnim, a0, a1,
+    }
+  `)
+  check('⑮ 隐藏界面时切动画：顶/底栏仍隐藏、不弹 toast',
+    cleanAnim.clean === true && cleanAnim.stillHidden === true &&
+    cleanAnim.noReveal === true && cleanAnim.toastHidden === true &&
+    cleanAnim.animOk === true,
+    JSON.stringify(cleanAnim))
+
   // ⑮(2) 真机流程复现：不手动 fitToWindow（真机上没人会调它），直接
   // 进全屏 → 连按到顶档 → 再按一下还原。还原必须精确落回「当前视口的铺满」，
   // 不能用全屏切换前遗留的旧记录值（否则画面会比铺满时更小）。

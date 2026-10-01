@@ -54,6 +54,16 @@ public final class NativeBridge {
         emitRoots();
     }
 
+    @JavascriptInterface
+    public String appVersion() {
+        return BuildConfig.VERSION_NAME;
+    }
+
+    @JavascriptInterface
+    public int appVersionCode() {
+        return BuildConfig.VERSION_CODE;
+    }
+
     /**
      * 扫描在后台线程跑，完成后只推元信息给 JS（几十字节）。
      * items 由 JS 用 scanPage 分页同步拉取 —— 一次性推几 MB 的 JSON 会把进程压崩。

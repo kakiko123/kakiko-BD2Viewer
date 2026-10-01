@@ -41,8 +41,11 @@ android {
         // 历史：1.0 = versionCode 1，1.01 = versionCode 2，1.02 = versionCode 3，
         //       1.03 = versionCode 4（支持 NIKKE 资产，内置 Spine 4.0 运行时），
         //       1.04 = versionCode 5（NIKKE 独立模式：角色归组 + 姿势切换；多皮肤骨架合成）
-        versionCode 5
-        versionName '1.04'
+        //       1.05 = versionCode 6（Spine 4.2 + JCZX 桌面提取 / 一键拖入；Phase A）
+        //       1.05 Android bugfix build = versionCode 7（Android JCZX 一键解包：纯 Java UnityFS strip+extract；显示版本仍为 1.05）
+        //       1.05 Host/cache fix = versionCode 8（JCZX nested URL + stale cache invalidate；显示版本仍为 1.05）
+        versionCode 8
+        versionName '1.05'
     }
 
     compileOptions {
@@ -111,3 +114,10 @@ tasks.register('syncWeb', Sync) {
 }
 
 tasks.named('preBuild') { dependsOn 'syncWeb' }
+
+
+dependencies {
+    // JCZX on-device UnityFS decompress (MIT / public-domain friendly)
+    implementation 'org.tukaani:xz:1.9'
+    implementation 'org.lz4:lz4-java:1.8.0'
+}

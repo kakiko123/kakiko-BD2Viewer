@@ -376,6 +376,8 @@ public class MainActivity extends Activity {
             if (bridge != null) {
                 bridge.onVolumeKey(keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP ? 1 : -1);
             }
+            // 部分机型按音量会把系统栏 Peek 出来；立刻再藏一次，保持「隐藏界面」干净
+            applySystemBars(false);
             return true;
         }
         return super.onKeyDown(keyCode, event);
@@ -398,12 +400,22 @@ public class MainActivity extends Activity {
         });
     }
 
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        // 失焦再回来（通知栏下拉、音量条）后系统栏可能留着 —— 沉浸态下重新藏
+        if (hasFocus && immersive) applySystemBars(false);
+    }
+
     private void applySystemBars(boolean show) {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 android.view.WindowInsetsController c = getWindow().getInsetsController();
                 getWindow().setDecorFitsSystemWindows(show);
                 if (c != null) {
+                    // 滑动才短暂露出；否则音量键一类事件会把栏钉在屏幕上
+                    c.setSystemBarsBehavior(
+                            android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
                     if (show) c.show(android.view.WindowInsets.Type.systemBars());
                     else c.hide(android.view.WindowInsets.Type.systemBars());
                 }

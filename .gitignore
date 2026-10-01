@@ -128,3 +128,11 @@ docs/screenshots/
 # bd2-local-viewer/public/app.bundle.html
 # local helper - machine specific absolute paths, keep out of the repo
 push_to_github.bat
+
+# JCZX desktop extract cache (under any asset root)
+.bd2viewer-jczx/
+
+# JCZX local Python venv (created by setup_jczx.bat/sh or auto on first scan)
+.venv-jczx/
+**/.venv-jczx/
+

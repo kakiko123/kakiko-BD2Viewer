@@ -1,6 +1,6 @@
 # kakiko-BD2Viewer — 项目进度与说明
 
-> 快照日期：**2026-09-30** · 当前代码版本 **v1.04**（`versionCode 5`）
+> 快照日期：**2026-10-01** · 当前代码版本 **v1.05**（`versionCode 7`；箱内 `/workspace/kakiko-BD2Viewer`；Android JCZX 一键解包）
 > 本文只讲「现在是什么状态、为什么这么做、下一步做什么」。
 > 面向使用者的说明在 [`README.md`](README.md)；技术细节在 [`docs/`](docs) 与
 > [`bd2-local-viewer/ARCHITECTURE.md`](bd2-local-viewer/ARCHITECTURE.md)。
@@ -48,13 +48,14 @@
 | **v1.02** | 3 | 605,337 B | `a48c0129…` | **第二种命名约定：Lost Sword**（`.atlas.bytes` / `.skel.bytes` / 裸 `.bytes` / 自带 `thumb.png`）+ 资产类型开关 + PC 右键复制绝对路径 + 播放页「← 返回列表」 |
 | **v1.03** | 4 | 845,945 B | `83f1ca20…` | **NIKKE 可渲染**：内置第二套 Spine 4.0 运行时、按骨架头自动选世代；顺带修掉「重叠扫描谁后回来谁生效」（R17） |
 | **v1.04** | 5 | 855,457 B | `1e98f629…` | **NIKKE 独立成第三档模式**：一个角色一张卡 + 姿势切换；**多皮肤骨架合成**（Lost Sword 的「只显示一部分」）；测试工装两处修复 |
+| **v1.05** | 6（Phase A）→ **7（Android JCZX）** | （待本机构建） | — | **Spine 4.2 + JCZX 全平台**：桌面 UnityPy 提取、Android 纯 Java UnityFS strip+LZMA/LZ4+启发式导出；`BD2Viewer/jczx/` |
 
 > 当前仓库根目录的 `BD2Viewer-debug.apk` 就是 **v1.04**。
 > `kakiko-BD2Viewer 1.0.1.apk` / `kakiko-BD2Viewer 1.0.1 .apk` 是 v1.01 时期的产物，留在本地做对照。
 > 体积从 v1.02 跳到 v1.03 的 +234 KB 是**第二套 Spine 运行时**（骨架跨代不兼容，只能两套都带），
 > v1.04 只涨 9.5 KB（纯前端逻辑，没引新库）。
 
-每个版本的发布说明：`RELEASE-NOTES-v1.01.md` … `RELEASE-NOTES-v1.04.md`。
+每个版本的发布说明：`RELEASE-NOTES-v1.01.md` … `RELEASE-NOTES-v1.05.md`。
 
 ---
 

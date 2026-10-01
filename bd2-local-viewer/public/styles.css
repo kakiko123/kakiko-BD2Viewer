@@ -1483,7 +1483,8 @@ body.is-immersive .seek,
 body.is-immersive .side-left { display: none !important; }
 
 /* 隐藏界面（只看画面）：顶栏和底部动画条一起收起，
-   点一下画面临时唤出 4 秒，方便再点一次图标恢复。 */
+   点一下画面临时唤出 4 秒，方便再点一次图标恢复。
+   切动画时的 toast 由 switchAnimation 在 cleanUI 下直接跳过（文案同底栏，会像 chrome）。 */
 body.is-cleanui:not(.fs-reveal) .fsbar,
 body.is-cleanui:not(.fs-reveal) .fs-anim-bar { display: none !important; }
 #fsHide .eye-off { display: none; }            /* 常规：图标带斜杠 = 点它隐藏界面 */

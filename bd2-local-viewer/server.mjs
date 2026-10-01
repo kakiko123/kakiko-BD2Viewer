@@ -15,6 +15,16 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import net from 'node:net'
 import { fileURLToPath } from 'node:url'
+import {
+  JCZX_CACHE_DIRNAME,
+  JCZX_CACHE_DIRNAME_LEGACY,
+  isJczxCacheDirName,
+  isJczxCacheRel,
+  prepareJczxRoot,
+  ensureJczxExtracted,
+  isJczxName,
+  looksLikeUnityFS,
+} from './jczx_support.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PUBLIC_DIR = path.join(__dirname, 'public')
@@ -44,6 +54,7 @@ function resolveLib(route) {
     // 4.0 那份同理：装了 4.0.x 版本的 @esotericsoftware/spine-player 才能从 node_modules 拿到。
     // 注意 npm 一个包名只能装一个版本，想同时拥有两套必须靠 public/lib/ 里的产物文件。
     'spine-player-4.0.js': path.join(NM, '@esotericsoftware/spine-player', 'dist', 'iife', 'spine-player.js'),
+    'spine-player-4.2.js': path.join(NM, '@esotericsoftware/spine-player', 'dist', 'iife', 'spine-player.js'),
     'spine-player.css': path.join(NM, '@esotericsoftware/spine-player', 'dist', 'spine-player.css'),
     'jszip.min.js': path.join(NM, 'jszip', 'dist', 'jszip.min.js'),
   }[name]
@@ -51,7 +62,8 @@ function resolveLib(route) {
 }
 
 const LIB_ROUTES = [
-  '/lib/spine-player.js', '/lib/spine-player-4.0.js', '/lib/spine-player.css', '/lib/jszip.min.js',
+  '/lib/spine-player.js', '/lib/spine-player-4.0.js', '/lib/spine-player-4.2.js',
+  '/lib/spine-player.css', '/lib/jszip.min.js',
 ]
 
 
@@ -155,6 +167,16 @@ const FORMATS = {
     id: 'nikke',
     classify(name) { return FORMATS.bd.classify(name) },
   },
+
+  /**
+   * 交错战线（JCZX）。源文件是 Unity AssetBundle（双 UnityFS 头），
+   * 扫描前由 jczx_support 抽到根目录 `bd2viewer-jczx/` 下的标准
+   * `.atlas` + `.json` + `.png`，再按 bd 规则归桶。骨架多为 Spine 4.2.x。
+   */
+  jczx: {
+    id: 'jczx',
+    classify(name) { return FORMATS.bd.classify(name) },
+  },
 }
 
 const DEFAULT_FORMAT = 'bd'
@@ -178,10 +200,18 @@ function spineMinorFromHead(buf) {
 }
 
 async function spineMinorOfFile(absPath, kind) {
-  if (kind !== 'skel') return null
   try {
     const fh = await fsp.open(absPath, 'r')
     try {
+      // JSON 骨架（含 JCZX 抽出的 4.2）：读头几 KB 找 "spine":"4.x
+      if (kind === 'json') {
+        const buf = Buffer.alloc(4096)
+        const { bytesRead } = await fh.read(buf, 0, 4096, 0)
+        const text = buf.subarray(0, bytesRead).toString('utf8')
+        const m = /"spine"\s*:\s*"4\.(\d)\./.exec(text)
+        return m ? `4.${m[1]}` : null
+      }
+      if (kind !== 'skel') return null
       const buf = Buffer.alloc(32)
       const { bytesRead } = await fh.read(buf, 0, 32, 0)
       return spineMinorFromHead(buf.subarray(0, bytesRead))
@@ -301,6 +331,8 @@ async function walk(dir, depth, maxDepth, out, rootPath, fmt) {
   for (const entry of entries) {
     if (entry.isDirectory()) {
       if (SKIP_DIRS.has(entry.name.toLowerCase())) continue
+      // JCZX 提取缓存只在 jczx 模式下可见，其它模式扫到会串味
+      if (isJczxCacheDirName(entry.name) && fmt.id !== 'jczx') continue
       subdirs.push(path.join(dir, entry.name))
       continue
     }
@@ -409,8 +441,23 @@ async function scanRoot(root, force = false, mode = DEFAULT_FORMAT) {
   const t0 = Date.now()
   const items = []
   const exists = fs.existsSync(root.path)
+  let jczxMeta = null
   if (exists) {
+    // JCZX：先把根下双 UnityFS AB 抽到 `bd2viewer-jczx/`，再按 bd 规则扫
+    if (fmt.id === 'jczx') {
+      jczxMeta = await prepareJczxRoot(root.path, {
+        maxDepth: config.maxDepth || 5,
+        autoSetup: true,
+      })
+    }
     await walk(root.path, 0, config.maxDepth || 5, items, root.path, fmt)
+    // jczx 模式下只保留缓存目录里抽出的条目（避免误认其它命名）
+    if (fmt.id === 'jczx') {
+      for (let i = items.length - 1; i >= 0; i--) {
+        const rel = String(items[i].relAtlas || '').replace(/\\/g, '/')
+        if (!isJczxCacheRel(rel)) items.splice(i, 1)
+      }
+    }
   }
 
   items.sort((a, b) => {
@@ -428,6 +475,7 @@ async function scanRoot(root, force = false, mode = DEFAULT_FORMAT) {
     playableCount: items.filter(i => i.ok).length,
     scanMs: Date.now() - t0,
     items,
+    ...(jczxMeta ? { jczx: jczxMeta } : {}),
   }
   scanCache.set(cacheKey, { time: Date.now(), payload })
   return payload
@@ -694,6 +742,59 @@ async function handle(req, res) {
       sendJson(res, 200, { ok: true, root, exists })
     } catch (err) {
       sendJson(res, 400, { error: err.message })
+    }
+    return
+  }
+
+  // JCZX 一键丢入：把 AB 写入当前根目录并立刻提取，返回最新扫描结果
+  if (pathname === '/api/jczx/ingest' && req.method === 'POST') {
+    try {
+      const rootId = url.searchParams.get('root') || ''
+      const root = rootId ? rootById(resolveRootId(rootId)) : config.roots[0]
+      if (!root) {
+        sendJson(res, 404, { error: '没有可用的根目录，请先添加目录' })
+        return
+      }
+      const filename = String(url.searchParams.get('name') || req.headers['x-filename'] || 'bundle').trim()
+      const safeName = path.basename(filename).replace(/[\\/\0]/g, '_') || 'bundle'
+      if (!isJczxName(safeName) && !safeName.toLowerCase().startsWith('prefabs_spine_')) {
+        // 仍允许：魔数在落盘后再验
+      }
+      const bodyBuf = await new Promise((resolve, reject) => {
+        const chunks = []
+        req.on('data', c => chunks.push(c))
+        req.on('end', () => resolve(Buffer.concat(chunks)))
+        req.on('error', reject)
+      })
+      if (!bodyBuf.length) {
+        sendJson(res, 400, { error: '空文件' })
+        return
+      }
+      if (!fs.existsSync(root.path)) await fsp.mkdir(root.path, { recursive: true })
+      const dest = path.join(root.path, safeName)
+      if (!isAuthorized(dest) && path.resolve(dest) !== path.resolve(root.path, safeName)) {
+        sendJson(res, 403, { error: '路径越界' })
+        return
+      }
+      await fsp.writeFile(dest, bodyBuf)
+      if (!(await looksLikeUnityFS(dest))) {
+        await fsp.unlink(dest).catch(() => {})
+        sendJson(res, 400, { error: '不是 UnityFS / AssetBundle（文件头缺少 UnityFS）' })
+        return
+      }
+      const extracted = await ensureJczxExtracted(dest, root.path, { autoSetup: true })
+      invalidateScanCache(root.id)
+      const scan = await scanRoot(root, true, 'jczx')
+      sendJson(res, 200, {
+        ok: true,
+        saved: safeName,
+        cacheDir: extracted.cacheDir,
+        reused: extracted.reused,
+        report: extracted.report,
+        scan,
+      })
+    } catch (err) {
+      sendJson(res, 500, { error: err.message })
     }
     return
   }

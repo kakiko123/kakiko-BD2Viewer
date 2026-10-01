@@ -40,10 +40,10 @@ let css = `<style>\n${cssInline(read('lib/spine-player.css'))}\n</style>\n`
 css += `<style>\n${cssInline(read('styles.css'))}\n</style>\n`
 
 let js = ''
-// 顺序有讲究：spine-player.js（4.1，占全局 spine）→ spine-player-4.0.js（4.0，占全局 spine40）。
+// 顺序有讲究：spine-player.js（4.1→spine）→ spine-player-4.0.js（4.0→spine40）→ spine-player-4.2.js（4.2→spine42）。
 // 两份都要内联 —— APK 里 WebView 不保证能按 /lib/ 路径取到外链脚本，
 // 而 4.0 那份是 NIKKE 资产必须的（见 app.js 的 spineForItem）。
-for (const f of ['lib/spine-player.js', 'lib/spine-player-4.0.js', 'lib/jszip.min.js']) {
+for (const f of ['lib/spine-player.js', 'lib/spine-player-4.0.js', 'lib/spine-player-4.2.js', 'lib/jszip.min.js']) {
   js += `<script>\n${jsInline(read(f))}\n</script>\n`
 }
 

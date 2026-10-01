@@ -6,13 +6,12 @@
   <title>kakiko-BD2Viewer · 本地版</title>
   <link rel="stylesheet" href="/lib/spine-player.css">
   <link rel="stylesheet" href="/styles.css">
-  <!-- 两套 Spine 运行时并存：4.1（本地 spine 全局）+ 4.0（spine40 全局）。
-       NIKKE 的骨架是 4.0.x 导出、BD2 / Lost Sword 是 4.1.x 导出，跨 minor 会错位解析，
-       所以按资产的骨架版本取用（app.js 里的 spineForItem）。两份运行时自带各自的
-       OrthoCamera / CameraController / Vector2，同一个播放会话只从一套里取类。
-       顺序无所谓 —— 4.0 那份的全局名已改成 spine40，不会覆盖 4.1 的 spine。 -->
+  <!-- 三套 Spine 运行时并存：4.1（spine）+ 4.0（spine40）+ 4.2（spine42）。
+       NIKKE=4.0.x、BD2/Lost Sword=4.1.x、交错战线(JCZX)=4.2.x；跨 minor 会错位解析且不报版本错误。
+       按资产骨架版本取用（app.js spineRuntimeForVer）。顺序无所谓 —— 4.0/4.2 全局名已改成 spine40/spine42。 -->
   <script src="/lib/spine-player.js"></script>
   <script src="/lib/spine-player-4.0.js"></script>
+  <script src="/lib/spine-player-4.2.js"></script>
   <script src="/lib/jszip.min.js"></script>
   <script>
     /* 语言钉子：在样式表和 app.js 之前就把 <html lang> 定下来。
@@ -185,7 +184,7 @@
         <div class="empty-state" id="emptyState">
           <div class="empty-icon">🖼</div>
           <div data-i18n="从右侧选一个资产开始查看">从右侧选一个资产开始查看</div>
-          <div class="empty-sub" data-i18n="也可以直接点「上传文件」或把文件夹拖进这个窗口">也可以直接点「上传文件」或把文件夹拖进这个窗口</div>
+          <div class="empty-sub" data-i18n="也可以点「上传文件」，再在投放区拖入文件夹">也可以点「上传文件」，再在投放区拖入文件夹</div>
         </div>
       </div>
       <!-- 播放页：画面左上角「返回列表」/ 右上角全屏图标
@@ -260,6 +259,7 @@
             <button type="button" class="gm-btn" data-asset-mode="bd" aria-pressed="true" data-i18n-keep>BD2</button>
             <button type="button" class="gm-btn" data-asset-mode="lostsword" aria-pressed="false" data-i18n-keep>Lost Sword</button>
             <button type="button" class="gm-btn" data-asset-mode="nikke" aria-pressed="false" data-i18n-keep>NIKKE</button>
+            <button type="button" class="gm-btn" data-asset-mode="jczx" aria-pressed="false" data-i18n-keep>JCZX</button>
           </div>
           <!-- 播放顺序：手动（拖动） / 按名称 / 按日期 -->
           <div class="gal-sort" id="galSort" role="group" data-i18n-aria="播放顺序" aria-label="播放顺序">
