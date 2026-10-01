@@ -23,7 +23,7 @@ public class KeepAliveService extends Service {
         NotificationManager nm = getSystemService(NotificationManager.class);
         NotificationChannel ch = new NotificationChannel(CHANNEL_ID, "后台运行",
                 NotificationManager.IMPORTANCE_MIN);
-        ch.setDescription("保持 BD2Viewer 在后台继续运行");
+        ch.setDescription("保持 Kakiko Viewer 在后台继续运行");
         ch.setShowBadge(false);
         if (nm != null) nm.createNotificationChannel(ch);
 

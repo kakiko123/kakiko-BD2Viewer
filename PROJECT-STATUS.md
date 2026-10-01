@@ -1,6 +1,6 @@
-# kakiko-BD2Viewer — 项目进度与说明
+# Kakiko Viewer — 项目进度与说明
 
-> 快照日期：**2026-10-01** · 当前代码版本 **v1.05**（`versionCode 7`；箱内 `/workspace/kakiko-BD2Viewer`；Android JCZX 一键解包）
+> 快照日期：**2026-10-01** · 当前代码版本 **v1.05**（`versionCode 8`；箱内 `/workspace/kakiko-BD2Viewer`；Android JCZX 一键解包）
 > 本文只讲「现在是什么状态、为什么这么做、下一步做什么」。
 > 面向使用者的说明在 [`README.md`](README.md)；技术细节在 [`docs/`](docs) 与
 > [`bd2-local-viewer/ARCHITECTURE.md`](bd2-local-viewer/ARCHITECTURE.md)。

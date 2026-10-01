@@ -532,7 +532,7 @@ public class MainActivity extends Activity {
             android.content.ClipboardManager cm =
                     (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
             if (cm == null) { toast("复制失败"); return; }
-            cm.setPrimaryClip(android.content.ClipData.newPlainText("BD2Viewer", text));
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("Kakiko Viewer", text));
             toast("已复制：" + text);
         } catch (Exception e) {
             toast("复制失败：" + e.getMessage());

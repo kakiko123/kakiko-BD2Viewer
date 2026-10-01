@@ -1,4 +1,4 @@
-# kakiko-BD2Viewer v1.05（Phase A + Android JCZX）
+# Kakiko Viewer v1.05（Phase A + Android JCZX）
 
 > 版本名 `1.05` · 当前 `versionCode 8` · 快照 2026-10-01（Asia/Hong_Kong）
 > 这是统一的 1.05 发布线：包含桌面端 Phase A 与 Android JCZX 一键解包。versionCode 现为 **8**（Phase A 曾为 6，Android JCZX 曾为 7）；显示版本名仍统一为 1.05。
@@ -57,6 +57,13 @@
 - 非 RGBA32 / 流式 `.resS` 大贴图 / ASTC·ETC 压缩纹理：未覆盖。
 - 完整 TypeTree 解析未做（启发式 TextAsset + 尺寸匹配 RGBA）。
 - 超大 AB 经 WebView Base64 导入可能 OOM —— 优先文件管理器落盘。
+
+
+## 从误标 1.06 并入（仍属 1.05 发布线）
+
+- 已在样例（MareeRouge）上验证：atlas/json 字节与桌面 UnityPy 一致，PNG 像素一致。
+- 桌面 `jczx_support.mjs` + UnityPy 路径保持原样；**不** vendor GPL JCZX_AssetTool。
+- 开发箱 **未**跑 gradle APK（无 Android SDK）；请在用户本机 `tools/build_apk.bat` 构建。
 
 ## 构建
 
