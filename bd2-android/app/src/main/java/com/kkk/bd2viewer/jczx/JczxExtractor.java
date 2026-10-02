@@ -10,9 +10,16 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -43,8 +50,10 @@ public final class JczxExtractor {
     public static boolean isCacheRel(String rel) {
         if (rel == null) return false;
         String r = rel.replace('\\', '/');
-        return r.contains(CACHE_DIRNAME + "/") || r.startsWith(CACHE_DIRNAME)
-                || r.contains(CACHE_DIRNAME_LEGACY + "/") || r.startsWith(CACHE_DIRNAME_LEGACY);
+        return r.equals(CACHE_DIRNAME) || r.startsWith(CACHE_DIRNAME + "/")
+                || r.contains("/" + CACHE_DIRNAME + "/")
+                || r.equals(CACHE_DIRNAME_LEGACY) || r.startsWith(CACHE_DIRNAME_LEGACY + "/")
+                || r.contains("/" + CACHE_DIRNAME_LEGACY + "/");
     }
 
     /** Rename legacy ".bd2viewer-jczx" → "bd2viewer-jczx" when safe. */
@@ -76,9 +85,10 @@ public final class JczxExtractor {
                 || l.endsWith(".md") || l.endsWith(".stamp.json") || l.equals(".extract_report.json")) {
             return false;
         }
-        if (name.regionMatches(true, 0, "prefabs_spine_", 0, "prefabs_spine_".length())) return true;
+        // JCZX：prefabs_spine（可带 hash 前缀）；勿把 NIKKE 无扩展名包再入队
+        if (l.contains("prefabs_spine")) return true;
         if (l.endsWith(".ab") || l.endsWith(".unity3d") || l.endsWith(".bundle") || l.endsWith(".assets")) return true;
-        return !name.contains(".");
+        return false;
     }
 
     public static boolean fileLooksLikeUnityFs(File f) {
@@ -92,48 +102,352 @@ public final class JczxExtractor {
         }
     }
 
-    /** Scan root for UnityFS bundles (skip cache), extract/cached, return meta for toasts. */
-    public static JSONObject prepareRoot(File root) {
-        JSONObject meta = new JSONObject();
-        JSONArray extracted = new JSONArray();
-        JSONArray reused = new JSONArray();
-        JSONArray errors = new JSONArray();
-        List<File> bundles = new ArrayList<>();
-        try {
-            migrateLegacyCache(root);
-            findBundles(root, 0, 5, bundles);
-            meta.put("bundles", bundles.size());
-            for (File ab : bundles) {
-                try {
-                    Result r = ensureExtracted(ab, root);
-                    JSONObject one = new JSONObject();
-                    one.put("src", ab.getAbsolutePath());
-                    one.put("cacheDir", r.cacheDir.getAbsolutePath());
-                    one.put("spine", r.spineVer == null ? JSONObject.NULL : r.spineVer);
-                    if (r.reused) reused.put(one);
-                    else extracted.put(one);
-                } catch (Exception e) {
-                    JSONObject err = new JSONObject();
-                    err.put("src", ab.getAbsolutePath());
-                    err.put("error", e.getMessage() == null ? String.valueOf(e) : e.getMessage());
-                    errors.put(err);
+
+    /** 包级并发上限（与 NIKKE 一致）；避免一次扫根同步解完上千包把 UI 卡死。 */
+    public static final int MAX_CONCURRENT = 10;
+    /** 单包 inFlight 超时：超时记 failed 并腾槽，避免进度/toast 永远卡住。 */
+    public static final long INFLIGHT_STUCK_MS = 180_000L;
+    private static final int PRI_NORMAL = 0;
+    private static final int PRI_HIGH = 1_000_000;
+    private static final AtomicInteger GLOBAL_SEQ = new AtomicInteger();
+
+    private static final class QItem {
+        final File ab;
+        final String rel;
+        int priority;
+        final int seq;
+        QItem(File ab, String rel, int priority) {
+            this.ab = ab; this.rel = rel; this.priority = priority;
+            this.seq = GLOBAL_SEQ.incrementAndGet();
+        }
+    }
+    private static final class RootQueue {
+        final File root;
+        final Object lock = new Object();
+        final List<QItem> queue = new ArrayList<>();
+        final Map<String, QItem> known = new HashMap<>();
+        final Set<String> inFlight = new HashSet<>();
+        final Map<String, Long> inFlightStarted = new HashMap<>();
+        int found, reused, extracted, failed, skippedNoSpine;
+        final JSONArray errors = new JSONArray();
+        // legacy toast fields (arrays of objects) kept for older UI
+        final JSONArray extractedList = new JSONArray();
+        final JSONArray reusedList = new JSONArray();
+        long lastFullPrepareAt;
+        RootQueue(File root) { this.root = root; }
+    }
+    private static final Map<String, RootQueue> ROOT_QUEUES = new HashMap<>();
+    private static final ExecutorService JCZX_POOL =
+            Executors.newFixedThreadPool(MAX_CONCURRENT, r -> {
+                Thread t = new Thread(r, "jczx-unpack");
+                t.setDaemon(true);
+                return t;
+            });
+    private static final Comparator<QItem> QUEUE_CMP =
+            (a, b) -> b.priority != a.priority ? Integer.compare(b.priority, a.priority)
+                    : Integer.compare(a.seq, b.seq);
+
+    private static RootQueue queueFor(File root) {
+        String key = root.getAbsolutePath();
+        synchronized (ROOT_QUEUES) {
+            RootQueue q = ROOT_QUEUES.get(key);
+            if (q == null) {
+                q = new RootQueue(root);
+                ROOT_QUEUES.put(key, q);
+            }
+            return q;
+        }
+    }
+
+    private static String relOfRoot(File root, File ab) {
+        String rp = root.getAbsolutePath();
+        String ap = ab.getAbsolutePath();
+        if (ap.startsWith(rp)) {
+            String r = ap.substring(rp.length());
+            if (r.startsWith("/") || r.startsWith("\\")) r = r.substring(1);
+            return r.replace('\\', '/');
+        }
+        return ab.getName();
+    }
+
+    private static void enqueue(RootQueue rq, File ab, int priority) {
+        String rel = relOfRoot(rq.root, ab);
+        synchronized (rq.lock) {
+            if (rq.inFlight.contains(rel)) {
+                QItem existing = rq.known.get(rel);
+                if (existing != null && priority > existing.priority) existing.priority = priority;
+                return;
+            }
+            for (QItem q : rq.queue) {
+                if (q.rel.equals(rel)) {
+                    if (priority > q.priority) q.priority = priority;
+                    rq.queue.sort(QUEUE_CMP);
+                    return;
                 }
             }
-            meta.put("extracted", extracted);
-            meta.put("reused", reused);
-            meta.put("errors", errors);
-            meta.put("ok", errors.length() == 0);
-        } catch (Exception e) {
+            QItem it = new QItem(ab, rel, priority);
+            rq.known.put(rel, it);
+            rq.queue.add(it);
+            rq.queue.sort(QUEUE_CMP);
+        }
+    }
+
+    private static void sweepStuck(RootQueue rq) {
+        long now = System.currentTimeMillis();
+        List<String> stuck = new ArrayList<>();
+        for (Map.Entry<String, Long> e : rq.inFlightStarted.entrySet()) {
+            if (e.getValue() != null && now - e.getValue() > INFLIGHT_STUCK_MS) stuck.add(e.getKey());
+        }
+        for (String rel : stuck) {
+            rq.inFlight.remove(rel);
+            rq.inFlightStarted.remove(rel);
+            rq.failed++;
             try {
-                meta.put("bundles", bundles.size());
-                meta.put("extracted", extracted);
-                meta.put("reused", reused);
-                errors.put(new JSONObject().put("src", JSONObject.NULL).put("error", String.valueOf(e.getMessage())));
-                meta.put("errors", errors);
+                rq.errors.put(new JSONObject()
+                        .put("src", rel)
+                        .put("error", "inFlight timeout >" + (INFLIGHT_STUCK_MS / 1000) + "s"));
+            } catch (Exception ignored) { /* */ }
+        }
+    }
+
+    private static void pump(RootQueue rq) {
+        synchronized (rq.lock) {
+            sweepStuck(rq);
+            while (rq.inFlight.size() < MAX_CONCURRENT && !rq.queue.isEmpty()) {
+                QItem job = rq.queue.remove(0);
+                if (rq.inFlight.contains(job.rel)) continue;
+                rq.inFlight.add(job.rel);
+                rq.inFlightStarted.put(job.rel, System.currentTimeMillis());
+                final QItem j = job;
+                JCZX_POOL.execute(() -> {
+                    try {
+                        runOne(rq, j);
+                    } finally {
+                        synchronized (rq.lock) {
+                            rq.inFlight.remove(j.rel);
+                            rq.inFlightStarted.remove(j.rel);
+                        }
+                        pump(rq);
+                    }
+                });
+            }
+        }
+    }
+
+    private static void runOne(RootQueue rq, QItem job) {
+        try {
+            Result r = ensureExtracted(job.ab, rq.root);
+            synchronized (rq.lock) {
+                JSONObject one = new JSONObject();
+                try {
+                    one.put("src", job.ab.getAbsolutePath());
+                    one.put("cacheDir", r.cacheDir.getAbsolutePath());
+                    one.put("spine", r.spineVer == null ? JSONObject.NULL : r.spineVer);
+                } catch (Exception ignored) { /* */ }
+                if (r.reused) {
+                    rq.reused++;
+                    rq.reusedList.put(one);
+                } else if (r.ok) {
+                    rq.extracted++;
+                    rq.extractedList.put(one);
+                } else {
+                    // 无完整三件套 → skippedNoSpine（计入 done）；硬错误走 catch → failed
+                    rq.skippedNoSpine++;
+                }
+            }
+        } catch (Exception e) {
+            synchronized (rq.lock) {
+                rq.failed++;
+                try {
+                    rq.errors.put(new JSONObject()
+                            .put("src", job.ab.getAbsolutePath())
+                            .put("error", e.getMessage() == null ? String.valueOf(e) : e.getMessage()));
+                } catch (Exception ignored) { /* */ }
+            }
+        }
+    }
+
+    public static JSONObject progressOf(File root) {
+        return progressOf(queueFor(root));
+    }
+
+    private static JSONObject progressOf(RootQueue rq) {
+        JSONObject meta = new JSONObject();
+        try {
+            List<String> pendingRels = new ArrayList<>();
+            List<String> currentRels = new ArrayList<>();
+            List<String> current = new ArrayList<>();
+            int pending, inFlight;
+            synchronized (rq.lock) {
+                sweepStuck(rq);
+                pending = rq.queue.size();
+                inFlight = rq.inFlight.size();
+                for (String r : rq.inFlight) {
+                    currentRels.add(r);
+                    int slash = Math.max(r.lastIndexOf('/'), r.lastIndexOf('\\'));
+                    current.add(slash >= 0 ? r.substring(slash + 1) : r);
+                }
+                for (QItem q : rq.queue) pendingRels.add(q.rel);
+                for (String r : rq.inFlight) {
+                    if (!pendingRels.contains(r)) pendingRels.add(r);
+                }
+                int done = rq.reused + rq.extracted + rq.failed + rq.skippedNoSpine;
+                int playableDone = rq.reused + rq.extracted;
+                int total = Math.max(rq.found, done + pending + inFlight);
+                meta.put("found", rq.found);
+                meta.put("bundles", rq.found);
+                meta.put("reusedCount", rq.reused);
+                meta.put("extractedCount", rq.extracted);
+                meta.put("failed", rq.failed);
+                meta.put("skippedNoSpine", rq.skippedNoSpine);
+                meta.put("pending", pending);
+                meta.put("inFlight", inFlight);
+                meta.put("done", done);
+                meta.put("playableDone", playableDone);
+                meta.put("total", total);
+                meta.put("ready", pending == 0 && inFlight == 0);
+                meta.put("ok", rq.errors.length() == 0);
+                meta.put("cacheDir", CACHE_DIRNAME);
+                meta.put("limit", MAX_CONCURRENT);
+                meta.put("errors", rq.errors);
+                // toast UI historically reads extracted/reused as object arrays
+                meta.put("extracted", rq.extractedList);
+                meta.put("reused", rq.reusedList);
+                JSONArray cur = new JSONArray();
+                for (String c : current) cur.put(c);
+                meta.put("current", cur);
+                JSONArray pr = new JSONArray();
+                for (String r : pendingRels) pr.put(r);
+                meta.put("pendingRels", pr);
+                JSONArray cr = new JSONArray();
+                for (String r : currentRels) cr.put(r);
+                meta.put("currentRels", cr);
+            }
+        } catch (Exception ignored) { /* */ }
+        return meta;
+    }
+
+    /** 抬高指定包优先级（不打断 in-flight）。 */
+    public static JSONObject prioritize(File root, List<String> rels) {
+        RootQueue rq = queueFor(root);
+        int bumped = 0;
+        if (rels != null) {
+            for (String rel : rels) {
+                if (rel == null || rel.isEmpty()) continue;
+                String r = rel.replace('\\', '/');
+                File ab;
+                synchronized (rq.lock) {
+                    QItem it = rq.known.get(r);
+                    if (rq.inFlight.contains(r)) { bumped++; continue; }
+                    ab = (it != null) ? it.ab : new File(root, r);
+                }
+                if (ab != null && ab.isFile()) {
+                    enqueue(rq, ab, PRI_HIGH + GLOBAL_SEQ.incrementAndGet());
+                    bumped++;
+                }
+            }
+        }
+        pump(rq);
+        JSONObject out = progressOf(rq);
+        try { out.put("bumped", bumped); } catch (Exception ignored) { /* */ }
+        return out;
+    }
+
+    /**
+     * 扫描前把根下 JCZX AB 排进优先级队列并开始解包（并发 ≤ 10）。
+     * <b>立即返回</b>：已就绪的 {@code bd2viewer-jczx/} 立刻进入 walk；
+     * 未解完的包后台续解，前端用进度条 + 轮询重扫增量刷新。
+     * 旧实现同步等完全部包 → 截止时间被吃光 → gallery 显示 0 L2D。
+     */
+    public static JSONObject prepareRoot(File root) {
+        JSONObject meta = new JSONObject();
+        try {
+            RootQueue rq = queueFor(root);
+            synchronized (rq.lock) {
+                boolean busy = !rq.queue.isEmpty() || !rq.inFlight.isEmpty();
+                if (busy && rq.found > 0 && rq.lastFullPrepareAt > 0
+                        && (System.currentTimeMillis() - rq.lastFullPrepareAt) < 20000L) {
+                    return progressOf(rq);
+                }
+            }
+            migrateLegacyCache(root);
+            List<File> bundles = new ArrayList<>();
+            findBundles(root, 0, 5, bundles);
+            synchronized (rq.lock) {
+                sweepStuck(rq);
+                // 新一轮 full prepare：清计数（保留 in-flight / 已排队）
+                rq.extracted = 0;
+                rq.failed = 0;
+                rq.skippedNoSpine = 0;
+                while (rq.errors.length() > 0) rq.errors.remove(0);
+                while (rq.extractedList.length() > 0) rq.extractedList.remove(0);
+                while (rq.reusedList.length() > 0) rq.reusedList.remove(0);
+                rq.reused = 0;
+                rq.found = bundles.size();
+            }
+            int reused = 0;
+            List<File> todo = new ArrayList<>();
+            java.util.Set<String> live = new HashSet<>();
+            for (File ab : bundles) {
+                String rel = relOfRoot(root, ab);
+                live.add(rel);
+                try {
+                    Result r = peekReuse(ab, root);
+                    if (r != null && r.reused) { reused++; continue; }
+                } catch (Exception ignored) { /* need extract */ }
+                todo.add(ab);
+            }
+            synchronized (rq.lock) {
+                rq.known.keySet().retainAll(live);
+                rq.queue.removeIf(q -> !live.contains(q.rel));
+                rq.reused = reused;
+            }
+            for (File ab : todo) enqueue(rq, ab, PRI_NORMAL);
+            pump(rq);
+            synchronized (rq.lock) { rq.lastFullPrepareAt = System.currentTimeMillis(); }
+            meta = progressOf(rq);
+        } catch (Throwable e) {
+            try {
+                meta.put("bundles", 0);
+                meta.put("found", 0);
+                meta.put("pending", 0);
+                meta.put("ready", false);
                 meta.put("ok", false);
+                meta.put("extracted", new JSONArray());
+                meta.put("reused", new JSONArray());
+                JSONArray errs = new JSONArray();
+                errs.put(new JSONObject().put("src", JSONObject.NULL)
+                        .put("error", String.valueOf(e.getMessage())));
+                meta.put("errors", errs);
             } catch (Exception ignored) { /* */ }
         }
         return meta;
+    }
+
+    /** Stamp-only reuse check without clearing/extracting. */
+    private static Result peekReuse(File ab, File root) {
+        Result r = new Result();
+        try {
+            r.cacheDir = cacheDirFor(root, ab);
+        } catch (Exception e) {
+            return null;
+        }
+        File stamp = new File(r.cacheDir, ".stamp.json");
+        long size = ab.length();
+        long mtime = ab.lastModified();
+        if (!stamp.isFile()) return null;
+        try {
+            String text = readText(stamp);
+            JSONObject st = new JSONObject(text);
+            if (st.optBoolean("ok", false) && st.optLong("size") == size && st.optLong("mtimeMs") == mtime
+                    && EXTRACT_ENGINE.equals(st.optString("engine", ""))
+                    && cacheOutputsValid(r.cacheDir)) {
+                r.reused = true;
+                r.ok = true;
+                return r;
+            }
+        } catch (Exception ignored) { /* */ }
+        return null;
     }
 
     public static final class Result {
@@ -206,7 +520,7 @@ public final class JczxExtractor {
         stampObj.put("report", report);
         stampObj.put("extractedAt", java.time.Instant.now().toString());
         stampObj.put("engine", EXTRACT_ENGINE);
-        writeText(stamp, stampObj.toString(2));
+        writeText(stamp, stampObj.toString());
         if (!r.ok) {
             throw new IOException("JCZX extract failed: " + ab.getName() + " — " + report.optString("error", "incomplete"));
         }
@@ -233,32 +547,23 @@ public final class JczxExtractor {
         JSONArray exported = new JSONArray();
         JSONArray errors = new JSONArray();
 
-        // --- TextAsset: Spine JSON ---
+        // --- TextAsset: Spine JSON（JCZX 4.2 是 JSON） ---
         TextHit jsonHit = findSpineJson(cab.data);
-        String baseName = null;
+        String jsonBase = null;
         if (jsonHit != null) {
-            baseName = jsonHit.name != null ? jsonHit.name : "skeleton";
+            jsonBase = jsonHit.name != null ? jsonHit.name : "skeleton";
             for (String suf : new String[]{".skel", ".json", ".bytes", ".txt"}) {
-                if (baseName.toLowerCase(Locale.ROOT).endsWith(suf)) {
-                    baseName = baseName.substring(0, baseName.length() - suf.length());
+                if (jsonBase.toLowerCase(Locale.ROOT).endsWith(suf)) {
+                    jsonBase = jsonBase.substring(0, jsonBase.length() - suf.length());
                     break;
                 }
             }
-            String fname = baseName + ".json";
-            writeBytes(new File(outDir, fname), jsonHit.bytes);
-            JSONObject o = new JSONObject();
-            o.put("kind", "json");
-            o.put("name", fname);
-            o.put("size", jsonHit.bytes.length);
-            o.put("spine", jsonHit.spineVer == null ? JSONObject.NULL : jsonHit.spineVer);
-            exported.put(o);
-        } else {
-            errors.put(new JSONObject().put("err", "no spine JSON TextAsset"));
         }
 
         // --- TextAsset: atlas ---
-        TextHit atlasHit = findAtlas(cab.data, baseName);
+        TextHit atlasHit = findAtlas(cab.data, jsonBase);
         int texW = 0, texH = 0;
+        String baseName = jsonBase;
         if (atlasHit != null) {
             String an = atlasHit.name != null ? atlasHit.name : (baseName != null ? baseName : "atlas");
             if (!an.toLowerCase(Locale.ROOT).endsWith(".atlas")) an = an + ".atlas";
@@ -279,6 +584,38 @@ public final class JczxExtractor {
             }
         } else {
             errors.put(new JSONObject().put("err", "no atlas TextAsset"));
+        }
+
+        // --- 骨架：JSON 优先，二进制 .skel 兜底 ---
+        // 大部分 mod 包（NIKKE 等）的骨架是**二进制** .skel；这里曾经只认 JSON，
+        // 结果几百个包解出来只有 atlas + png，卡片能列出来却播不了。
+        boolean skeletonOk = false;
+        if (jsonHit != null) {
+            String fname = baseName + ".json";
+            writeBytes(new File(outDir, fname), jsonHit.bytes);
+            JSONObject o = new JSONObject();
+            o.put("kind", "json");
+            o.put("name", fname);
+            o.put("size", jsonHit.bytes.length);
+            o.put("spine", jsonHit.spineVer == null ? JSONObject.NULL : jsonHit.spineVer);
+            exported.put(o);
+            skeletonOk = true;
+        } else if (baseName != null) {
+            TextHit skelHit = findSpineSkel(cab.data, baseName);
+            if (skelHit != null) {
+                String fname = baseName + ".skel";
+                writeBytes(new File(outDir, fname), skelHit.bytes);
+                JSONObject o = new JSONObject();
+                o.put("kind", "skel");
+                o.put("name", fname);
+                o.put("size", skelHit.bytes.length);
+                o.put("spine", skelHit.spineVer == null ? JSONObject.NULL : skelHit.spineVer);
+                exported.put(o);
+                skeletonOk = true;
+            }
+        }
+        if (!skeletonOk) {
+            errors.put(new JSONObject().put("err", "no skeleton TextAsset (.json/.skel)"));
         }
 
         // --- Texture2D RGBA32 (Unity bottom-up; flip for PNG/Spine top-left) ---
@@ -315,7 +652,7 @@ public final class JczxExtractor {
         for (int i = 0; i < exported.length(); i++) {
             String k = exported.optJSONObject(i).optString("kind");
             if ("atlas".equals(k)) atlasOk = true;
-            if ("json".equals(k)) jsonOk = true;
+            if ("json".equals(k) || "skel".equals(k)) jsonOk = true;
             if ("png".equals(k)) pngOk = true;
         }
         summary.put("ok", atlasOk && jsonOk && pngOk);
@@ -342,9 +679,10 @@ public final class JczxExtractor {
             else if (n.endsWith(".png")) png = k;
         }
         if (atlas == null || png == null) return false;
-        // Spine 4.2 JCZX assets are JSON TextAssets; .skel-only (esp. tiny) → re-extract.
-        if (json == null) return false;
-        if (json.length() < 64) return false;
+        // 骨架：JSON（JCZX 4.2）或二进制 .skel（NIKKE / 大部分 mod 包）都算数，
+        // 但两者都没有 → 旧缓存里那批「只有图集没有骨架」的产物必须重解。
+        if (json == null && skel == null) return false;
+        if (json != null && json.length() < 64) return false;
         // Peek atlas size: WxH → raw bytes; reject stub/garbled PNGs (~256KB for multi-MB).
         int[] wh = peekAtlasSize(atlas);
         if (wh != null && wh[0] > 0 && wh[1] > 0) {
@@ -465,6 +803,69 @@ public final class JczxExtractor {
             if (m.find()) h.spineVer = m.group(1);
         } catch (Exception ignored) { /* */ }
         return h;
+    }
+
+    /**
+     * 二进制 Spine 骨架（`.skel`）TextAsset。CAB 里的布局是
+     * `[u32 LE 名字长度][名字][补齐4][u32 LE 数据长度][数据]`，
+     * 数据开头是 `[8 字节 hash][u8 版本串长度][版本串]`。
+     *
+     * 桌面端曾经只接受 JSON 骨架，把二进制 .skel 当「其它 TextAsset」丢掉，
+     * 于是几百个包解出来只有 atlas + png —— 卡片列得出来，点开却播不了。
+     */
+    // 包内可见：便于桌面 JVM 上跑真实包做验证（org.json 在 android.jar 里是 stub，
+    // 桌面 JVM 没法直接调 extract()，只能单独验这个方法）
+    static TextHit findSpineSkel(byte[] cab, String base) {
+        if (base == null || base.isEmpty()) return null;
+        for (String nm : new String[]{base + ".skel", base + ".skel.bytes"}) {
+            byte[] nb = nm.getBytes(StandardCharsets.UTF_8);
+            int from = 0;
+            while (true) {
+                int p = indexOf(cab, nb, from);
+                if (p < 0) break;
+                from = p + 1;
+                if (p < 4 || u32le(cab, p - 4) != nb.length) continue;   // 不是对象名
+                // Unity 的字符串是「长度前缀 + 恰好 len 字节」，之后 AlignStream(4)。
+                // 没有 NUL、也不额外补位 —— 写成 `+1+3` 会偏 4 字节，读出来是垃圾长度
+                // （实测：c224_00.skel 的长度前缀就在名字末尾，不在 +1 处）。
+                int q = (p + nb.length + 3) & ~3;
+                if (q + 4 > cab.length) continue;
+                int len = u32le(cab, q);
+                if (len < 64 || (long) q + 4L + len > cab.length) continue;
+                int start = q + 4;
+                String ver = binarySpineVersion(cab, start, len);
+                if (ver == null) continue;                                // 不像骨架
+                TextHit h = new TextHit();
+                h.bytes = new byte[len];
+                System.arraycopy(cab, start, h.bytes, 0, len);
+                h.name = nm;
+                h.spineVer = ver;
+                return h;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 二进制骨架头：`[8 字节 hash][varint 长度][版本串]`。不像就返回 null。
+     *
+     * ⚠️ 长度用的是 Spine 的 varint 字符串编码：**`0` = null、`1` = 空串**，所以真实字符数是
+     * `n - 1`。直接按 `n` 读会多吃一个字节（实测 c224_00.skel 读成 `4.1.20\xc4`，
+     * 正则不匹配 → 整个骨架被判成「不是骨架」）。
+     */
+    static String binarySpineVersion(byte[] cab, int at, int len) {
+        if (len < 12 || at + 10 > cab.length) return null;
+        int n = cab[at + 8] & 0xFF;
+        if (n < 2 || n > 25 || at + 9 + n > cab.length) return null;
+        int take = n - 1;                       // Spine 的字符串长度编码：n-1 个实际字符
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < take; i++) {
+            int c = cab[at + 9 + i] & 0xFF;
+            if (c == 0) break;
+            sb.append((char) c);
+        }
+        String s = sb.toString();
+        return s.matches("[34]\\.\\d+\\.\\d+") ? s : null;
     }
 
     private static TextHit findAtlas(byte[] cab, String preferBase) {
@@ -623,10 +1024,17 @@ public final class JczxExtractor {
         if (list == null) return;
         for (File f : list) {
             String n = f.getName();
-            if (isCacheDirName(n) || "node_modules".equals(n) || ".git".equals(n) || ".venv-jczx".equals(n)) {
+            // 跳过本缓存、NIKKE 缓存与杂项目录，避免跨 mode 串包
+            if (isCacheDirName(n)
+                    || NikkeAbExtractor.isCacheDirName(n)
+                    || "node_modules".equals(n) || ".git".equals(n) || ".venv-jczx".equals(n)) {
                 continue;
             }
             if (f.isDirectory()) {
+                // Never enter sibling game mode folders (cache lives at BD2Viewer parent)
+                if (depth > 0 && UnpackCacheHome.MODE_SOURCE_FOLDERS.contains(n.toLowerCase(Locale.ROOT))) {
+                    continue;
+                }
                 findBundles(f, depth + 1, maxDepth, out);
             } else if (f.isFile() && isLikelyBundleName(n) && fileLooksLikeUnityFs(f)) {
                 out.add(f);
@@ -663,6 +1071,66 @@ public final class JczxExtractor {
         if (p != null && !p.exists() && !p.mkdirs()) throw new IOException("mkdir " + p);
         try (FileOutputStream os = new FileOutputStream(f)) {
             os.write(b);
+        }
+    }
+
+
+    /**
+     * 源目录被删时清掉对应 bd2viewer-jczx/<hash>_* 缓存。
+     * relDir 本身在缓存内则跳过。
+     */
+    public static List<String> clearCacheForDeletedDir(File root, String relDir) {
+        List<String> cleared = new ArrayList<>();
+        if (root == null || relDir == null) return cleared;
+        String rel = relDir.replace('\\', '/');
+        while (rel.startsWith("/")) rel = rel.substring(1);
+        while (rel.endsWith("/")) rel = rel.substring(0, rel.length() - 1);
+        if (rel.isEmpty() || isCacheRel(rel)) return cleared;
+        Set<File> targets = new HashSet<>();
+        File src = new File(root, rel);
+        collectJczxCacheTargets(root, src, rel, targets);
+        // 前缀匹配缓存目录名里的 key
+        File cacheRoot = new File(root, CACHE_DIRNAME);
+        String needle = rel.replace("/", "__");
+        File[] kids = cacheRoot.isDirectory() ? cacheRoot.listFiles() : null;
+        if (kids != null) {
+            for (File k : kids) {
+                if (!k.isDirectory()) continue;
+                String name = k.getName();
+                int us = name.indexOf('_');
+                String key = us >= 0 ? name.substring(us + 1) : name;
+                if (key.equals(needle) || key.startsWith(needle + "__") || key.startsWith(needle + "_")) {
+                    targets.add(k);
+                }
+            }
+        }
+        for (File abs : targets) {
+            deleteRec(abs);
+            String r = relativize(root, abs);
+            cleared.add(r.replace('\\', '/'));
+        }
+        return cleared;
+    }
+
+    private static void collectJczxCacheTargets(File root, File node, String rel, Set<File> targets) {
+        if (node == null || !node.exists()) return;
+        try {
+            if (node.isFile()) {
+                if (isLikelyBundleName(node.getName())) {
+                    targets.add(cacheDirFor(root, node));
+                }
+                return;
+            }
+        } catch (Exception ignored) { return; }
+        if (!node.isDirectory()) return;
+        File[] kids = node.listFiles();
+        if (kids == null) return;
+        for (File k : kids) {
+            String n = k.getName();
+            if (isCacheDirName(n) || NikkeAbExtractor.isCacheDirName(n)
+                    || "node_modules".equals(n) || ".git".equals(n) || ".venv-jczx".equals(n)) continue;
+            String rr = rel.isEmpty() ? n : rel + "/" + n;
+            collectJczxCacheTargets(root, k, rr, targets);
         }
     }
 

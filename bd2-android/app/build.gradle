@@ -44,8 +44,12 @@ android {
         //       1.05 = versionCode 6（Spine 4.2 + JCZX 桌面提取 / 一键拖入；Phase A）
         //       1.05 Android bugfix build = versionCode 7（Android JCZX 一键解包：纯 Java UnityFS strip+extract；显示版本仍为 1.05）
         //       1.05 Host/cache fix = versionCode 8（JCZX nested URL + stale cache invalidate；显示版本仍为 1.05）
-        versionCode 8
-        versionName '1.05'
+        //       1.06 = versionCode 9（Lost Sword 两层角色：`_B` 背层 + `_F` 前层归成一套资产
+        //             并叠层渲染 —— 修「Lobby 角色单独打开只有半个」；缩略图同样叠层）
+        //       1.07 = versionCode 10（NIKKE 的 mod 包（UnityFS）自动解包：桌面 UnityPy /
+        //             安卓纯 Java，扫描前解到 bd2viewer-nikke/ 后按标准三件套播）
+        versionCode 10
+        versionName '1.07'
     }
 
     compileOptions {

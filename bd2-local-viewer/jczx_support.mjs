@@ -1,7 +1,7 @@
 /**
  * JCZX（交错战线）桌面提取支持：双 UnityFS MIT strip + 调 UnityPy 抽到缓存。
- * 仅 Node 侧使用；产物落在根目录下 `bd2viewer-jczx/`（无前导点，避免 Android WebView
- * 加载 /.dot-dir/ 路径失败）。旧版 `.bd2viewer-jczx/` 仍识别并在 prepare 时迁移。
+ * 仅 Node 侧使用；产物落在扫描根下 `bd2viewer-jczx/`（无前导点；BD2Viewer/jczx/bd2viewer-jczx 为预期布局）。
+ * 旧版 `.bd2viewer-jczx/` 仍识别并在 prepare 时迁移。
  *
  * Python 解析（无需 BD2_JCZX_PYTHON 即可用）：
  *   1. 可选覆盖：process.env.BD2_JCZX_PYTHON
@@ -16,6 +16,10 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import {
+  packFingerprint,
+  MODE_SOURCE_FOLDERS,
+} from './cache_home.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 export const JCZX_CACHE_DIRNAME = 'bd2viewer-jczx'
@@ -31,9 +35,9 @@ export function isJczxCacheRel(rel) {
   const r = String(rel || '').replace(/\\/g, '/')
   return (
     r === JCZX_CACHE_DIRNAME || r.startsWith(JCZX_CACHE_DIRNAME + '/') ||
-    r.includes(JCZX_CACHE_DIRNAME + '/') ||
+    r.includes('/' + JCZX_CACHE_DIRNAME + '/') ||
     r === JCZX_CACHE_DIRNAME_LEGACY || r.startsWith(JCZX_CACHE_DIRNAME_LEGACY + '/') ||
-    r.includes(JCZX_CACHE_DIRNAME_LEGACY + '/')
+    r.includes('/' + JCZX_CACHE_DIRNAME_LEGACY + '/')
   )
 }
 
@@ -357,10 +361,9 @@ export function isJczxName(name) {
   if (!l || l.startsWith('.')) return false
   // 已是标准 Spine 件，不当 AB
   if (/\.(atlas|json|skel|png|jpg|jpeg|webp|bytes|txt|md)$/i.test(l)) return false
-  if (/^prefabs_spine_/i.test(name)) return true
+  // JCZX 包名特征：prefabs_spine（可带 hash 前缀）；勿把 NIKKE 无扩展名包再入队
+  if (/prefabs_spine/i.test(name)) return true
   if (/\.(ab|unity3d|bundle|assets)$/i.test(l)) return true
-  // 无扩展名：交由魔数判定
-  if (!path.extname(name)) return true
   return false
 }
 
@@ -379,37 +382,94 @@ export async function looksLikeUnityFS(absPath) {
   }
 }
 
-function cacheDirFor(rootPath, abAbs) {
-  const rel = path.relative(rootPath, abAbs)
-  const key = rel.split(path.sep).join('__').replace(/[^\w.\-\u4e00-\u9fa5]+/g, '_')
+export function cacheDirFor(rootPath, abAbs) {
+  const rel = path.relative(rootPath, abAbs).split(/[/\\]/).join('/')
+  const key = rel.split('/').join('__').replace(/[^\w.\-\u4e00-\u9fa5]+/g, '_')
   const hash = crypto.createHash('sha1').update(rel).digest('hex').slice(0, 10)
   return path.join(rootPath, JCZX_CACHE_DIRNAME, `${hash}_${key}`)
 }
 
-function runExtract(py, src, outDir) {
-  return new Promise((resolve) => {
-    const reportPath = path.join(outDir, '.extract_report.json')
-    const child = spawn(py, [EXTRACT_PY, src, outDir, '--report', reportPath], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env },
-      windowsHide: true,
-    })
-    let stdout = ''
-    let stderr = ''
-    child.stdout.on('data', d => { stdout += d })
-    child.stderr.on('data', d => { stderr += d })
-    child.on('close', code => {
-      let report = null
-      try {
-        if (fs.existsSync(reportPath)) report = JSON.parse(fs.readFileSync(reportPath, 'utf8'))
-        else if (stdout.trim()) report = JSON.parse(stdout.trim().split('\n').pop())
-      } catch { /* ignore */ }
-      resolve({ code, stdout, stderr, report })
-    })
-    child.on('error', err => {
-      resolve({ code: -1, stdout, stderr: String(err), report: null })
-    })
-  })
+
+/** 源相对路径 → 缓存目录绝对路径（与 cacheDirFor 一致）。 */
+export function cacheDirForRel(rootPath, srcRel) {
+  const abs = path.resolve(rootPath, String(srcRel || '').split(/[/\\]/).join(path.sep))
+  return cacheDirFor(rootPath, abs)
+}
+
+/**
+ * 用户删掉源目录时清掉对应 JCZX 解包缓存。
+ * 正在删缓存目录本身 → 跳过。返回已清的缓存相对路径。
+ */
+export async function clearJczxCacheForDeletedDir(rootPath, relDir) {
+  const rel = String(relDir || '').split(/[/\\]/).filter(Boolean).join('/')
+  if (!rel || isJczxCacheRel(rel)) return []
+  const rootAbs = path.resolve(rootPath)
+  const srcAbs = path.resolve(rootAbs, rel)
+  const cleared = []
+  const targets = new Set()
+
+  const consider = (srcRel) => {
+    const abs = path.resolve(rootAbs, srcRel)
+    const c = cacheDirFor(rootAbs, abs)
+    targets.add(c)
+  }
+
+  const walk = async (dir, r) => {
+    let entries
+    try { entries = await fsp.readdir(dir, { withFileTypes: true }) } catch { return }
+    for (const e of entries) {
+      const abs = path.join(dir, e.name)
+      const rr = r ? r + '/' + e.name : e.name
+      if (e.isDirectory()) {
+        if (isJczxCacheDirName(e.name) || e.name === 'bd2viewer-nikke' || e.name === '.bd2viewer-nikke'
+          || e.name === 'node_modules' || e.name === '.git' || e.name === JCZX_VENV_DIRNAME) continue
+        await walk(abs, rr)
+        continue
+      }
+      if (!e.isFile()) continue
+      if (!isJczxName(e.name)) continue
+      consider(rr)
+    }
+  }
+
+  try {
+    const st = await fsp.stat(srcAbs)
+    if (st.isFile()) {
+      if (isJczxName(path.basename(srcAbs))) consider(rel)
+    } else if (st.isDirectory()) {
+      await walk(srcAbs, rel)
+    }
+  } catch { /* source gone */ }
+
+  // 也按前缀匹配：缓存目录名里嵌了 __ 分隔的相对路径
+  const cacheRoot = path.join(rootAbs, JCZX_CACHE_DIRNAME)
+  try {
+    const kids = await fsp.readdir(cacheRoot, { withFileTypes: true })
+    const needle = rel.replace(/\//g, '__')
+    for (const e of kids) {
+      if (!e.isDirectory()) continue
+      // 形如 <hash>_<key>，key 含源相对路径
+      const name = e.name
+      const us = name.indexOf('_')
+      const key = us >= 0 ? name.slice(us + 1) : name
+      if (key === needle || key.startsWith(needle + '__') || key.startsWith(needle + '_')) {
+        targets.add(path.join(cacheRoot, name))
+      }
+    }
+  } catch { /* no cache */ }
+
+  for (const abs of targets) {
+    await fsp.rm(abs, { recursive: true, force: true }).catch(() => {})
+    cleared.push(path.relative(rootAbs, abs).split(path.sep).join('/'))
+  }
+  return cleared
+}
+
+async function runExtract(py, src, outDir) {
+  const pool = getJczxPool(py)
+  const report = await pool.runJob(src, outDir, null)
+  const code = report && report.ok ? 0 : 1
+  return { code, stdout: '', stderr: (report && report.error) || '', report }
 }
 
 /**
@@ -439,7 +499,8 @@ export async function ensureJczxExtracted(abAbs, rootPath, { python, autoSetup =
   if (fs.existsSync(stampPath)) {
     try {
       const stamp = JSON.parse(await fsp.readFile(stampPath, 'utf8'))
-      if (stamp.ok && stamp.size === st.size && stamp.mtimeMs === st.mtimeMs) {
+      if (stamp.ok && stamp.size === st.size && stamp.mtimeMs === st.mtimeMs
+          && (await cacheHasSkeleton(cacheDir))) {
         return { cacheDir, report: stamp.report || null, reused: true, setup: setupMeta }
       }
     } catch { /* re-extract */ }
@@ -483,10 +544,16 @@ export async function findJczxBundles(rootPath, maxDepth = 5) {
     let entries
     try { entries = await fsp.readdir(dir, { withFileTypes: true }) } catch { return }
     for (const ent of entries) {
-      if (isJczxCacheDirName(ent.name) || ent.name === 'node_modules' || ent.name === '.git'
+      if (isJczxCacheDirName(ent.name) || ent.name === 'bd2viewer-nikke' || ent.name === '.bd2viewer-nikke'
+        || ent.name === 'node_modules' || ent.name === '.git'
         || ent.name === JCZX_VENV_DIRNAME) continue
       const abs = path.join(dir, ent.name)
       if (ent.isDirectory()) {
+        // Do not descend into sibling game mode folders (cache lives at parent)
+        if (MODE_SOURCE_FOLDERS.has(String(ent.name).toLowerCase())
+          && path.resolve(dir) !== path.resolve(rootPath)) {
+          continue
+        }
         await walk(abs, depth + 1)
         continue
       }
@@ -499,9 +566,279 @@ export async function findJczxBundles(rootPath, maxDepth = 5) {
   return out
 }
 
+/* -------- JCZX 包级优先级队列（与 NIKKE 同模型）：并发 ≤ 10，prepare 立即返回 -------- */
+export const JCZX_MAX_CONCURRENT = 10
+/** 单包 inFlight 超时：超时记 failed 并腾出槽位，避免 toast/进度永远卡在「后台还在处理」。 */
+export const JCZX_INFLIGHT_STUCK_MS = 180_000
+
+/** 常驻 Python worker 池：避免每包冷启动 UnityPy（包级并发仍 ≤ JCZX_MAX_CONCURRENT）。 */
+class JczxWorkerPool {
+  constructor(py, size) {
+    this.py = py
+    this.size = Math.max(1, size | 0)
+    this.workers = []
+    this.idle = []
+    this.waiters = []
+    this.closed = false
+  }
+  _spawnOne() {
+    const child = spawn(this.py, [EXTRACT_PY, '--worker'], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env },
+      windowsHide: true,
+    })
+    child._buf = ''
+    child._pending = null
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', chunk => {
+      child._buf += chunk
+      let nl
+      while ((nl = child._buf.indexOf('\n')) >= 0) {
+        const line = child._buf.slice(0, nl).trim()
+        child._buf = child._buf.slice(nl + 1)
+        if (!line) continue
+        const pending = child._pending
+        child._pending = null
+        if (!pending) continue
+        try { pending.resolve(JSON.parse(line)) }
+        catch (e) { pending.resolve({ ok: false, error: 'bad worker json: ' + e }) }
+        this._release(child)
+      }
+    })
+    child.stderr.on('data', () => {})
+    child.on('exit', () => {
+      this.workers = this.workers.filter(w => w !== child)
+      this.idle = this.idle.filter(w => w !== child)
+      if (child._pending) {
+        const pending = child._pending
+        child._pending = null
+        pending.resolve({ ok: false, error: 'worker exited' })
+      }
+    })
+    this.workers.push(child)
+    return child
+  }
+  _release(child) {
+    if (this.closed || !this.workers.includes(child)) return
+    const next = this.waiters.shift()
+    if (next) next(child)
+    else this.idle.push(child)
+  }
+  async _acquire() {
+    if (this.idle.length) return this.idle.pop()
+    if (this.workers.length < this.size) return this._spawnOne()
+    return new Promise(resolve => this.waiters.push(resolve))
+  }
+  runJob(src, outDir, rel) {
+    if (this.closed) return Promise.resolve({ ok: false, error: 'pool closed' })
+    return this._acquire().then(child => new Promise(resolve => {
+      child._pending = { resolve }
+      try {
+        child.stdin.write(JSON.stringify({ src, outDir, rel }) + '\n')
+      } catch (e) {
+        child._pending = null
+        resolve({ ok: false, error: String(e) })
+        this._release(child)
+      }
+    }))
+  }
+}
+const jczxPoolsByPy = new Map()
+function getJczxPool(py) {
+  let pool = jczxPoolsByPy.get(py)
+  if (!pool || pool.closed) {
+    pool = new JczxWorkerPool(py, JCZX_MAX_CONCURRENT)
+    jczxPoolsByPy.set(py, pool)
+  }
+  return pool
+}
+
+const PRI_NORMAL = 0
+const PRI_HIGH = 1_000_000
+let globalSeq = 0
+const rootStates = new Map()
+
+function getJczxState(rootPath) {
+  const key = path.resolve(rootPath)
+  let st = rootStates.get(key)
+  if (!st) {
+    st = {
+      rootPath: key,
+      queue: [],
+      inFlight: new Map(), // rel -> { abs, rel, startedAt }
+      known: new Map(),
+      found: 0,
+      reused: 0,
+      extracted: 0,
+      failed: 0,
+      skippedNoSpine: 0,
+      errors: [],
+      extractedList: [],
+      reusedList: [],
+      py: null,
+      pumping: false,
+    }
+    rootStates.set(key, st)
+  }
+  return st
+}
+
+function enqueueJczx(st, abs, rel, priority) {
+  if (st.inFlight.has(rel)) return
+  const existing = st.queue.find(q => q.rel === rel)
+  if (existing) {
+    if (priority > existing.priority) existing.priority = priority
+    st.queue.sort((a, b) => b.priority - a.priority || a.seq - b.seq)
+    return
+  }
+  const item = { abs, rel, priority, seq: ++globalSeq }
+  st.known.set(rel, item)
+  st.queue.push(item)
+  st.queue.sort((a, b) => b.priority - a.priority || a.seq - b.seq)
+}
+
+async function runJczxOne(st, job) {
+  try {
+    const r = await ensureJczxExtracted(job.abs, st.rootPath, { python: st.py, autoSetup: false })
+    const one = {
+      src: job.abs,
+      cacheDir: r.cacheDir,
+      // 二进制 .skel（1.07 修复后才有）与 JSON 骨架都带 spine 版本，任取一个
+      spine: (r.report?.exported?.find(x => x.kind === 'json')
+        || r.report?.exported?.find(x => x.kind === 'skel'))?.spine || null,
+    }
+    if (r.reused) { st.reused++; st.reusedList.push(one) }
+    else { st.extracted++; st.extractedList.push(one) }
+  } catch (err) {
+    // 有 extract report 但 ok=false → 包里本来就没有骨架（`textures_bigs_…` 这种纯贴图包
+    // 只有 Texture2D，JCZX 里一大把）—— 正常现象，**不进 errors**，否则前端会弹一句
+    // 「JCZX 提取失败：…」吓人（用户截图里出现过）。其它硬错误才算 failed。
+    if (err && err.report && err.report.ok === false) st.skippedNoSpine++
+    else st.failed++
+    if (!(err && err.report && err.report.ok === false)) {
+      st.errors.push({ src: job.abs, error: (err && err.message) || String(err) })
+    }
+  }
+}
+
+function sweepStuckJczx(st) {
+  const now = Date.now()
+  for (const [rel, info] of [...st.inFlight.entries()]) {
+    const started = (info && info.startedAt) || 0
+    if (started && now - started > JCZX_INFLIGHT_STUCK_MS) {
+      st.inFlight.delete(rel)
+      st.failed++
+      st.errors.push({ src: info.abs || rel, error: `inFlight timeout >${JCZX_INFLIGHT_STUCK_MS / 1000}s` })
+    }
+  }
+}
+
+function pumpJczx(st) {
+  if (st.pumping) return
+  st.pumping = true
+  sweepStuckJczx(st)
+  while (st.inFlight.size < JCZX_MAX_CONCURRENT && st.queue.length) {
+    const job = st.queue.shift()
+    if (st.inFlight.has(job.rel)) continue
+    st.inFlight.set(job.rel, { abs: job.abs, rel: job.rel, startedAt: Date.now() })
+    ;(async () => {
+      try { await runJczxOne(st, job) }
+      finally {
+        st.inFlight.delete(job.rel)
+        st.pumping = false
+        pumpJczx(st)
+      }
+    })()
+  }
+  st.pumping = false
+}
+
+export function getJczxUnpackProgress(rootPath) {
+  const st = getJczxState(rootPath)
+  sweepStuckJczx(st)
+  const pending = st.queue.length
+  const inFlight = st.inFlight.size
+  // 包处理进度：成功复用/新建 + 无 spine 跳过 + 失败，都算「处理完」
+  const done = st.reused + st.extracted + st.failed + st.skippedNoSpine
+  const playableDone = st.reused + st.extracted
+  const total = Math.max(st.found, done + pending + inFlight)
+  const pendingRels = st.queue.map(q => q.rel).concat([...st.inFlight.keys()])
+  const currentRels = [...st.inFlight.keys()]
+  return {
+    bundles: st.found,
+    found: st.found,
+    reused: st.reusedList,
+    extracted: st.extractedList,
+    reusedCount: st.reused,
+    extractedCount: st.extracted,
+    failed: st.failed,
+    skippedNoSpine: st.skippedNoSpine,
+    pending,
+    inFlight,
+    done,
+    playableDone,
+    total,
+    ready: pending === 0 && inFlight === 0,
+    ok: st.errors.length === 0,
+    cacheDir: JCZX_CACHE_DIRNAME,
+    limit: JCZX_MAX_CONCURRENT,
+    errors: st.errors.slice(0, 8),
+    pendingRels,
+    currentRels,
+    current: currentRels.map(r => r.split(/[/\\]/).pop()),
+    python: st.py,
+  }
+}
+
+export function prioritizeJczxUnpack(rootPath, rels = []) {
+  const st = getJczxState(rootPath)
+  let bumped = 0
+  for (const rel of rels || []) {
+    if (!rel) continue
+    const r = String(rel).replace(/\\/g, '/')
+    const known = st.known.get(r)
+    const abs = known?.abs || path.join(rootPath, r)
+    if (st.inFlight.has(r)) { bumped++; continue }
+    if (fs.existsSync(abs)) {
+      enqueueJczx(st, abs, r, PRI_HIGH + (++globalSeq))
+      bumped++
+    }
+  }
+  pumpJczx(st)
+  return { bumped, ...getJczxUnpackProgress(rootPath) }
+}
+
+async function stampLooksReusable(abAbs, rootPath) {
+  try {
+    const st = await fsp.stat(abAbs)
+    const cacheDir = cacheDirFor(rootPath, abAbs)
+    const stampPath = path.join(cacheDir, '.stamp.json')
+    if (!fs.existsSync(stampPath)) return false
+    const stamp = JSON.parse(await fsp.readFile(stampPath, 'utf8'))
+    if (!(stamp.ok && stamp.size === st.size && stamp.mtimeMs === st.mtimeMs)) return false
+    // 光 stamp 说 ok 不够：早期版本只认 JSON 骨架，二进制 `.skel` 被当「其它 TextAsset」
+    // 丢掉了 —— 那些缓存 stamp.ok=true 但目录里根本没有骨架，必须重解。
+    // （与安卓侧 JczxExtractor.outputsComplete 同一条判据。）
+    return await cacheHasSkeleton(cacheDir)
+  } catch { return false }
+}
+
+/** 缓存目录里是不是真有骨架文件（.skel 或 .json，排除点开头的 meta）。 */
+export async function cacheHasSkeleton(cacheDir) {
+  try {
+    for (const name of await fsp.readdir(cacheDir)) {
+      if (name.startsWith('.')) continue
+      const low = name.toLowerCase()
+      if (low.endsWith('.skel') || low.endsWith('.json')) return true
+    }
+  } catch { /* 读不了就当没有 */ }
+  return false
+}
+
 /**
- * 扫描前预处理：把根下所有 JCZX AB 抽到 `bd2viewer-jczx/`。
- * 返回 { bundles, extracted, reused, errors, setup, python }
+ * 扫描前预处理：把根下 JCZX AB 排进优先级队列并开始解包（并发 ≤ 10）。
+ * **立即返回**：已就绪的 `bd2viewer-jczx/` 立刻进入 walk；未解完的后台续解，
+ * 前端用进度条 + 轮询重扫增量刷新。旧实现同步等完全部包 → gallery 显示 0 L2D。
  */
 export async function prepareJczxRoot(rootPath, { maxDepth = 5, python, autoSetup = true, onLog } = {}) {
   const logs = []
@@ -525,36 +862,77 @@ export async function prepareJczxRoot(rootPath, { maxDepth = 5, python, autoSetu
     setupMeta = ensured.setup || null
     if (!ensured.probe?.ok) {
       return {
-        bundles: 0,
-        extracted: [],
-        reused: [],
+        bundles: 0, found: 0, extracted: [], reused: [],
         errors: [{
           src: null,
           error: setupMeta?.message
             || `未找到带 UnityPy 的 Python（尝试：${py}）。请运行 setup_jczx.bat / setup_jczx.sh（需联网一次），或设置可选的 BD2_JCZX_PYTHON。`,
         }],
-        setup: setupMeta,
-        python: py,
-        logs,
+        setup: setupMeta, python: py, logs,
+        pending: 0, done: 0, total: 0, ready: false, ok: false,
       }
     }
   }
 
-  const bundles = await findJczxBundles(rootPath, maxDepth)
-  const extracted = []
-  const reused = []
-  const errors = []
-  for (const ab of bundles) {
-    try {
-      const r = await ensureJczxExtracted(ab, rootPath, { python: py, autoSetup: false })
-      ;(r.reused ? reused : extracted).push({
-        src: ab,
-        cacheDir: r.cacheDir,
-        spine: r.report?.exported?.find(x => x.kind === 'json')?.spine || null,
-      })
-    } catch (err) {
-      errors.push({ src: ab, error: err.message })
-    }
+  const st = getJczxState(rootPath)
+  st.py = py
+  sweepStuckJczx(st)
+  const busy = st.queue.length > 0 || st.inFlight.size > 0
+  if (busy && st.found > 0 && st.lastFullPrepareAt && (Date.now() - st.lastFullPrepareAt) < 20000) {
+    const snap = getJczxUnpackProgress(rootPath)
+    log(`prepare skip (queue busy): done=${snap.done}/${snap.total}`)
+    return { ...snap, setup: setupMeta, python: py, logs, skippedRescan: true }
   }
-  return { bundles: bundles.length, extracted, reused, errors, setup: setupMeta, python: py, logs }
+  // 新一轮 full prepare：清计数（保留仍在飞/已排队的 job，避免丢工作）
+  st.extracted = 0
+  st.failed = 0
+  st.skippedNoSpine = 0
+  st.errors = []
+  st.extractedList = []
+  st.reusedList = []
+  st.reused = 0
+
+  const bundles = await findJczxBundles(rootPath, maxDepth)
+  st.found = bundles.length
+
+  let reused = 0
+  const todo = []
+  const live = new Set()
+  const seenFp = new Set()
+  let skippedDup = 0
+  for (const ab of bundles) {
+    const rel = path.relative(rootPath, ab).split(path.sep).join('/')
+    live.add(rel)
+    let fp = null
+    try {
+      const stt = await fsp.stat(ab)
+      fp = await packFingerprint(ab, stt.size)
+    } catch { /* */ }
+    if (fp && seenFp.has(fp)) {
+      skippedDup++
+      continue
+    }
+    if (fp) seenFp.add(fp)
+    st.known.set(rel, { abs: ab, rel, priority: PRI_NORMAL, seq: 0, fp })
+    if (await stampLooksReusable(ab, rootPath)) { reused++; continue }
+    todo.push({ abs: ab, rel })
+  }
+  if (skippedDup) {
+    st.skippedDup = (st.skippedDup || 0) + skippedDup
+    if (onLog) onLog(`[jczx] dedupe skipped ${skippedDup} duplicate pack(s)`)
+  }
+  // 丢掉已不在盘上的已知项（防 NIKKE 包曾误入队后残留）
+  for (const rel of [...st.known.keys()]) {
+    if (!live.has(rel)) st.known.delete(rel)
+  }
+  st.queue = st.queue.filter(q => live.has(q.rel))
+  st.reused = reused
+
+  for (const b of todo) enqueueJczx(st, b.abs, b.rel, PRI_NORMAL)
+  pumpJczx(st)
+
+  st.lastFullPrepareAt = Date.now()
+  const snap = getJczxUnpackProgress(rootPath)
+  log(`queue: done=${snap.done}/${snap.total} inFlight=${snap.inFlight} pending=${snap.pending}`)
+  return { ...snap, setup: setupMeta, python: py, logs }
 }

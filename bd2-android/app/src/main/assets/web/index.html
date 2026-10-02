@@ -43,6 +43,7 @@
     <div class="nav-actions">
       <select id="rootSelect" class="select" data-i18n-title="选择资产根目录" title="选择资产根目录"></select>
       <button class="btn" id="btnAddRoot" data-i18n="添加目录" data-i18n-title="把任意本地文件夹加为根目录" title="把任意本地文件夹加为根目录">添加目录</button>
+      <button class="btn danger" id="btnRemoveRoot" data-i18n="删除这个文件路径" data-i18n-title="从配置列表移除当前根目录（不删磁盘文件）" title="从配置列表移除当前根目录（不删磁盘文件）">删除这个文件路径</button>
       <button class="btn" id="btnRescan" data-i18n="重新扫描" data-i18n-title="重新扫描" title="重新扫描">重新扫描</button>
       <button class="btn" id="btnUpload" data-i18n="上传文件" data-i18n-title="拖入 .json/.skel + .atlas + .png" title="拖入 .json/.skel + .atlas + .png">上传文件</button>
       <button class="btn" id="btnGrid" data-i18n="平铺浏览" data-i18n-title="回到平铺浏览" title="回到平铺浏览">平铺浏览</button>
@@ -179,7 +180,16 @@
         <div class="player-host" id="playerHost" data-tutorial="character-viewer"></div>
         <canvas class="overlay-canvas" id="overlayCanvas"></canvas>
         <div class="layer-toast" id="layerToast" hidden></div>
-        <div class="spinner" id="spinner" hidden><span class="dot"></span><span data-i18n="加载中…">加载中…</span></div>
+        <div class="spinner" id="spinner" hidden>
+          <div class="spinner-inner">
+            <span class="dot"></span>
+            <span class="spinner-text" data-i18n="加载中…">加载中…</span>
+            <div class="work-progress-track spinner-track" id="loadTrack" hidden>
+              <div class="work-progress-fill" id="loadFill"></div>
+            </div>
+            <span class="spinner-stage" id="loadStage" hidden></span>
+          </div>
+        </div>
         <div class="error-box" id="errorBox" hidden></div>
         <div class="empty-state" id="emptyState">
           <div class="empty-icon">🖼</div>
@@ -234,6 +244,21 @@
 
     <!-- ======================= 平铺浏览（主界面） ======================= -->
     <section class="gallery" id="gallery">
+      <!-- 需求 2：解包 / 扫描 / 缩略图 真实进度条 -->
+      <div class="work-progress" id="workProgress" hidden>
+        <div class="work-progress-row" id="unpackProgressRow" hidden>
+          <div class="work-progress-track"><div class="work-progress-fill" id="unpackFill"></div></div>
+          <span class="work-progress-label" id="unpackLabel"></span>
+        </div>
+        <div class="work-progress-row" id="scanProgressRow" hidden>
+          <div class="work-progress-track indeterminate"><div class="work-progress-fill" id="scanFill"></div></div>
+          <span class="work-progress-label" id="scanLabel"></span>
+        </div>
+        <div class="work-progress-row" id="thumbProgressRow" hidden>
+          <div class="work-progress-track"><div class="work-progress-fill" id="thumbFill"></div></div>
+          <span class="work-progress-label" id="thumbLabel"></span>
+        </div>
+      </div>
       <div class="gal-head">
         <div class="gal-head-main">
           <span class="gal-title" id="galCount" data-i18n="平铺浏览">平铺浏览</span>
@@ -384,7 +409,7 @@
       </div>
       <label class="row small">
         <input type="checkbox" id="chkPremultiplied" checked>
-        <span data-i18n="贴图预乘 alpha（BD2 素材建议开启；若边缘出现黑边/半透明异常可关掉试试）">贴图预乘 alpha（BD2 素材建议开启；若边缘出现黑边/半透明异常可关掉试试）</span>
+        <span data-i18n="贴图预乘 alpha（BD2 / NIKKE / JCZX 建议开启；NIKKE·JCZX 图集已是 PMA，关开会黑边；BD2 为直通 PNG 需开启）">贴图预乘 alpha（BD2 / NIKKE / JCZX 建议开启；NIKKE·JCZX 图集已是 PMA，关开会黑边；BD2 为直通 PNG 需开启）</span>
       </label>
       <label class="row small">
         <input type="checkbox" id="chkAutoPlay" checked>
@@ -524,6 +549,7 @@
       <button type="button" class="btn block" id="cardMenuCopyDir" data-i18n="复制文件夹路径">复制文件夹路径</button>
       <button type="button" class="btn block" id="cardMenuCopyFile" data-i18n="复制图集文件路径">复制图集文件路径</button>
       <button type="button" class="btn block danger" id="cardMenuDelete" data-i18n="删除这个资产">删除这个资产</button>
+      <!-- 已移除「删除这个文件夹」整夹删盘 UX；移除根路径请用顶栏「删除这个文件路径」 -->
       <button type="button" class="btn block" id="cardMenuSelect" data-i18n="批量选择…">批量选择…</button>
     </div>
   </div>

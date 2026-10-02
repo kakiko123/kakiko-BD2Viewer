@@ -24,7 +24,26 @@ import {
   ensureJczxExtracted,
   isJczxName,
   looksLikeUnityFS,
+  getJczxUnpackProgress,
+  prioritizeJczxUnpack,
+  clearJczxCacheForDeletedDir,
 } from './jczx_support.mjs'
+import {
+  NIKKE_CACHE_DIRNAME,
+  isNikkeCacheDirName,
+  isNikkeCacheRel,
+  prepareNikkeRoot,
+  ensureNikkeExtracted,
+  isNikkeBundleName,
+  prioritizeNikkeUnpack,
+  getNikkeUnpackProgress,
+  clearNikkeCacheForDeletedDir,
+} from './nikke_ab_support.mjs'
+import {
+  resolveUnderRoot,
+  isInside,
+  MODE_SOURCE_FOLDERS,
+} from './cache_home.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PUBLIC_DIR = path.join(__dirname, 'public')
@@ -127,6 +146,8 @@ const FORMATS = {
       if (l.endsWith('.atlas')) return { role: 'atlas', base: name.slice(0, -'.atlas'.length) }
       if (l.endsWith('.skel')) return { role: 'skeleton', base: name.slice(0, -'.skel'.length), kind: 'skel' }
       if (l.endsWith('.json')) return { role: 'skeleton', base: name.slice(0, -'.json'.length), kind: 'json' }
+      // 需求 5：生成的 thumb.png 与 Lost Sword 预算图走同一角色，避免被当成图集页
+      if (l === 'thumb.png') return { role: 'thumb' }
       if (IMG_RE.test(name)) return { role: 'image' }
       return null
     },
@@ -160,7 +181,8 @@ const FORMATS = {
    * 同一角色的 `<id>_00`（本体）与 `<id>_aim_00` / `<id>_cover_00`（瞄准/掩体姿势）
    * 归成一套资产，播放页里切姿势 —— 分组逻辑在 app.js（一处实现，见 R18），
    * 这里只负责让 `mode=nikke` 拥有独立的扫描缓存与独立的模式档位。
-   * 骨架多为 Spine 4.0.x；扫描仍读骨架头写入 spineMinor（给前端选 4.0/4.1 运行时，见 R16），
+   * 标准导出多为 Spine 4.0.x；解包缓存（bd2viewer-nikke）为 4.1 二进制。扫描读骨架头写入
+   * spineMinor（给前端选 4.0/4.1 运行时，见 R16），
    * **不再**按世代丢掉条目——产品不要求跨模式完美隔离，各模式在对应素材在场时能正确查看即可。
    */
   nikke: {
@@ -188,10 +210,24 @@ function formatOf(id) {
 /**
  * 从二进制骨架文件头读出 minor（'4.0' / '4.1'）。
  * 布局：8 字节 hash → 1 字节长度 → "4.x.y\0"。读前 32 字节足够。
+ * 优先按布局偏移读版本串，避免 hash 字节里碰巧的 "4.0.x" 误导（与前端 / Android 同口径）。
  * JSON 骨架（.json / 裸 .bytes）不读文件，返回 null（按 4.1 线处理）。
  */
 function spineMinorFromHead(buf) {
   if (!buf || !buf.length) return null
+  if (buf.length > 10) {
+    const len = buf[8]
+    if (len > 0 && len < 24 && 9 + len <= buf.length) {
+      let s = ''
+      for (let i = 9; i < 9 + len; i++) {
+        const c = buf[i]
+        if (c === 0) break
+        s += String.fromCharCode(c)
+      }
+      const vm = /^4\.(\d)\.\d+/.exec(s)
+      if (vm) return `4.${vm[1]}`
+    }
+  }
   let text = ''
   const n = Math.min(buf.length, 32)
   for (let i = 0; i < n; i++) text += String.fromCharCode(buf[i])
@@ -278,14 +314,11 @@ function rootById(id) {
   return config.roots.find(r => r.id === id) || null
 }
 
-/** 判断绝对路径是否落在某个已授权的根目录内（防目录穿越） */
+/** 判断绝对路径是否落在某个已授权的根目录内（防目录穿越）。
+ *  解包缓存可能抬到 mode 子目录的父级（BD2Viewer/bd2viewer-*），一并放行。 */
 function isAuthorized(absPath) {
   const resolved = path.resolve(absPath)
-  return config.roots.some(r => {
-    const rootAbs = path.resolve(r.path)
-    const rel = path.relative(rootAbs, resolved)
-    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))
-  })
+  return config.roots.some(r => isInside(path.resolve(r.path), resolved))
 }
 
 // ---------------------------------------------------------------- scanning
@@ -316,6 +349,24 @@ function parseAtlasPages(atlasText) {
   return [...new Set(pages)]
 }
 
+/**
+ * 需求 5：目录里的 thumb.png 只有「不比资产旧」才挂到条目上。
+ * 资产变了（atlas / skeleton / 贴图任一更新）→ 返回 null，前端重新离屏渲并覆盖。
+ */
+async function freshThumbRel(dir, rootPath, thumbName, atlasName, skelName, imageNames) {
+  if (!thumbName) return null
+  const thumbAbs = path.join(dir, thumbName)
+  const tm = await mtimeOf(thumbAbs)
+  if (!tm) return null
+  let newest = await mtimeOf(path.join(dir, atlasName))
+  if (skelName) newest = Math.max(newest, await mtimeOf(path.join(dir, skelName)))
+  for (const n of imageNames || []) {
+    newest = Math.max(newest, await mtimeOf(path.join(dir, n)))
+  }
+  if (tm < newest) return null
+  return path.relative(rootPath, thumbAbs).split(path.sep).join('/')
+}
+
 async function walk(dir, depth, maxDepth, out, rootPath, fmt) {
   if (depth > maxDepth) return
   const entries = await listDir(dir)
@@ -333,6 +384,11 @@ async function walk(dir, depth, maxDepth, out, rootPath, fmt) {
       if (SKIP_DIRS.has(entry.name.toLowerCase())) continue
       // JCZX 提取缓存只在 jczx 模式下可见，其它模式扫到会串味
       if (isJczxCacheDirName(entry.name) && fmt.id !== 'jczx') continue
+      // NIKKE 解包缓存同理：只在 nikke 档可见（否则 BD2 档会把抽出来的资产再摆一遍）
+      if (isNikkeCacheDirName(entry.name) && fmt.id !== 'nikke') continue
+      // Never nest-scan another game's mode folder (bd2/nikke/jczx/lostsword)
+      if (MODE_SOURCE_FOLDERS.has(entry.name.toLowerCase())
+        && path.resolve(dir) !== path.resolve(rootPath)) continue
       subdirs.push(path.join(dir, entry.name))
       continue
     }
@@ -398,8 +454,8 @@ async function walk(dir, depth, maxDepth, out, rootPath, fmt) {
       spineMinor,
       images: found_,
       relImages: found_.map(relOf),
-      // 预算好的缩略图（Lost Sword 的 thumb.png）。有的话前端直接取，不用离屏渲染。
-      relThumb: thumb ? relOf(thumb) : null,
+      // 需求 5：thumb.png 且 mtime ≥ 资产文件才算有效（否则前端走离屏重渲并覆盖）
+      relThumb: await freshThumbRel(dir, rootPath, thumb, atlasName, skel && skel.name, found_),
       missingImages: missing,
       ok: !!skel && found_.length > 0 && missing.length === 0,
       // 文件改动时间：前端用它决定缩略图缓存要不要失效
@@ -442,10 +498,20 @@ async function scanRoot(root, force = false, mode = DEFAULT_FORMAT) {
   const items = []
   const exists = fs.existsSync(root.path)
   let jczxMeta = null
+  let nikkeMeta = null
   if (exists) {
     // JCZX：先把根下双 UnityFS AB 抽到 `bd2viewer-jczx/`，再按 bd 规则扫
     if (fmt.id === 'jczx') {
       jczxMeta = await prepareJczxRoot(root.path, {
+        maxDepth: config.maxDepth || 5,
+        autoSetup: true,
+      })
+    }
+    // NIKKE：根下的 mod 包（UnityFS，无扩展名）抽成标准三件套放进 `bd2viewer-nikke/`。
+    // 与 JCZX 不同：**不**把结果限制在缓存目录里 —— NIKKE 档还要照常认用户手里的
+    // 裸 .atlas/.skel/.png 目录（老 mod）；抽出来的资产和它们同处一个可见列表。
+    if (fmt.id === 'nikke') {
+      nikkeMeta = await prepareNikkeRoot(root.path, {
         maxDepth: config.maxDepth || 5,
         autoSetup: true,
       })
@@ -476,6 +542,7 @@ async function scanRoot(root, force = false, mode = DEFAULT_FORMAT) {
     scanMs: Date.now() - t0,
     items,
     ...(jczxMeta ? { jczx: jczxMeta } : {}),
+    ...(nikkeMeta ? { nikkeAb: nikkeMeta } : {}),
   }
   scanCache.set(cacheKey, { time: Date.now(), payload })
   return payload
@@ -613,6 +680,58 @@ function deleteItems(root, items) {
   return { ok: true, deleted, failed, removedDirs }
 }
 
+/**
+ * 删除整个目录（文件夹），仅允许落在当前 root 内，绝不越过 root 本身。
+ * 若目录内含 NIKKE/JCZX 源包，先清对应解包缓存，再递归删目录。
+ * 返回 { ok, deleted: relDir, clearedCache:[], error? }
+ */
+async function deleteDirectory(root, relDirRaw) {
+  const rootAbs = path.resolve(root.path)
+  const rel = String(relDirRaw || '').split(/[/\\]/).filter(Boolean).join('/')
+  if (!rel || rel === '.' ) {
+    return { ok: false, deleted: null, clearedCache: [], error: '不能删除根目录本身' }
+  }
+  const abs = path.resolve(rootAbs, rel)
+  if (!isAuthorized(abs)) {
+    return { ok: false, deleted: null, clearedCache: [], error: `路径越界，已拒绝：${rel}` }
+  }
+  // 二次确认：解析后必须仍在本 root 下，且不是 root 本身
+  const relCheck = path.relative(rootAbs, abs)
+  if (!relCheck || relCheck.startsWith('..') || path.isAbsolute(relCheck)) {
+    return { ok: false, deleted: null, clearedCache: [], error: `路径越界，已拒绝：${rel}` }
+  }
+  if (path.resolve(abs) === rootAbs) {
+    return { ok: false, deleted: null, clearedCache: [], error: '不能删除根目录本身' }
+  }
+  if (!fs.existsSync(abs)) {
+    return { ok: true, deleted: rel, clearedCache: [], missing: true }
+  }
+  let st
+  try { st = fs.statSync(abs) } catch (e) {
+    return { ok: false, deleted: null, clearedCache: [], error: e.message }
+  }
+  if (!st.isDirectory()) {
+    return { ok: false, deleted: null, clearedCache: [], error: `不是目录：${rel}` }
+  }
+
+  const clearedCache = []
+  try {
+    const n = await clearNikkeCacheForDeletedDir(rootAbs, rel)
+    const j = await clearJczxCacheForDeletedDir(rootAbs, rel)
+    clearedCache.push(...n, ...j)
+  } catch (e) {
+    // 清缓存失败不阻断删目录，但记下来
+    clearedCache.push(`(cache-clear-error:${e.message})`)
+  }
+
+  try {
+    fs.rmSync(abs, { recursive: true, force: true })
+  } catch (e) {
+    return { ok: false, deleted: null, clearedCache, error: e.message }
+  }
+  return { ok: true, deleted: rel, clearedCache }
+}
+
 function findFreePort(host, start, tries = 40) {
   return new Promise(resolve => {
     let port = start
@@ -635,7 +754,14 @@ function findFreePort(host, start, tries = 40) {
 
 async function handle(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`)
-  const pathname = decodeURIComponent(url.pathname)
+  let pathname
+  try {
+    // url.pathname is percent-encoded; decode so Chinese / spaces match disk.
+    // Do NOT use form-urlencoded rules (+ → space) — path '+' stays '+'.
+    pathname = decodeURIComponent(url.pathname)
+  } catch {
+    pathname = url.pathname
+  }
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
@@ -696,6 +822,53 @@ async function handle(req, res) {
     return
   }
 
+  // 需求 5：离屏缩略图落盘为资产目录里的 thumb.png（与 builtinThumbUrl 同源）
+  if (pathname === '/api/thumb' && req.method === 'POST') {
+    try {
+      const body = JSON.parse((await readBody(req)) || '{}')
+      const root = rootById(resolveRootId(String(body.rootId || ''))) || config.roots[0]
+      if (!root) {
+        sendJson(res, 404, { error: '没有可用的根目录' })
+        return
+      }
+      const rel = String(body.rel || '').replace(/\\/g, '/').replace(/^\/+/, '')
+      if (!rel || path.basename(rel).toLowerCase() !== 'thumb.png') {
+        sendJson(res, 400, { error: 'rel 必须是 …/thumb.png' })
+        return
+      }
+      const abs = path.resolve(root.path, rel)
+      if (!isAuthorized(abs)) {
+        sendJson(res, 403, { error: '路径越界，已拒绝' })
+        return
+      }
+      const b64 = String(body.data || '')
+      if (!b64) {
+        sendJson(res, 400, { error: '缺少 data（base64）' })
+        return
+      }
+      // Never create foreign game folders under this mode root (e.g. BD2 char
+      // dirs under jczx/). Thumb only lands next to an existing asset directory.
+      const parent = path.dirname(abs)
+      try {
+        const pst = await fsp.stat(parent)
+        if (!pst.isDirectory()) {
+          sendJson(res, 400, { error: '缩略图目录不存在（拒绝新建异游戏文件夹）', path: parent })
+          return
+        }
+      } catch {
+        sendJson(res, 400, { error: '缩略图目录不存在（拒绝新建异游戏文件夹）', path: parent })
+        return
+      }
+      await fsp.writeFile(abs, Buffer.from(b64, 'base64'))
+      // 扫描缓存失效：下次扫描能立刻带上 relThumb
+      invalidateScanCache(root.id)
+      sendJson(res, 200, { ok: true, rel })
+    } catch (err) {
+      sendJson(res, 400, { error: err.message })
+    }
+    return
+  }
+
   // 删除一整套资产（atlas + skeleton + 它引用的贴图）。**不可恢复**，
   // 前端在调过来之前已经弹过带文件清单的二次确认。
   if (pathname === '/api/delete' && req.method === 'POST') {
@@ -712,6 +885,25 @@ async function handle(req, res) {
       // 否则下一次「不强制刷新」的扫描会把刚删掉的资产又从缓存里列出来（看着像删除失败）。
       if (out.deleted.length) invalidateScanCache(root.id)
       sendJson(res, 200, out)
+    } catch (err) {
+      sendJson(res, 400, { error: err.message })
+    }
+    return
+  }
+
+  // 删除整个目录（文件夹）。**不可恢复**；前端已弹确认。
+  if (pathname === '/api/delete-dir' && req.method === 'POST') {
+    try {
+      const body = JSON.parse((await readBody(req)) || '{}')
+      const root = rootById(resolveRootId(String(body.rootId || ''))) || config.roots[0]
+      if (!root) {
+        sendJson(res, 404, { error: '没有可用的根目录' })
+        return
+      }
+      const relDir = String(body.relDir || body.rel || '').trim()
+      const out = await deleteDirectory(root, relDir)
+      if (out.ok && out.deleted) invalidateScanCache(root.id)
+      sendJson(res, out.ok ? 200 : 400, out)
     } catch (err) {
       sendJson(res, 400, { error: err.message })
     }
@@ -742,6 +934,139 @@ async function handle(req, res) {
       sendJson(res, 200, { ok: true, root, exists })
     } catch (err) {
       sendJson(res, 400, { error: err.message })
+    }
+    return
+  }
+
+  // 从配置列表移除根路径（只改 viewer.config.json，不删磁盘上任何文件）
+  if (pathname === '/api/roots' && req.method === 'DELETE') {
+    try {
+      const body = JSON.parse((await readBody(req)) || '{}')
+      const id = String(body.id || '').trim()
+      const wantPath = String(body.path || '').trim()
+      if (!id && !wantPath) {
+        sendJson(res, 400, { error: '缺少 id 或 path' })
+        return
+      }
+      const before = config.roots.length
+      let removed = null
+      config.roots = config.roots.filter(r => {
+        const hit = (id && r.id === id) ||
+          (wantPath && path.resolve(r.path) === path.resolve(wantPath))
+        if (hit && !removed) removed = r
+        return !hit
+      })
+      if (!removed || config.roots.length === before) {
+        sendJson(res, 404, { error: '找不到要移除的根目录', ok: false })
+        return
+      }
+      await saveConfig()
+      if (removed.id) invalidateScanCache(removed.id)
+      sendJson(res, 200, { ok: true, removed: { id: removed.id, label: removed.label, path: removed.path } })
+    } catch (err) {
+      sendJson(res, 400, { error: err.message, ok: false })
+    }
+    return
+  }
+
+  // NIKKE 一键丢入：把 mod 包写进当前根目录并立刻解包，返回最新扫描结果。
+  // 与 JCZX 的差别：NIKKE 档**不**只认缓存 —— 解包出来的资产和用户原有的裸
+  // .atlas/.skel 目录共存于同一个可见列表，所以这里按 nikke 模式重扫。
+  // JCZX 解包进度（真实计数；前端进度条轮询，不必整页重扫）
+  if (pathname === '/api/jczx/progress') {
+    const rootId = url.searchParams.get('root') || (config.roots[0] && config.roots[0].id)
+    const root = config.roots.find(r => r.id === rootId)
+    if (!root) return sendJson(res, 404, { error: 'unknown root' })
+    return sendJson(res, 200, getJczxUnpackProgress(root.path))
+  }
+  // JCZX 解包优先（不打断 in-flight）
+  if (pathname === '/api/jczx/prioritize' && req.method === 'POST') {
+    const chunks = []
+    for await (const c of req) chunks.push(c)
+    let body = {}
+    try { body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') } catch { body = {} }
+    const rootId = body.root || url.searchParams.get('root') || (config.roots[0] && config.roots[0].id)
+    const root = config.roots.find(r => r.id === rootId)
+    if (!root) return sendJson(res, 404, { error: 'unknown root' })
+    const rels = Array.isArray(body.rels) ? body.rels : (body.rel ? [body.rel] : [])
+    return sendJson(res, 200, prioritizeJczxUnpack(root.path, rels))
+  }
+  // NIKKE 解包进度（真实计数；前端进度条轮询，不必整页重扫）
+  if (pathname === '/api/nikke-ab/progress') {
+    const rootId = url.searchParams.get('root') || (config.roots[0] && config.roots[0].id)
+    const root = config.roots.find(r => r.id === rootId)
+    if (!root) return sendJson(res, 404, { error: 'unknown root' })
+    return sendJson(res, 200, getNikkeUnpackProgress(root.path))
+  }
+
+  // NIKKE 解包优先：点开未解完的卡 / 同角色姿势兄弟抬到队首（不打断 in-flight）
+  if (pathname === '/api/nikke-ab/prioritize' && req.method === 'POST') {
+    const chunks = []
+    for await (const c of req) chunks.push(c)
+    let body = {}
+    try { body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') } catch { body = {} }
+    const rootId = body.root || url.searchParams.get('root') || (config.roots[0] && config.roots[0].id)
+    const root = config.roots.find(r => r.id === rootId)
+    if (!root) return sendJson(res, 404, { error: 'unknown root' })
+    const rels = Array.isArray(body.rels) ? body.rels : (body.rel ? [body.rel] : [])
+    // 也接受 siblingKey / keys：按角色 id 抬高所有同键排队项
+    const keys = Array.isArray(body.keys) ? body.keys : (body.key ? [body.key] : [])
+    if (keys.length) {
+      const prog = getNikkeUnpackProgress(root.path)
+      const all = [...(prog.currentRels || []), ...((prog.pendingRels) || [])]
+      // pendingRels 可能不在 progress 快照里 —— 从 prioritize 内部 known 解决；
+      // 这里把 key 转成假 rel（basename=key）也能被 sibling 匹配吃到
+      for (const k of keys) rels.push(String(k))
+    }
+    const out = prioritizeNikkeUnpack(root.path, rels, { sibling: body.sibling !== false })
+    return sendJson(res, 200, out)
+  }
+
+  if (pathname === '/api/nikke-ab/ingest' && req.method === 'POST') {
+    try {
+      const rootId = url.searchParams.get('root') || ''
+      const root = rootId ? rootById(resolveRootId(rootId)) : config.roots[0]
+      if (!root) {
+        sendJson(res, 404, { error: '没有可用的根目录，请先添加目录' })
+        return
+      }
+      const filename = String(url.searchParams.get('name') || req.headers['x-filename'] || 'bundle').trim()
+      let safeName = path.basename(filename).replace(/[\\/\0]/g, '_') || 'bundle'
+      if (!isNikkeBundleName(safeName)) safeName = safeName.replace(/\.(atlas|skel|png|json|bytes)$/i, '') || 'bundle'
+      const bodyBuf = await new Promise((resolve, reject) => {
+        const chunks = []
+        req.on('data', c => chunks.push(c))
+        req.on('end', () => resolve(Buffer.concat(chunks)))
+        req.on('error', reject)
+      })
+      if (!bodyBuf.length) {
+        sendJson(res, 400, { error: '空文件' })
+        return
+      }
+      if (!fs.existsSync(root.path)) await fsp.mkdir(root.path, { recursive: true })
+      const dest = path.join(root.path, safeName)
+      if (!isAuthorized(dest) && path.resolve(dest) !== path.resolve(root.path, safeName)) {
+        sendJson(res, 403, { error: '路径越界' })
+        return
+      }
+      await fsp.writeFile(dest, bodyBuf)
+      if (!(await looksLikeUnityFS(dest))) {
+        await fsp.unlink(dest).catch(() => {})
+        sendJson(res, 400, { error: '不是 UnityFS / AssetBundle（文件头缺少 UnityFS）' })
+        return
+      }
+      const extracted = await ensureNikkeExtracted(dest, root.path, { autoSetup: true })
+      invalidateScanCache(root.id)
+      const scan = await scanRoot(root, true, 'nikke')
+      sendJson(res, 200, {
+        ok: true,
+        saved: safeName,
+        outDir: extracted.outDir,
+        report: extracted.report,
+        scan,
+      })
+    } catch (err) {
+      sendJson(res, 500, { error: err.message })
     }
     return
   }
@@ -809,15 +1134,26 @@ async function handle(req, res) {
       return
     }
     const rootId = rest.slice(0, slash)
-    const relPath = rest.slice(slash + 1)
+    const relPath = rest.slice(slash + 1).replace(/\\/g, '/')
     const root = rootById(resolveRootId(rootId))
     if (!root) {
       sendJson(res, 404, { error: `未知的根目录：${rootId}` })
       return
     }
-    const abs = path.resolve(root.path, relPath)
+    // Match URL encoding to disk: try scan root + lifted unpack cache home;
+    // tolerate double-encoding / separators / bare leaf under bd2viewer-*.
+    let abs = resolveUnderRoot(root.path, relPath, {
+      cacheDirNames: [
+        JCZX_CACHE_DIRNAME, JCZX_CACHE_DIRNAME_LEGACY,
+        NIKKE_CACHE_DIRNAME, '.bd2viewer-nikke',
+      ],
+    })
+    if (!abs) {
+      // Fallback join for clearer 404 path in JSON (Windows Chinese/space roots)
+      abs = path.resolve(root.path, relPath.split('/').join(path.sep))
+    }
     if (!isAuthorized(abs)) {
-      sendJson(res, 403, { error: '路径越界' })
+      sendJson(res, 403, { error: '路径越界', path: abs })
       return
     }
     await streamFile(res, abs)

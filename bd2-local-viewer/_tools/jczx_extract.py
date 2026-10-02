@@ -64,6 +64,32 @@ def looks_like_json_skel(name: str, raw: bytes) -> bool:
     return '"skeleton"' in head or '"spine"' in head or '"bones"' in head
 
 
+def is_json_content(raw: bytes) -> bool:
+    return raw.lstrip().startswith(b"{")
+
+
+def looks_like_binary_skel(name: str, raw: bytes) -> bool:
+    """二进制骨架（如 NIKKE mod 包里的 `c224_00.skel`，Spine 4.1 二进制）。
+
+    之前只认 JSON（内容以 `{` 开头），二进制 .skel 落进「其它 TextAsset」被忽略 ——
+    632 个解包目录里 497 个因此缺骨架、无法播放（2026-10-02 修复）。
+    判据：名字以 .skel / .skel.bytes 结尾，且内容不是 JSON
+    （历史样本里有「原名 .skel 实为 JSON」的，那种继续走 JSON 分支写成 .json）。
+    """
+    ln = name.lower()
+    if not (ln.endswith(".skel") or ln.endswith(".skel.bytes")):
+        return False
+    return not is_json_content(raw)
+
+
+def binary_skel_version(raw: bytes) -> str | None:
+    """二进制骨架头部的版本串：[0..7] hash、[8] 长度、[9..] "x.y.z\\0"。"""
+    import re
+
+    m = re.search(rb"([0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,3})", raw[:64])
+    return m.group(1).decode("ascii") if m else None
+
+
 def extract(src: Path, out_dir: Path) -> dict:
     import UnityPy
 
@@ -104,6 +130,23 @@ def extract(src: Path, out_dir: Path) -> dict:
                     (out_dir / fname).write_bytes(raw_b)
                     summary["exported"].append(
                         {"kind": "atlas", "name": fname, "size": len(raw_b)}
+                    )
+                elif looks_like_binary_skel(name, raw_b):
+                    # 二进制骨架：保留 .skel 后缀（去掉 .bytes），交给 @skel 归桶
+                    base = name
+                    for suf in (".skel.bytes", ".skel"):
+                        if base.lower().endswith(suf):
+                            base = base[: -len(suf)]
+                            break
+                    fname = f"{base}.skel"
+                    (out_dir / fname).write_bytes(raw_b)
+                    summary["exported"].append(
+                        {
+                            "kind": "skel",
+                            "name": fname,
+                            "size": len(raw_b),
+                            "spine": binary_skel_version(raw_b),
+                        }
                     )
                 elif looks_like_json_skel(name, raw_b):
                     # 强制 .json：内容是 JSON（探针样本原名 .skel 实为 JSON 4.2）
@@ -153,17 +196,48 @@ def extract(src: Path, out_dir: Path) -> dict:
     summary["counts"] = counts
     atlas_ok = any(x["kind"] == "atlas" for x in summary["exported"])
     json_ok = any(x["kind"] == "json" for x in summary["exported"])
+    skel_ok = any(x["kind"] == "skel" for x in summary["exported"])
     png_ok = any(x["kind"] == "png" for x in summary["exported"])
-    summary["ok"] = bool(atlas_ok and json_ok and png_ok)
+    summary["ok"] = bool(atlas_ok and (json_ok or skel_ok) and png_ok)
     return summary
+
+
+def worker_loop() -> int:
+    """常驻：预热 UnityPy，stdin 每行一个 {src,outDir,rel?}，stdout 一行结果。"""
+    import UnityPy  # noqa: F401
+    for line in sys.stdin:
+        line = line.strip()
+        if not line or line in ("QUIT", "EXIT"):
+            break
+        try:
+            item = json.loads(line)
+        except Exception as e:
+            print(json.dumps({"ok": False, "error": f"bad job json: {e!r}"}), flush=True)
+            continue
+        if item.get("cmd") == "quit":
+            break
+        src = Path(item["src"])
+        out_dir = Path(item["outDir"])
+        try:
+            summary = extract(src, out_dir)
+        except Exception as e:
+            summary = {"ok": False, "error": repr(e), "src": str(src)}
+        summary["rel"] = item.get("rel")
+        print(json.dumps(summary, ensure_ascii=False), flush=True)
+    return 0
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="JCZX UnityFS → Spine extract")
-    ap.add_argument("src", type=Path, help="packed AB / UnityFS file")
-    ap.add_argument("out_dir", type=Path, help="output directory for .atlas/.json/.png")
+    ap.add_argument("src", nargs="?", type=Path, help="packed AB / UnityFS file")
+    ap.add_argument("out_dir", nargs="?", type=Path, help="output directory for .atlas/.json/.png")
+    ap.add_argument("--worker", action="store_true", help="stdin JSONL worker 模式")
     ap.add_argument("--report", type=Path, default=None, help="write JSON report path")
     args = ap.parse_args()
+    if args.worker:
+        return worker_loop()
+    if not args.src or not args.out_dir:
+        ap.error("provide src out_dir, or --worker")
     if not args.src.is_file():
         print(json.dumps({"ok": False, "error": f"not a file: {args.src}"}), flush=True)
         return 2

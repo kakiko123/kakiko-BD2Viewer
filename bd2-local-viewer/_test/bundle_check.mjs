@@ -100,6 +100,10 @@ try {
     30000)
   check('单文件 HTML 里脚本执行、资产扫描完成', ready)
 
+  // 关掉「缩略图写回资产目录」（需求 5）：它会把 thumb.png 写进**用户的**资产目录，
+  // 测试不该改用户的磁盘（2026-10-02 实测本机被写了 124 个）。
+  await cdp.evaluate(`__bd2viewer.setThumbPersist(false); return __bd2viewer.thumbPersist`)
+
   const info = await cdp.evaluate(`
     const v = window.__bd2viewer
     return {
@@ -142,13 +146,78 @@ try {
   check('骨架版本探测：真实 4.1 骨架判成 4.1（不误判成 4.0）',
     rt.minor === '4.1', `${rt.rel} → ${rt.minor}`)
 
+  /* Spine 3.x JSON → 4.x 的兼容转换（纯函数，喂合成数据即可）。
+     为什么值得单测：JCZX 缓存里 131/135 个带骨架的资产是 3.8 JSON，而 4.x 运行时
+     读不出来的字段**不报错、只变 NaN**，症状是「骨架能载入、动画列表正常、但取景
+     抛 Animation bounds are invalid」——没有这条断言就只能靠肉眼看着像不像。 */
+  const cv = await cdp.evaluate(`
+    const f = window.__bd2viewer.spineJson38to41
+    if (typeof f !== 'function') return { missing: true }
+    const src = {
+      skeleton: { spine: '3.8.99' },
+      bones: [{ name: 'b' }],
+      slots: [{ name: 's' }],
+      animations: {
+        idle: {
+          bones: {
+            b: {
+              rotate: [{ angle: 10, curve: 0.25, c3: 0.75 }, { time: 1, angle: 20 }],
+              translate: [{ x: 1, y: 2, curve: 0.3, c2: 0.4 }, { time: 1, x: 3, y: 4 }],
+            },
+          },
+          slots: { s: { color: [{ color: 'ffffff00' }] } },
+          transform: { t: [{ time: 0, rotateMix: 0 }] },
+          deform: { default: { s: [{ time: 0, vertices: [] }] } },
+        },
+      },
+    }
+    const out = f(JSON.stringify(src))
+    const j = JSON.parse(out)
+    const a = j.animations.idle
+    const rot = a.bones.b.rotate
+    const tr = a.bones.b.translate
+    return {
+      keptVersion: j.skeleton.spine,
+      rotValue: rot[0].value,
+      rotAngleGone: rot[0].angle === undefined,
+      rotCurve: rot[0].curve,
+      rotSecondNoCurve: rot[1].curve === undefined,
+      trCurveLen: Array.isArray(tr[0].curve) ? tr[0].curve.length : -1,
+      trCurveHalvesSame: Array.isArray(tr[0].curve) && tr[0].curve.length === 8 &&
+        JSON.stringify(tr[0].curve.slice(0, 4)) === JSON.stringify(tr[0].curve.slice(4)),
+      rgbaExists: !!a.slots.s.rgba, colorGone: a.slots.s.color === undefined,
+      rgbaValue: a.slots.s.rgba ? a.slots.s.rgba[0].color : null,
+      transformGone: a.transform === undefined,
+      deformGone: a.deform === undefined,
+      compactLeft: 'c2' in rot[0] || 'c3' in rot[0] || 'c4' in rot[0],
+      not38: f(JSON.stringify({ skeleton: { spine: '4.1.20' }, animations: {} })),
+      junk: f('{ not json'),
+    }
+  `)
+  check('3.8 JSON 转换：旋转时间轴 angle → value，且不再残留 angle',
+    cv.rotValue === 10 && cv.rotAngleGone === true, JSON.stringify(cv.rotCurve))
+  check('3.8 JSON 转换：1 分量时间轴的紧凑曲线 → [cx1,cy1,cx2,cy2]（ease-in-out 缺省规则）',
+    JSON.stringify(cv.rotCurve) === JSON.stringify([0.25, 0.25, 0.75, 0.75]),
+    JSON.stringify(cv.rotCurve))
+  check('3.8 JSON 转换：2 分量时间轴要 8 个数（4.x 的 curve 按分量分槽）',
+    cv.trCurveLen === 8 && cv.trCurveHalvesSame === true, `len=${cv.trCurveLen}`)
+  check('3.8 JSON 转换：插槽颜色时间轴 color → rgba（值原样搬）',
+    cv.rgbaExists === true && cv.colorGone === true && cv.rgbaValue === 'ffffff00')
+  check('3.8 JSON 转换：transform / deform 整段删掉（4.x 读法不同，硬搬更歪）',
+    cv.transformGone === true && cv.deformGone === true)
+  check('3.8 JSON 转换：不残留紧凑系数键（c2/c3/c4）', cv.compactLeft === false)
+  check('3.8 JSON 转换：非 3.x 骨架与坏 JSON 都返回 null（调用方保持原样）',
+    cv.not38 === null && cv.junk === null)
+
   check('桌面模式下 isNative=false', info.isNative === false, `isNative=${info.isNative}`)
   check('资产列表非空', info.items > 0, `${info.items} 个`)
   check('动画已载入', info.anims > 0, `${info.anims} 个动画`)
   check('载入遮罩已撤掉（脚本跑到了最后）', info.bootGone)
   check('内联样式生效（不是裸 HTML）',
     info.styleApplied && info.styleApplied !== 'rgba(0, 0, 0, 0)', info.styleApplied)
-  check('标题正确', /BD2/.test(info.title || ''), info.title)
+  // 显示品牌：1.05 起界面名改为「Kakiko Viewer」（Android label 同名）。
+  // 断言只守「标题是产品名、不是空/默认」——品牌名改了就改这里一处。
+  check('标题正确', /Kakiko Viewer/.test(info.title || ''), info.title)
 
   // 画面真的画出来了吗
   const px = await cdp.evaluate(`

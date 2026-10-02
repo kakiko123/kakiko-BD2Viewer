@@ -2,7 +2,7 @@
 
 给要改这个项目的人。**动手前请先读
 [`bd2-local-viewer/ARCHITECTURE.md`](../bd2-local-viewer/ARCHITECTURE.md)** ——
-那份文档里有分层调用链和 18 条不变量（R1~R18），本项目的多数 bug 都是违反而来的。
+那份文档里有分层调用链和 22 条不变量（R1~R22），本项目的多数 bug 都是违反而来的。
 
 ---
 
@@ -226,7 +226,7 @@ cd bd2-local-viewer
 
 | 文档 | 内容 |
 |---|---|
-| [`bd2-local-viewer/ARCHITECTURE.md`](../bd2-local-viewer/ARCHITECTURE.md) | 分层调用链、病根复盘、18 条不变量、验证矩阵 |
+| [`bd2-local-viewer/ARCHITECTURE.md`](../bd2-local-viewer/ARCHITECTURE.md) | 分层调用链、病根复盘、22 条不变量、验证矩阵 |
 | [`docs/TECHNICAL.md`](TECHNICAL.md) | 技术栈、项目结构、环境要求、主要实现思路、桌面版配置 |
 | [`docs/BUILD.md`](BUILD.md) | 构建、Release 签名、R8、clone 后跑不起来的排查清单 |
 | [`docs/KNOWN-ISSUES.md`](KNOWN-ISSUES.md) | 已知而未处理的问题 |

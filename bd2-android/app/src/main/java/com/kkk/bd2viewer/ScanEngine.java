@@ -1,6 +1,7 @@
 package com.kkk.bd2viewer;
 
 import com.kkk.bd2viewer.jczx.JczxExtractor;
+import com.kkk.bd2viewer.jczx.NikkeAbExtractor;
 
 import android.content.ContentResolver;
 import android.content.ContentUris;
@@ -111,6 +112,8 @@ public final class ScanEngine {
         if (l.endsWith(".atlas")) return new Role(K_ATLAS, baseName(name));
         if (l.endsWith(".skel")) return new Role(K_SKEL, baseName(name));
         if (l.endsWith(".json")) return new Role(K_JSON, baseName(name));
+        // 需求 5：生成的 thumb.png 与 Lost Sword 预算图同一角色，避免进图集页候选
+        if (l.equals("thumb.png")) return new Role(K_THUMB, null);
         if (IMG_EXT.contains(extOf(name))) return new Role(extOf(name), null);
         return null;
     }
@@ -154,9 +157,24 @@ public final class ScanEngine {
         return baseName(name);
     }
 
-    /** 二进制骨架头 → '4.0' / '4.1' / null（与前端 spineMinorFor / server spineMinorFromHead 同一口径） */
+        /** 二进制骨架头 → '4.0' / '4.1' / null（与前端 spineMinorFor / server spineMinorFromHead 同一口径）。
+     *  优先按 Spine 布局读：[0..7] hash、[8] 长度、[9..] "4.x.y\0"；全头正则可能被 hash
+     *  字节里碰巧的 "4.0.x" 误导（NIKKE 解包实为 4.1 却判成 4.0 → 空动画）。 */
     static String spineMinorFromHead(byte[] head) {
         if (head == null || head.length == 0) return null;
+        if (head.length > 10) {
+            int len = head[8] & 0xff;
+            if (len > 0 && len < 24 && 9 + len <= head.length) {
+                StringBuilder ver = new StringBuilder(len);
+                for (int i = 9; i < 9 + len; i++) {
+                    int c = head[i] & 0xff;
+                    if (c == 0) break;
+                    ver.append((char) c);
+                }
+                java.util.regex.Matcher vm = java.util.regex.Pattern.compile("^4\\.(\\d)\\.\\d+").matcher(ver.toString());
+                if (vm.find()) return "4." + vm.group(1);
+            }
+        }
         StringBuilder sb = new StringBuilder(32);
         int n = Math.min(head.length, 32);
         for (int i = 0; i < n; i++) sb.append((char) (head[i] & 0xff));
@@ -375,6 +393,56 @@ public final class ScanEngine {
                 Log.w(TAG, "writeImport: " + e.getMessage());
             }
         }
+        return false;
+    }
+
+    /**
+     * 需求 5：把离屏缩略图写成资产目录里的 thumb.png。
+     * rel 相对 root（如 {@code char/foo/thumb.png}）；只允许 basename 为 thumb.png。
+     * 父目录必须已存在（atlas 同目录）—— 禁止 mkdirs 在其它 mode 根下新建异游戏文件夹。
+     * 写成功后登记进 DOCS，删除联动才能找到它。
+     */
+    public static boolean writeThumb(Context ctx, String rootId, String rel, byte[] bytes) {
+        if (bytes == null || bytes.length == 0) return false;
+        String safe = String.valueOf(rel).replace('\\', '/');
+        while (safe.startsWith("/")) safe = safe.substring(1);
+        if (safe.isEmpty()) return false;
+        String base = new File(safe).getName();
+        if (!"thumb.png".equalsIgnoreCase(base)) {
+            Log.w(TAG, "writeThumb rejected, not thumb.png: " + rel);
+            return false;
+        }
+        Root root = rootById(rootId);
+        try {
+            if (root != null && root.path != null) {
+                File rootFile = new File(root.path).getCanonicalFile();
+                File f = new File(rootFile, safe).getCanonicalFile();
+                if (!f.getPath().equals(rootFile.getPath())
+                        && !f.getPath().startsWith(rootFile.getPath() + File.separator)) {
+                    Log.w(TAG, "writeThumb rejected, escapes root: " + rel);
+                    return false;
+                }
+                File p = f.getParentFile();
+                // Only write beside an existing asset dir — never mkdir foreign
+                // game folders (e.g. BD2 Celia_* under jczx/ after mode switch).
+                if (p == null || !p.isDirectory()) {
+                    Log.w(TAG, "writeThumb rejected, parent missing (no mkdir): " + safe);
+                    return false;
+                }
+                try (FileOutputStream os = new FileOutputStream(f)) { os.write(bytes); }
+                Doc d = new Doc();
+                d.rel = safe;
+                d.file = f;
+                DOCS.put(root.id + "|" + safe, d);
+                scanPath(ctx, f.getAbsolutePath());
+                return true;
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "writeThumb file: " + e.getMessage());
+        }
+        // Do NOT fall back to writeImport: that mkdirs arbitrary rel trees under
+        // the current mode folder (foreign thumbs in jczx/).
+        Log.w(TAG, "writeThumb skipped (no file root / parent): " + rel);
         return false;
     }
 
@@ -648,6 +716,69 @@ public final class ScanEngine {
         saveRoots(ctx);
     }
 
+
+    /**
+     * 从配置列表移除用户添加的根路径（不删磁盘文件）。
+     * 自动目录（id 以 __ 开头）不可移除。返回 JSON 字符串。
+     */
+    public static String removeRoot(Context ctx, String rootId) {
+        JSONObject out = new JSONObject();
+        try {
+            if (rootId == null || rootId.trim().isEmpty()) {
+                out.put("ok", false);
+                out.put("error", "缺少 id");
+                return out.toString();
+            }
+            if (rootId.startsWith("__")) {
+                out.put("ok", false);
+                out.put("error", "系统自动目录不能从列表移除");
+                return out.toString();
+            }
+            Root removed = null;
+            synchronized (ROOTS_LOCK) {
+                if (ROOTS.isEmpty()) loadRoots(ctx);
+                for (int i = ROOTS.size() - 1; i >= 0; i--) {
+                    Root r = ROOTS.get(i);
+                    if (rootId.equals(r.id)) {
+                        removed = r;
+                        ROOTS.remove(i);
+                    }
+                }
+                if (removed == null) {
+                    out.put("ok", false);
+                    out.put("error", "找不到要移除的根目录");
+                    return out.toString();
+                }
+                // 若是 SAF 根，顺手丢掉持久化读权限（可选，失败不影响）
+                if (removed.treeUri != null && !removed.treeUri.isEmpty()) {
+                    try {
+                        Uri uri = Uri.parse(removed.treeUri);
+                        ctx.getContentResolver().releasePersistableUriPermission(
+                                uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    } catch (Exception e) {
+                        Log.w(TAG, "release uri: " + e.getMessage());
+                    }
+                }
+                saveRoots(ctx);
+            }
+            invalidateRootCache(rootId);
+            JSONObject rjson = new JSONObject();
+            rjson.put("id", removed.id);
+            rjson.put("label", removed.label == null ? "" : removed.label);
+            rjson.put("path", removed.path == null ? "" : removed.path);
+            out.put("ok", true);
+            out.put("removed", rjson);
+            return out.toString();
+        } catch (Throwable t) {
+            try {
+                out.put("ok", false);
+                out.put("error", String.valueOf(t.getMessage()));
+            } catch (Exception ignored) {
+            }
+            return out.toString();
+        }
+    }
+
     private static void loadRoots(Context ctx) {
         SharedPreferences sp = ctx.getSharedPreferences("bd2viewer", Context.MODE_PRIVATE);
         String json = sp.getString("roots", "[]");
@@ -709,11 +840,14 @@ public final class ScanEngine {
         synchronized (SCAN_LOCK) { items = CACHE.get(key); }
 
         JSONObject jczxMeta = null;
+        JSONObject nikkeAbMeta = null;
         if (force || items == null) {
             JSONArray fresh = new JSONArray();
             dirCount = 0;
-            // JCZX 解包（LZMA→百兆级）在中端机上可能要几十秒；放宽预算避免扫一半被掐
-            long budget = MODE_JCZX.equals(mode) ? Math.max(SCAN_BUDGET_MS, 180_000L) : SCAN_BUDGET_MS;
+            // JCZX 解包（LZMA→百兆级）在中端机上可能要几十秒；放宽预算避免扫一半被掐。
+            // NIKKE 同理：包级并发 ≤ NikkeAbExtractor.MAX_CONCURRENT（优先级队列，后台续解）。
+            long budget = MODE_JCZX.equals(mode) ? Math.max(SCAN_BUDGET_MS, 180_000L)
+                    : (MODE_NIKKE.equals(mode) ? Math.max(SCAN_BUDGET_MS, 120_000L) : SCAN_BUDGET_MS);
             deadline = System.currentTimeMillis() + budget;
             synchronized (SCAN_LOCK) {
                 java.util.Iterator<String> it = DOCS.keySet().iterator();
@@ -749,6 +883,32 @@ public final class ScanEngine {
                         } catch (Exception ignored) { /* */ }
                     }
                 }
+                // NIKKE：把根下的 mod 包（UnityFS，无扩展名）解成标准三件套放进
+                // `bd2viewer-nikke/`（纯 Java，无 Python）。**不**过滤可见项 ——
+                // NIKKE 档还要照常认用户手里原有的裸 .atlas/.skel 目录。
+                if (MODE_NIKKE.equals(mode) && "file".equals(root.kind) && root.path != null) {
+                    try {
+                        NikkeAbExtractor.migrateLegacyCache(new File(root.path));
+                        nikkeAbMeta = NikkeAbExtractor.prepareRoot(new File(root.path));
+                        Log.i(TAG, "nikke-ab prepare: " + nikkeAbMeta);
+                    } catch (Throwable e) {
+                        Log.e(TAG, "nikke-ab prepare failed", e);
+                        try {
+                            nikkeAbMeta = new JSONObject();
+                            nikkeAbMeta.put("found", 0);
+                            nikkeAbMeta.put("extracted", 0);
+                            nikkeAbMeta.put("reused", 0);
+                            nikkeAbMeta.put("pending", 0);
+                            nikkeAbMeta.put("ready", false);
+                            JSONArray errs = new JSONArray();
+                            errs.put(new JSONObject().put("error", String.valueOf(e.getMessage())));
+                            nikkeAbMeta.put("errors", errs);
+                        } catch (Exception ignored) { /* */ }
+                    }
+                }
+                // prepare（尤其是旧版同步 JCZX）可能已吃掉预算；walk 前重置，
+                // 保证已就绪的 bd2viewer-jczx/ / bd2viewer-nikke/ 能被列进 gallery。
+                deadline = System.currentTimeMillis() + budget;
                 if ("ms".equals(root.kind)) {
                     walkMs(ctx, fresh, root, mode);
                 } else if ("file".equals(root.kind) && root.path != null) {
@@ -786,6 +946,7 @@ public final class ScanEngine {
             out.put("truncated", dirCount >= MAX_DIRS);
             out.put("scanMs", (int) (System.currentTimeMillis() - t0));
             if (jczxMeta != null) out.put("jczx", jczxMeta);
+            if (nikkeAbMeta != null) out.put("nikkeAb", nikkeAbMeta);
         } catch (Exception ignored) {
         }
         return out;
@@ -832,6 +993,10 @@ public final class ScanEngine {
                 if (SKIP_DIRS.contains(n)) continue;
                 // JCZX 解包缓存（含旧版 .bd2viewer-jczx）：仅 jczx 模式进入
                 if (JczxExtractor.isCacheDirName(f.getName()) && !MODE_JCZX.equals(mode)) continue;
+
+                // NIKKE 解包缓存：仅 nikke 档进入（否则 BD2 档会把抽出来的资产再摆一遍）
+
+                if (NikkeAbExtractor.isCacheDirName(f.getName()) && !MODE_NIKKE.equals(mode)) continue;
                 subdirs.add(f);
             } else if (f.isFile()) {
                 Role r = classify(f.getName(), mode);
@@ -924,7 +1089,16 @@ public final class ScanEngine {
                 o.put("skeletonKind", skeleton == null ? null : kindOfBucket(kind));
                 if (spineMinor != null) o.put("spineMinor", spineMinor);
                 else o.put("spineMinor", JSONObject.NULL);
-                o.put("relThumb", thumb == null ? null : relOf(dirRel, thumb.name));
+                // 需求 5：thumb.png 的 mtime 必须 ≥ 资产文件，否则当无效让前端重渲覆盖
+                Entry freshThumb = thumb;
+                if (freshThumb != null) {
+                    long tm = mtimeOf(freshThumb);
+                    long newest = mtimeOf(atlas);
+                    if (skeleton != null) newest = Math.max(newest, mtimeOf(skeleton));
+                    for (Entry f : images) newest = Math.max(newest, mtimeOf(f));
+                    if (tm > 0 && tm < newest) freshThumb = null;
+                }
+                o.put("relThumb", freshThumb == null ? null : relOf(dirRel, freshThumb.name));
                 JSONArray im = new JSONArray();
                 for (Entry f : images) im.put(f.name);
                 JSONArray rim = new JSONArray();
@@ -987,6 +1161,8 @@ public final class ScanEngine {
                 if (!relAtlas.isEmpty()) rels.add(relAtlas);
                 String sk = it.optString("relSkeleton", "");
                 if (!sk.isEmpty()) rels.add(sk);
+                String th = it.optString("relThumb", "");
+                if (!th.isEmpty()) rels.add(th);
                 JSONArray imgs = it.optJSONArray("relImages");
                 if (imgs != null) {
                     for (int j = 0; j < imgs.length(); j++) {
@@ -1086,6 +1262,145 @@ public final class ScanEngine {
         }
         return o;
     }
+
+    /**
+     * 删除整个目录（仅允许当前 root 下的相对路径，不能删 root 本身）。
+     * 含 NIKKE/JCZX 源包时先清解包缓存。返回 JSON 字符串。
+     */
+    public static String deleteDirectory(Context ctx, String rootId, String relDirRaw) {
+        JSONObject out = new JSONObject();
+        JSONArray clearedCache = new JSONArray();
+        try {
+            Root root = rootById(rootId);
+            if (root == null) {
+                out.put("ok", false);
+                out.put("error", "找不到根目录");
+                out.put("clearedCache", clearedCache);
+                return out.toString();
+            }
+            String rel = relDirRaw == null ? "" : relDirRaw.replace('\\', '/').trim();
+            while (rel.startsWith("/")) rel = rel.substring(1);
+            while (rel.endsWith("/")) rel = rel.substring(0, rel.length() - 1);
+            if (rel.isEmpty() || ".".equals(rel)) {
+                out.put("ok", false);
+                out.put("error", "不能删除根目录本身");
+                out.put("clearedCache", clearedCache);
+                return out.toString();
+            }
+            // 拒绝 .. 与绝对路径
+            if (rel.contains("..") || rel.startsWith("/") || rel.matches("^[A-Za-z]:.*")) {
+                out.put("ok", false);
+                out.put("error", "路径越界，已拒绝：" + rel);
+                out.put("clearedCache", clearedCache);
+                return out.toString();
+            }
+
+            if (root.path != null) {
+                File base = new File(root.path).getCanonicalFile();
+                File dir = new File(base, rel).getCanonicalFile();
+                String bp = base.getPath();
+                String dp = dir.getPath();
+                if (!dp.equals(bp) && !dp.startsWith(bp + File.separator)) {
+                    out.put("ok", false);
+                    out.put("error", "路径越界，已拒绝：" + rel);
+                    out.put("clearedCache", clearedCache);
+                    return out.toString();
+                }
+                if (dp.equals(bp)) {
+                    out.put("ok", false);
+                    out.put("error", "不能删除根目录本身");
+                    out.put("clearedCache", clearedCache);
+                    return out.toString();
+                }
+                if (!dir.exists()) {
+                    out.put("ok", true);
+                    out.put("deleted", rel);
+                    out.put("missing", true);
+                    out.put("clearedCache", clearedCache);
+                    invalidateRootCache(rootId);
+                    return out.toString();
+                }
+                if (!dir.isDirectory()) {
+                    out.put("ok", false);
+                    out.put("error", "不是目录：" + rel);
+                    out.put("clearedCache", clearedCache);
+                    return out.toString();
+                }
+                // 清解包缓存（源还在时才能按文件名/前缀匹配）
+                try {
+                    for (String c : NikkeAbExtractor.clearCacheForDeletedDir(base, rel)) clearedCache.put(c);
+                    for (String c : JczxExtractor.clearCacheForDeletedDir(base, rel)) clearedCache.put(c);
+                } catch (Throwable ignored) { /* */ }
+                deleteRecFile(dir);
+                // 清 DOCS 索引里该前缀
+                String prefix = root.id + "|" + rel;
+                java.util.Iterator<String> it = DOCS.keySet().iterator();
+                while (it.hasNext()) {
+                    String k = it.next();
+                    if (k.equals(prefix) || k.startsWith(prefix + "/")) it.remove();
+                }
+                invalidateRootCache(rootId);
+                out.put("ok", true);
+                out.put("deleted", rel);
+                out.put("clearedCache", clearedCache);
+                return out.toString();
+            }
+
+            // SAF：尽量删目录文档
+            if (root.treeUri != null && ctx != null) {
+                try {
+                    Uri tree = Uri.parse(root.treeUri);
+                    String docId = docIdOf(tree, rel);
+                    Uri uri = DocumentsContract.buildDocumentUriUsingTree(tree, docId);
+                    DocumentsContract.deleteDocument(ctx.getContentResolver(), uri);
+                    // 清缓存：SAF 源路径下的解包缓存若在 file root 不可用；跳过 file 清
+                    invalidateRootCache(rootId);
+                    out.put("ok", true);
+                    out.put("deleted", rel);
+                    out.put("clearedCache", clearedCache);
+                    return out.toString();
+                } catch (Throwable e) {
+                    out.put("ok", false);
+                    out.put("error", "该目录不支持删除（SAF）：" + e.getMessage());
+                    out.put("clearedCache", clearedCache);
+                    return out.toString();
+                }
+            }
+            out.put("ok", false);
+            out.put("error", "无法删除：根目录无本地路径");
+            out.put("clearedCache", clearedCache);
+        } catch (Throwable e) {
+            try {
+                out.put("ok", false);
+                out.put("error", String.valueOf(e.getMessage()));
+                out.put("clearedCache", clearedCache);
+            } catch (Exception ignored) { }
+        }
+        return out.toString();
+    }
+
+    private static void invalidateRootCache(String rootId) {
+        if (rootId == null) return;
+        synchronized (SCAN_LOCK) {
+            java.util.Iterator<String> cit = CACHE.keySet().iterator();
+            while (cit.hasNext()) {
+                String k = cit.next();
+                if (k.equals(rootId) || k.startsWith(rootId + "|")) cit.remove();
+            }
+        }
+    }
+
+    /** 递归删目录/文件（file 根专用）。 */
+    private static void deleteRecFile(File f) {
+        if (f == null || !f.exists()) return;
+        if (f.isDirectory()) {
+            File[] kids = f.listFiles();
+            if (kids != null) for (File k : kids) deleteRecFile(k);
+        }
+        //noinspection ResultOfMethodCallIgnored
+        f.delete();
+    }
+
 
     /* pickSkeleton / pickSkeletonSaf 已被通用的 pickByBase 取代 ——
        它按「当前命名约定」算基名，两种游戏共用一套级联逻辑，不再各写一份。 */
@@ -1202,6 +1517,8 @@ public final class ScanEngine {
                 String n = (e.name == null ? "" : e.name.toLowerCase(Locale.ROOT));
                 if (SKIP_DIRS.contains(n)) continue;
                 if (JczxExtractor.isCacheDirName(e.name) && !MODE_JCZX.equals(mode)) continue;
+
+                if (NikkeAbExtractor.isCacheDirName(e.name) && !MODE_NIKKE.equals(mode)) continue;
                 subdirs.add(e);
             } else {
                 Role r = classify(e.name, mode);
@@ -1272,7 +1589,16 @@ public final class ScanEngine {
                 o.put("skeletonKind", skeleton == null ? null : kindOfBucket(kind));
                 if (spineMinor != null) o.put("spineMinor", spineMinor);
                 else o.put("spineMinor", JSONObject.NULL);
-                o.put("relThumb", thumb == null ? null : join(relDir, thumb.name));
+                // 需求 5：SAF 的 mtime 常为 0（不可靠）—— 只有拿到正数 mtime 才做过期判定
+                SafEntry freshThumb = thumb;
+                if (freshThumb != null) {
+                    long tm = mtimeOf(freshThumb);
+                    long newest = mtimeOf(atlas);
+                    if (skeleton != null) newest = Math.max(newest, mtimeOf(skeleton));
+                    for (SafEntry f : images) newest = Math.max(newest, mtimeOf(f));
+                    if (tm > 0 && tm < newest) freshThumb = null;
+                }
+                o.put("relThumb", freshThumb == null ? null : join(relDir, freshThumb.name));
                 JSONArray im = new JSONArray();
                 for (SafEntry f : images) im.put(f.name);
                 JSONArray rim = new JSONArray();
@@ -1503,8 +1829,8 @@ public final class ScanEngine {
 
     /**
      * Resolve a bare filename (or any rel) by suffix against DOCS, then by
-     * scanning bd2viewer-jczx/* /leaf on disk. Covers bad rawDataURIs remaps
-     * that drop the JCZX cache prefix.
+     * scanning bd2viewer-jczx/* and bd2viewer-nikke/* /leaf on disk. Covers
+     * bad rawDataURIs remaps that drop the cache prefix.
      */
     public static Doc resolveLeaf(String rootId, String rel) {
         if (rootId == null || rel == null || rel.isEmpty()) return null;
@@ -1528,12 +1854,13 @@ public final class ScanEngine {
             }
         }
         if (hits == 1) return hit;
-        // Disk: root/bd2viewer-jczx/*/leaf (and legacy dot cache)
+        // Disk: root/bd2viewer-jczx|nikke/*/leaf (and legacy dot cache)
         Root root = rootById(rootId);
         if (root == null || root.path == null) return hits == 1 ? hit : null;
         File baseDir = new File(root.path);
         for (String cacheName : new String[]{
-                JczxExtractor.CACHE_DIRNAME, JczxExtractor.CACHE_DIRNAME_LEGACY}) {
+                JczxExtractor.CACHE_DIRNAME, JczxExtractor.CACHE_DIRNAME_LEGACY,
+                NikkeAbExtractor.CACHE_DIRNAME, NikkeAbExtractor.CACHE_DIRNAME_LEGACY}) {
             File cacheRoot = new File(baseDir, cacheName);
             if (!cacheRoot.isDirectory()) continue;
             File[] kids = cacheRoot.listFiles();

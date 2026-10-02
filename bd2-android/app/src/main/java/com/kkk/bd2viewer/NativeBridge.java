@@ -8,9 +8,15 @@ import android.util.Base64;
 import android.util.Log;
 import android.webkit.JavascriptInterface;
 
+import com.kkk.bd2viewer.jczx.JczxExtractor;
+import com.kkk.bd2viewer.jczx.NikkeAbExtractor;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.File;
+
+import java.util.ArrayList;
 import java.util.List;
 
 /** 前端通过 window.BD2Native 调进来；结果用 evaluateJavascript 推回 window.__native。 */
@@ -126,6 +132,18 @@ public final class NativeBridge {
         }
     }
 
+    /** 需求 5：离屏缩略图写成资产目录 thumb.png（相对 rootId）。 */
+    @JavascriptInterface
+    public boolean writeThumb(String rootId, String rel, String base64) {
+        try {
+            byte[] bytes = Base64.decode(base64, Base64.DEFAULT);
+            return ScanEngine.writeThumb(act, rootId, rel, bytes);
+        } catch (Throwable t) {
+            Log.e(TAG, "writeThumb failed", t);
+            return false;
+        }
+    }
+
     /**
      * 删除一整套资产（atlas + skeleton + 贴图）。**真正删磁盘文件，不可恢复**。
      * json: [{"relAtlas":"..","relSkeleton":"..","relImages":[".."]}]，全部相对 root。
@@ -152,7 +170,50 @@ public final class NativeBridge {
         }
     }
 
+    
+    /**
+     * 删除整个目录（相对 root）。不可恢复。
+     * 返回 {"ok":bool,"deleted":relDir|null,"clearedCache":[...],"error"?}
+     */
     @JavascriptInterface
+    public String deleteDirectory(String rootId, String relDir) {
+        try {
+            return ScanEngine.deleteDirectory(act, rootId, relDir);
+        } catch (Throwable t) {
+            Log.e(TAG, "deleteDirectory failed", t);
+            JSONObject o = new JSONObject();
+            try {
+                o.put("ok", false);
+                o.put("deleted", JSONObject.NULL);
+                o.put("clearedCache", new JSONArray());
+                o.put("error", String.valueOf(t.getMessage()));
+            } catch (Exception ignored) {
+            }
+            return o.toString();
+        }
+    }
+
+    /**
+     * 从配置列表移除根路径（不删磁盘）。自动目录 (__*) 不可移除。
+     * 返回 {"ok":bool,"removed":{id,label,path}?,"error"?}
+     */
+    @JavascriptInterface
+    public String removeRoot(String rootId) {
+        try {
+            return ScanEngine.removeRoot(act, rootId);
+        } catch (Throwable t) {
+            Log.e(TAG, "removeRoot failed", t);
+            JSONObject o = new JSONObject();
+            try {
+                o.put("ok", false);
+                o.put("error", String.valueOf(t.getMessage()));
+            } catch (Exception ignored) {
+            }
+            return o.toString();
+        }
+    }
+
+@JavascriptInterface
     public void requestAllFilesAccess() {
         ui.post(act::requestAllFilesAccess);
     }
@@ -217,4 +278,70 @@ public final class NativeBridge {
     void onVolumeKey(int dir) {
         emit("window.__bd2viewer&&window.__bd2viewer.onVolumeKey&&window.__bd2viewer.onVolumeKey(" + dir + ")");
     }
+
+    /** NIKKE 解包真实进度（需求 2）；前端进度条轮询，不必整页重扫。 */
+    @JavascriptInterface
+    public String nikkeUnpackProgress(String rootId) {
+        try {
+            ScanEngine.Root root = ScanEngine.rootById(rootId);
+            if (root == null || root.path == null) return "{}";
+            return NikkeAbExtractor.progressOf(new File(root.path)).toString();
+        } catch (Throwable t) {
+            Log.e(TAG, "nikkeUnpackProgress failed", t);
+            return "{}";
+        }
+    }
+
+    /**
+     * 抬高 NIKKE 解包优先级（需求 1）：relsJson 为字符串数组 JSON；
+     * sibling=true 时同角色姿势包一并抬到队首。不打断 in-flight。
+     */
+    @JavascriptInterface
+    public String nikkeUnpackPrioritize(String rootId, String relsJson, boolean sibling) {
+        try {
+            ScanEngine.Root root = ScanEngine.rootById(rootId);
+            if (root == null || root.path == null) return "{\"error\":\"no root\"}";
+            List<String> rels = new ArrayList<>();
+            if (relsJson != null && !relsJson.isEmpty()) {
+                JSONArray arr = new JSONArray(relsJson);
+                for (int i = 0; i < arr.length(); i++) rels.add(arr.optString(i, ""));
+            }
+            return NikkeAbExtractor.prioritize(new File(root.path), rels, sibling).toString();
+        } catch (Throwable t) {
+            Log.e(TAG, "nikkeUnpackPrioritize failed", t);
+            return "{\"error\":" + JSONObject.quote(String.valueOf(t.getMessage())) + "}";
+        }
+    }
+
+    /** JCZX 解包真实进度；前端进度条轮询，不必整页重扫。 */
+    @JavascriptInterface
+    public String jczxUnpackProgress(String rootId) {
+        try {
+            ScanEngine.Root root = ScanEngine.rootById(rootId);
+            if (root == null || root.path == null) return "{}";
+            return JczxExtractor.progressOf(new File(root.path)).toString();
+        } catch (Throwable t) {
+            Log.e(TAG, "jczxUnpackProgress failed", t);
+            return "{}";
+        }
+    }
+
+    /** 抬高 JCZX 解包优先级（不打断 in-flight）。 */
+    @JavascriptInterface
+    public String jczxUnpackPrioritize(String rootId, String relsJson) {
+        try {
+            ScanEngine.Root root = ScanEngine.rootById(rootId);
+            if (root == null || root.path == null) return "{\"error\":\"no root\"}";
+            List<String> rels = new ArrayList<>();
+            if (relsJson != null && !relsJson.isEmpty()) {
+                JSONArray arr = new JSONArray(relsJson);
+                for (int i = 0; i < arr.length(); i++) rels.add(arr.optString(i, ""));
+            }
+            return JczxExtractor.prioritize(new File(root.path), rels).toString();
+        } catch (Throwable t) {
+            Log.e(TAG, "jczxUnpackPrioritize failed", t);
+            return "{\"error\":" + JSONObject.quote(String.valueOf(t.getMessage())) + "}";
+        }
+    }
+
 }

@@ -756,6 +756,18 @@ input[type="range"] {
 
 .player-host canvas { display: block; }
 
+/* Lost Sword 的「两层角色」（R19）：背层 `_B` 用第二个播放器，压在主体（`_F`）下面。
+   它不接任何指针事件 —— 交互（相机拖动、点图层）全归主体那一层。 */
+.player-host-back {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.player-host-back canvas { display: block; }
+
 .overlay-canvas {
   position: absolute;
   inset: 0;
@@ -2043,6 +2055,89 @@ body.is-touch .storage-bar .sb-toggle {
 #setStoragePath { font-family: ui-monospace, Menlo, Consolas, monospace; color: #e6edf7; }
 #setStorageActions { margin-top: 2px; }
 
+
+/* ---- 需求 2：真实进度条（解包 / 扫描 / 缩略图 / 单资产加载） ---- */
+.work-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px 0;
+}
+.work-progress[hidden] { display: none !important; }
+.work-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 18px;
+}
+.work-progress-row[hidden] { display: none !important; }
+.work-progress-track {
+  flex: 1;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .12);
+  overflow: hidden;
+  min-width: 60px;
+}
+.work-progress-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--indigo-l, #818cf8), #c4b5fd);
+  transition: width .2s ease-out;
+}
+.work-progress-track.indeterminate .work-progress-fill {
+  width: 35% !important;
+  animation: work-indet 1.1s ease-in-out infinite;
+}
+@keyframes work-indet {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(320%); }
+}
+.work-progress-label {
+  flex: 0 1 auto;
+  max-width: 55%;
+  font-size: 11.5px;
+  color: var(--indigo-300, #a5b4fc);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.spinner-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 22px;
+  border-radius: 12px;
+  background: rgba(17, 24, 39, .55);
+  min-width: 200px;
+  max-width: 84%;
+}
+.spinner-track {
+  width: 180px;
+  max-width: 70vw;
+  height: 5px;
+}
+.spinner-stage {
+  font-size: 12px;
+  color: rgba(255,255,255,.72);
+  text-align: center;
+}
+.card.pending-unpack {
+  outline: 1px dashed rgba(129, 140, 248, .55);
+  opacity: .85;
+}
+.card.pending-unpack .card-thumb.pending::after {
+  content: '…';
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--indigo-300, #a5b4fc);
+  font-size: 20px;
+}
+
 </style>
 </head>
 <!-- 首屏预置：默认落在资产页（平铺）。
@@ -2064,6 +2159,7 @@ justify-content:center;background:#0f1420;color:#8b98b4;font:14px system-ui;z-in
     <div class="nav-actions">
       <select id="rootSelect" class="select" data-i18n-title="选择资产根目录" title="选择资产根目录"></select>
       <button class="btn" id="btnAddRoot" data-i18n="添加目录" data-i18n-title="把任意本地文件夹加为根目录" title="把任意本地文件夹加为根目录">添加目录</button>
+      <button class="btn danger" id="btnRemoveRoot" data-i18n="删除这个文件路径" data-i18n-title="从配置列表移除当前根目录（不删磁盘文件）" title="从配置列表移除当前根目录（不删磁盘文件）">删除这个文件路径</button>
       <button class="btn" id="btnRescan" data-i18n="重新扫描" data-i18n-title="重新扫描" title="重新扫描">重新扫描</button>
       <button class="btn" id="btnUpload" data-i18n="上传文件" data-i18n-title="拖入 .json/.skel + .atlas + .png" title="拖入 .json/.skel + .atlas + .png">上传文件</button>
       <button class="btn" id="btnGrid" data-i18n="平铺浏览" data-i18n-title="回到平铺浏览" title="回到平铺浏览">平铺浏览</button>
@@ -2200,7 +2296,16 @@ justify-content:center;background:#0f1420;color:#8b98b4;font:14px system-ui;z-in
         <div class="player-host" id="playerHost" data-tutorial="character-viewer"></div>
         <canvas class="overlay-canvas" id="overlayCanvas"></canvas>
         <div class="layer-toast" id="layerToast" hidden></div>
-        <div class="spinner" id="spinner" hidden><span class="dot"></span><span data-i18n="加载中…">加载中…</span></div>
+        <div class="spinner" id="spinner" hidden>
+          <div class="spinner-inner">
+            <span class="dot"></span>
+            <span class="spinner-text" data-i18n="加载中…">加载中…</span>
+            <div class="work-progress-track spinner-track" id="loadTrack" hidden>
+              <div class="work-progress-fill" id="loadFill"></div>
+            </div>
+            <span class="spinner-stage" id="loadStage" hidden></span>
+          </div>
+        </div>
         <div class="error-box" id="errorBox" hidden></div>
         <div class="empty-state" id="emptyState">
           <div class="empty-icon">🖼</div>
@@ -2255,6 +2360,21 @@ justify-content:center;background:#0f1420;color:#8b98b4;font:14px system-ui;z-in
 
     <!-- ======================= 平铺浏览（主界面） ======================= -->
     <section class="gallery" id="gallery">
+      <!-- 需求 2：解包 / 扫描 / 缩略图 真实进度条 -->
+      <div class="work-progress" id="workProgress" hidden>
+        <div class="work-progress-row" id="unpackProgressRow" hidden>
+          <div class="work-progress-track"><div class="work-progress-fill" id="unpackFill"></div></div>
+          <span class="work-progress-label" id="unpackLabel"></span>
+        </div>
+        <div class="work-progress-row" id="scanProgressRow" hidden>
+          <div class="work-progress-track indeterminate"><div class="work-progress-fill" id="scanFill"></div></div>
+          <span class="work-progress-label" id="scanLabel"></span>
+        </div>
+        <div class="work-progress-row" id="thumbProgressRow" hidden>
+          <div class="work-progress-track"><div class="work-progress-fill" id="thumbFill"></div></div>
+          <span class="work-progress-label" id="thumbLabel"></span>
+        </div>
+      </div>
       <div class="gal-head">
         <div class="gal-head-main">
           <span class="gal-title" id="galCount" data-i18n="平铺浏览">平铺浏览</span>
@@ -2405,7 +2525,7 @@ justify-content:center;background:#0f1420;color:#8b98b4;font:14px system-ui;z-in
       </div>
       <label class="row small">
         <input type="checkbox" id="chkPremultiplied" checked>
-        <span data-i18n="贴图预乘 alpha（BD2 素材建议开启；若边缘出现黑边/半透明异常可关掉试试）">贴图预乘 alpha（BD2 素材建议开启；若边缘出现黑边/半透明异常可关掉试试）</span>
+        <span data-i18n="贴图预乘 alpha（BD2 / NIKKE / JCZX 建议开启；NIKKE·JCZX 图集已是 PMA，关开会黑边；BD2 为直通 PNG 需开启）">贴图预乘 alpha（BD2 / NIKKE / JCZX 建议开启；NIKKE·JCZX 图集已是 PMA，关开会黑边；BD2 为直通 PNG 需开启）</span>
       </label>
       <label class="row small">
         <input type="checkbox" id="chkAutoPlay" checked>
@@ -2545,6 +2665,7 @@ justify-content:center;background:#0f1420;color:#8b98b4;font:14px system-ui;z-in
       <button type="button" class="btn block" id="cardMenuCopyDir" data-i18n="复制文件夹路径">复制文件夹路径</button>
       <button type="button" class="btn block" id="cardMenuCopyFile" data-i18n="复制图集文件路径">复制图集文件路径</button>
       <button type="button" class="btn block danger" id="cardMenuDelete" data-i18n="删除这个资产">删除这个资产</button>
+      <!-- 已移除「删除这个文件夹」整夹删盘 UX；移除根路径请用顶栏「删除这个文件路径」 -->
       <button type="button" class="btn block" id="cardMenuSelect" data-i18n="批量选择…">批量选择…</button>
     </div>
   </div>
@@ -45215,6 +45336,9 @@ const S = {
   current: null,
   player: null,
   camera: null,
+  // Lost Sword 两层角色（R19）：背层 `_B` 单独一个播放器，叠在本体（`_F`）下面
+  backPlayer: null,
+  backItem: null,
   bounds: null,
   // 当前播放会话使用的 Spine 运行时（4.1 或 4.0，随资产骨架版本挑）。见 activeSpine()。
   spine: null,
@@ -45233,6 +45357,7 @@ const S = {
   autoRefit: true,
   bgColor: '#1f2937',
   bgImageUrl: null,
+  // 初值在 boot() 里按 mode 默认覆写（需求 4：bd 开 / 其余关）
   premultiplied: true,
   layerSelect: false,
   useCurrentCamera: false,
@@ -45397,8 +45522,8 @@ const I18N_EN = {
 
   /* ---- 设置 ---- */
   '文件目录': 'File Folder',
-  '贴图预乘 alpha（BD2 素材建议开启；若边缘出现黑边/半透明异常可关掉试试）':
-    'Premultiply texture alpha (recommended for BD2 assets; turn off if edges show dark fringes or odd transparency)',
+  '贴图预乘 alpha（BD2 / NIKKE / JCZX 建议开启；NIKKE·JCZX 图集已是 PMA，关开会黑边；BD2 为直通 PNG 需开启）':
+    'Premultiply texture alpha (on for BD2 / NIKKE / JCZX; NIKKE·JCZX atlases are already PMA — turning off causes dark fringes; BD2 uses straight PNGs and needs this on)',
   '切换资产后自动播放': 'Auto-play after switching asset',
   '切换动画时自动重新取景（会保留你当前的缩放倍数，不会打回原始大小；想完全固定视角就关掉）':
     'Refit when switching animation (keeps your current zoom level, does not reset to original size; turn off to lock the view)',
@@ -45482,8 +45607,51 @@ const I18N_EN = {
   '瞄准': 'Aim',
   '掩体': 'Cover',
   '+{n} 个姿势文件': '+{n} pose file(s)',
+  /* ---- Lost Sword 两层角色（R19：`_B` 背层 + `_F` 前层） ---- */
+  '含背层': 'with back layer',
+  /* ---- NIKKE mod 包解包（UnityFS → 标准三件套） ---- */
+  '解包中 {done}/{total}': 'unpacking {done}/{total}',
+  '解包 {done}/{total} · {name}': 'Unpack {done}/{total} · {name}',
+  '解包 {done}/{total}': 'Unpack {done}/{total}',
+  '包处理进度 {done}/{total} · {name}': 'Pack progress {done}/{total} · {name}',
+  '包处理进度 {done}/{total}': 'Pack progress {done}/{total}',
+  '包处理中 {done}/{total}': 'Processing packs {done}/{total}',
+  '扫描中…': 'Scanning…',
+  '缩略图 {done}/{total}': 'Thumbs {done}/{total}',
+  '阶段：解包': 'Stage: unpack',
+  '阶段：加载骨架': 'Stage: load skeleton',
+  '阶段：渲染': 'Stage: render',
+  '等待解包…': 'Waiting to unpack…',
+  '尚未解包': 'Not unpacked yet',
+  '解包优先已排到队首': 'Unpack bumped to front of queue',
+  '资产可能尚未解包完成，请稍后再打开。':
+    'The bundle may still be unpacking — please try again later.',
+  '不支持的 Spine 版本：{v}': 'Unsupported Spine version: {v}',
+  '这套资产由 Spine {v} 导出，查看器目前支持 Spine 4.0 / 4.1 / 4.2，暂时播不了。\n可以用 Spine 官方编辑器把它重新导出为 4.x 再放进目录。':
+    'This asset was exported by Spine {v}; the viewer currently supports Spine 4.0 / 4.1 / 4.2 and cannot play it.\nRe-export it as 4.x with the official Spine editor and put it back into the folder.',
+
+  '正在解包 NIKKE 资产包：已就绪 {done} 套，后台还在处理 {left} 个…':
+    'Unpacking NIKKE bundles: {done} ready, {left} still processing in background…',
+  'NIKKE 资产解包完成：{done} 套可播放': 'NIKKE unpack finished: {done} playable',
+  'NIKKE 解包出错：{msg}': 'NIKKE unpack error: {msg}',
+  'NIKKE 资产包仍在后台解包，稍后点「重新扫描」查看':
+    'NIKKE bundles are still being unpacked in the background — hit Rescan later.',
+  '有 {n} 个包的贴图可能不准（压缩/流式贴图），建议在 PC 端解包后把产物拷到手机':
+    'Textures of {n} bundle(s) may be inaccurate (compressed/streamed) — unpack on PC and copy the result over.',
   '确认删除': 'Confirm Delete',
   '删除这个资产？': 'Delete this asset?',
+  '删除这个文件路径': 'Remove this folder path',
+  '从配置列表移除当前根目录（不删磁盘文件）':
+    'Remove the current root from the config list (does not delete files on disk)',
+  '移除这个文件路径？': 'Remove this folder path?',
+  '⚠️ 只会从查看器配置里去掉这条根路径，<b>不会删除磁盘上的任何文件</b>。之后可再点「添加目录」加回来。':
+    '⚠️ This only removes the root path from the viewer config list. <b>No files on disk will be deleted.</b> You can add it again later with "Add Folder".',
+  '确认移除': 'Confirm Remove',
+  '已从配置移除：{label}': 'Removed from config: {label}',
+  '移除路径失败：': 'Failed to remove path: ',
+  '没有可移除的根目录': 'No root path to remove',
+  '系统自动目录不能从列表移除': 'Built-in system folders cannot be removed from the list',
+  '请先添加一个目录（顶栏「添加目录」）': 'Add a folder first (top bar "Add Folder")',
   '正在删除…': 'Deleting…',
   '删除 {n} 个资产？': 'Delete {n} assets?',
   '⚠️ 此操作非常危险，可能导致不可逆的数据丢失！': '⚠️ This is irreversible and may cause permanent data loss!',
@@ -45521,6 +45689,7 @@ const I18N_EN = {
   '读取目录：{dir}': 'Folder: {dir}',
   '添加失败': 'Add failed',
   '添加目录失败：': 'Failed to add folder: ',
+  '移除目录失败：': 'Failed to remove folder: ',
   '打不开文件夹选择器：': 'Could not open folder picker: ',
   '后台任务出错：': 'Background task error: ',
   '原生层无响应：': 'Native layer not responding: ',
@@ -45682,6 +45851,32 @@ const MODE_KEY = 'bd2.mode'
 const ASSET_MODES = ['bd', 'lostsword', 'nikke', 'jczx']
 /** 专名：中英界面都写原文，不进翻译表（R11.1） */
 const MODE_LABEL = { bd: 'BD2', lostsword: 'Lost Sword', nikke: 'NIKKE', jczx: 'JCZX' }
+/** 需求 4（修正）：spine-player 的 premultipliedAlpha =「按 PMA 混合」。
+ *  · BD2 图集 PNG 是直通 alpha → 需要混合开 + 上传时 UNPACK 预乘（见下）。
+ *  · NIKKE / JCZX 从 Unity RGBA32 抽出的 PNG 本身已是 PMA（atlas `pma:true`）
+ *    → 混合必须开；若再 UNPACK 预乘会双预乘，眼睛/半透明处发黑；关掉混合则
+ *    经典「PMA 贴图 + 直通混合」黑边。故 nikke/jczx 默认混合开、上传预乘关。
+ *  · lostsword 暂保持关（未确认图集 PMA）。 */
+const PREMULTIPLY_DEFAULT = { bd: true, lostsword: false, nikke: true, jczx: true }
+/** 上传时 UNPACK_PREMULTIPLY：仅直通 alpha 图集需要（BD2）。已是 PMA 的切勿开。 */
+const UPLOAD_PREMULTIPLY_BY_MODE = { bd: true, lostsword: false, nikke: false, jczx: false }
+function defaultPremultiply(mode) {
+  return ASSET_MODES.includes(mode) ? !!PREMULTIPLY_DEFAULT[mode] : true
+}
+function needsUploadPremultiply(mode) {
+  return ASSET_MODES.includes(mode) ? !!UPLOAD_PREMULTIPLY_BY_MODE[mode] : true
+}
+/** 勾选/模式变更后：混合标志与「是否在上传时预乘」分开套。 */
+function syncPremultiplyGl() {
+  applyGLTexturePatch(!!S.premultiplied && needsUploadPremultiply(S.mode))
+}
+/** 切模式时套默认值，并同步勾选框 + GL 贴图补丁（不重建播放器——调用方负责）。 */
+function applyPremultiplyForMode(mode) {
+  S.premultiplied = !!PREMULTIPLY_DEFAULT[mode]
+  const chk = $('chkPremultiplied')
+  if (chk) chk.checked = S.premultiplied
+  syncPremultiplyGl()
+}
 
 function loadMode() {
   try {
@@ -45710,6 +45905,11 @@ async function setAssetMode(mode) {
   S.mode = mode
   try { localStorage.setItem(MODE_KEY, mode) } catch { /* 存不下就算了 */ }
   syncModeUI()
+  // Drop in-flight thumb jobs from the previous mode so we never mkdir their
+  // paths under the new mode root (Celia_* / 神悠* under jczx/, etc.).
+  try { thumbAsked.clear() } catch { /* */ }
+  // 需求 4：切模式套该 mode 的预乘默认（手动开关保留到下次切模式为止）
+  applyPremultiplyForMode(mode)
   // 上一个模式选中的那套资产已经不在新列表里了，先放掉 ——
   // 否则播放页会继续挂着一套不属于当前类型的画面（而且它的文件按新规则根本不成立）。
   if (S.current) { disposePlayer(); S.current = null }
@@ -45820,8 +46020,166 @@ function clearError() { $('errorBox').hidden = true }
 function setBusy(on, text) {
   S.busy = on
   const sp = $('spinner')
+  if (!sp) return
   sp.hidden = !on
-  if (text) sp.lastChild.textContent = text
+  const label = sp.querySelector('.spinner-text') || sp.querySelector('span:not(.dot)')
+  if (text && label) label.textContent = text
+  // 必须传 {} / 无参：setLoadProgress(null) 会因解构 null 抛
+  //「Cannot destructure property 'stage' … as it is null」，
+  // 打断 onLoaded → 表现为任意资产「Unable to render skeleton」+ 后台任务出错。
+  if (!on) setLoadProgress()
+}
+
+/* ---------------- 需求 2：真实进度 UI（解包 / 扫描 / 缩略图 / 单资产） ---------------- */
+function setWorkRow(rowId, fillId, labelId, opts) {
+  const { done, total, label, indeterminate } = opts || {}
+  const row = $(rowId)
+  const fill = $(fillId)
+  const lab = $(labelId)
+  const wrap = $('workProgress')
+  if (!row) return
+  const show = indeterminate || (total > 0 && done < total)
+  row.hidden = !show
+  if (lab) lab.textContent = label || ''
+  if (fill) {
+    const track = fill.parentElement
+    if (track) track.classList.toggle('indeterminate', !!indeterminate)
+    if (indeterminate) fill.style.width = '35%'
+    else fill.style.width = total > 0 ? Math.max(0, Math.min(100, (done / total) * 100)) + '%' : '0%'
+  }
+  if (wrap) {
+    const any = [...wrap.querySelectorAll('.work-progress-row')].some(r => !r.hidden)
+    wrap.hidden = !any
+  }
+}
+
+function setUnpackProgress(meta) {
+  if (!meta || !(meta.found > 0)) {
+    setWorkRow('unpackProgressRow', 'unpackFill', 'unpackLabel', { done: 0, total: 0 })
+    return
+  }
+  const done = meta.done != null ? meta.done : ((meta.reused || 0) + (meta.extracted || 0)
+    + (meta.failed || 0) + (meta.skippedNoSpine || 0))
+  const total = meta.total != null ? meta.total : meta.found
+  const pending = meta.pending || 0
+  const inFlight = meta.inFlight || 0
+  const cur = Array.isArray(meta.current) && meta.current.length ? meta.current[0] : ''
+  // done 含 failed/skipped 时不是「可播放套数」→ 用包处理进度
+  const packProgress = !!(meta.failed || meta.skippedNoSpine
+    || (meta.playableDone != null && meta.playableDone !== done)
+    || meta.packProgress)
+  const label = packProgress
+    ? (cur
+      ? t('包处理进度 {done}/{total} · {name}', { done, total, name: cur })
+      : t('包处理进度 {done}/{total}', { done, total }))
+    : (cur
+      ? t('解包 {done}/{total} · {name}', { done, total, name: cur })
+      : t('解包 {done}/{total}', { done, total }))
+  setWorkRow('unpackProgressRow', 'unpackFill', 'unpackLabel', {
+    done, total, label, indeterminate: false,
+  })
+  // 队列空闲即清条：勿再依赖 done>=total（失败包曾导致 toast/进度永不消失）
+  if (pending <= 0 && !(inFlight > 0)) {
+    setWorkRow('unpackProgressRow', 'unpackFill', 'unpackLabel', { done: 0, total: 0 })
+  }
+}
+
+function setScanProgress(on, text) {
+  setWorkRow('scanProgressRow', 'scanFill', 'scanLabel', {
+    done: 0, total: on ? 1 : 0, label: text || t('扫描中…'), indeterminate: !!on,
+  })
+  // 扫描期间只显示真实进度条；不要用固定数量的空卡片填充图库。
+}
+
+function setThumbProgress(done, total) {
+  setWorkRow('thumbProgressRow', 'thumbFill', 'thumbLabel', {
+    done, total,
+    label: total > 0 && done < total ? t('缩略图 {done}/{total}', { done, total }) : '',
+  })
+}
+
+/** 播放页加载遮罩：有天然计数就用确定进度，否则不定长 + 阶段文字。
+ *  无参 / null / undefined 都表示「清掉进度」（勿对 null 解构）。 */
+function setLoadProgress(opts) {
+  const { stage, done, total, indeterminate, text } = opts || {}
+  const track = $('loadTrack')
+  const fill = $('loadFill')
+  const st = $('loadStage')
+  if (!track) return
+  const show = !!(stage || text || (total > 0) || indeterminate)
+  track.hidden = !show && !indeterminate
+  if (st) {
+    st.hidden = !stage && !text
+    st.textContent = stage || text || ''
+  }
+  if (fill) {
+    track.classList.toggle('indeterminate', !!indeterminate || !(total > 0))
+    if (total > 0 && !indeterminate) fill.style.width = Math.max(0, Math.min(100, (done / total) * 100)) + '%'
+    else fill.style.width = '35%'
+  }
+  if (!show) {
+    track.hidden = true
+    if (st) st.hidden = true
+  }
+}
+
+async function fetchNikkeProgress() {
+  if (NATIVE) {
+    try {
+      const raw = window.BD2Native.nikkeUnpackProgress(S.rootId)
+      return raw ? JSON.parse(raw) : null
+    } catch { return null }
+  }
+  try {
+    const res = await fetch(`/api/nikke-ab/progress?root=${encodeURIComponent(S.rootId)}`)
+    if (!res.ok) return null
+    return await res.json()
+  } catch { return null }
+}
+
+async function prioritizeNikke(rels, keys) {
+  const list = Array.isArray(rels) ? rels.filter(Boolean) : []
+  const keyList = Array.isArray(keys) ? keys.filter(Boolean) : []
+  if (!list.length && !keyList.length) return null
+  if (NATIVE) {
+    try {
+      const payload = list.length ? list : keyList
+      const raw = window.BD2Native.nikkeUnpackPrioritize(S.rootId, JSON.stringify(payload), true)
+      return raw ? JSON.parse(raw) : null
+    } catch { return null }
+  }
+  try {
+    const res = await fetch('/api/nikke-ab/prioritize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ root: S.rootId, rels: list, keys: keyList, sibling: true }),
+    })
+    return await res.json()
+  } catch { return null }
+}
+
+/** 从解包队列的 pendingRels 生成可点的占位卡（尚未解包完）。 */
+function mergePendingUnpackPlaceholders(pendingRels) {
+  if ((S.mode !== 'nikke' && S.mode !== 'jczx') || !Array.isArray(pendingRels) || !pendingRels.length) return
+  const have = new Set(S.items.map(i => i.bundleRel || i.relAtlas || i.id))
+  for (const rel of pendingRels) {
+    const r = String(rel || '').replace(/\\/g, '/')
+    if (!r || have.has(r)) continue
+    const base = r.split('/').pop()
+    S.items.push({
+      id: 'pending:' + r,
+      ok: false,
+      pendingUnpack: true,
+      bundleRel: r,
+      base,
+      folder: base,
+      group: base,
+      relAtlas: '',
+      images: [],
+      problems: [t('尚未解包')],
+    })
+    have.add(r)
+  }
 }
 
 // 没被捕获的 Promise 异常也给出可读提示（不阻塞任何交互，9 秒自动消失）
@@ -45858,9 +46216,10 @@ function safeName(s) {
 }
 
 /* ------------------------------------------------- 贴图预乘 alpha 补丁
- * BD2 的 atlas PNG 是直通 alpha。spine-player 的 premultipliedAlpha 只作用于
- * canvas context，上传贴图时并不会预乘，因此需要补丁，否则叠加/加法混合会出错。
- * 这一点是照搬原站 SpineViewer.vue 的做法。
+ * BD2 的 atlas PNG 是直通 alpha。spine-player 的 premultipliedAlpha 只改混合方程，
+ * 上传贴图时并不会预乘，因此 BD2 需要本补丁（UNPACK_PREMULTIPLY_ALPHA_WEBGL）。
+ * NIKKE / JCZX 图集本身已是 PMA（atlas pma:true）—— 只能开混合、不能再 UNPACK，
+ * 否则双预乘（眼睛/半透明发黑）。由 syncPremultiplyGl() 按 mode 决定是否挂补丁。
  */
 
 let glPatchState = null           // 4.1 那份（保持原语义，别的地方可能读它）
@@ -45954,7 +46313,6 @@ function deepLinkItem() { return new URLSearchParams(location.search).get('item'
 function initialView() { return deepLinkItem() ? 'player' : 'grid' }
 
 async function boot() {
-  applyGLTexturePatch(true)
   // 语言必须在**画第一帧之前**定下来，而且要比 applyTouchMode() 更早 ——
   // 那个函数里也有 t() 文案（空状态的副标题），晚了就会在英文界面上留下一句中文。
   LANG = loadLang()
@@ -45965,6 +46323,8 @@ async function boot() {
   // 晚了第一次就会用 bd 的规则扫一遍 lostsword 的目录（结果是 0 个资产）。
   S.mode = loadMode()
   syncModeUI()
+  // 需求 4：预乘默认随 mode；勾选框与 GL 补丁一并对齐
+  applyPremultiplyForMode(S.mode)
   if (NATIVE) applyTouchMode()
   bindUI()
   // 首屏必须在**这里**同步定下来 —— 不能等 scan() 收尾。
@@ -46526,6 +46886,7 @@ function renderRootOptions() {
     S.rootId = (auto || S.config.roots[0])?.id || null
   }
   sel.value = S.rootId || ''
+  syncRemoveRootBtn()
 }
 
 /** 只刷新目录下拉，不打断当前播放 */
@@ -46696,6 +47057,253 @@ function renderStorageSettings(st) {
    也不去关 spinner（那是新一轮在用的）。 */
 let scanSeq = 0
 
+/* ---------------- NIKKE mod 包解包进度（需求 1+2：优先级队列 + 真实进度条） ----------------
+   解包在后台以包级并发 ≤ 10 跑；前端：
+   · 常驻细进度条（done/total + 当前包名）
+   · 轻量轮询 /api/nikke-ab/progress（不必每次整页重扫）
+   · 每隔几轮再 force scan，把新解出的资产拼进列表
+   · 点开尚未解包的占位卡 → prioritize 抬到队首 → 等它解完再播 */
+let nikkePollGen = 0
+let nikkePollTries = 0
+let nikkeAbPrev = null
+let nikkeErrShown = false
+let nikkeUngatedShown = false
+// 后台解包期间想重扫、但用户正停在播放页：先记着，回平铺页再扫。
+// 不这样做的话，全屏「扫描中…」会一遍遍盖在正在看的动画上（2026-10-01 用户截图）。
+let unpackRescanNeeded = false
+const NIKKE_POLL_MS = 400
+const NIKKE_POLL_MAX = 3000         // ≈20 分钟（0.4s 间隔）
+const NIKKE_RESCAN_EVERY = 8       // 兜底：即使 done 未变也偶尔扫一次（防漏）
+let nikkeLastScannedDone = -1
+
+function handleNikkeAbMeta(meta) {
+  if (!meta || !meta.found) {
+    setUnpackProgress(null)
+    return
+  }
+  const done = meta.done != null ? meta.done : ((meta.reused || 0) + (meta.extracted || 0)
+    + (meta.failed || 0) + (meta.skippedNoSpine || 0))
+  const playableDone = meta.playableDone != null ? meta.playableDone
+    : ((meta.reused || 0) + (meta.extracted || 0))
+  const prev = nikkeAbPrev
+  nikkeAbPrev = meta
+  setUnpackProgress(meta)
+  mergePendingUnpackPlaceholders([...(meta.pendingRels || []), ...(meta.currentRels || [])])
+
+  if (meta.errors && meta.errors.length && !nikkeErrShown) {
+    nikkeErrShown = true
+    const e = meta.errors[0]
+    toast(t('NIKKE 解包出错：{msg}', { msg: String(e.err || e.error || e).slice(0, 120) }))
+  }
+  if (meta.ungated > 0 && !nikkeUngatedShown) {
+    nikkeUngatedShown = true
+    toast(t('有 {n} 个包的贴图可能不准（压缩/流式贴图），建议在 PC 端解包后把产物拷到手机', { n: meta.ungated }))
+  }
+
+  const left = (meta.pending || 0) + (meta.inFlight || 0)
+  const busy = left > 0
+  if (busy) {
+    const el = $('assetCount')
+    if (el && !/\u89e3\u5305/.test(el.textContent) && !/unpack/i.test(el.textContent)) {
+      el.textContent += ' · ' + t('包处理中 {done}/{total}', { done, total: meta.total || meta.found })
+    }
+    if (!prev || !(prev.pending > 0 || prev.inFlight > 0)) {
+      toast(t('正在解包 NIKKE 资产包：已就绪 {done} 套，后台还在处理 {left} 个…',
+        { done: playableDone, left }))
+    }
+    if (S.mode === 'nikke') {
+      nikkePollTries = (!prev || !(prev.pending > 0 || prev.inFlight > 0)) ? 0 : nikkePollTries
+      scheduleNikkePoll()
+    }
+  } else {
+    if (prev && (prev.pending > 0 || prev.inFlight > 0)) {
+      toast(t('NIKKE 资产解包完成：{done} 套可播放', { done: playableDone }))
+    }
+    setUnpackProgress(null)
+    nikkePollGen++
+    nikkePollTries = 0
+  }
+}
+
+function scheduleNikkePoll() {
+  if (nikkePollTries >= NIKKE_POLL_MAX) {
+    if (nikkePollTries === NIKKE_POLL_MAX) {
+      nikkePollTries++
+      toast(t('NIKKE 资产包仍在后台解包，稍后点「重新扫描」查看'))
+    }
+    return
+  }
+  const gen = ++nikkePollGen
+  nikkePollTries++
+  setTimeout(async () => {
+    if (gen !== nikkePollGen) return
+    if (S.mode !== 'nikke') return
+    const prog = await fetchNikkeProgress()
+    if (prog && prog.found) {
+      setUnpackProgress(prog)
+      nikkeAbPrev = prog
+      mergePendingUnpackPlaceholders([...(prog.pendingRels || []), ...(prog.currentRels || [])])
+      if (viewMode === 'grid') refreshLists()
+      const done = prog.done != null ? prog.done : ((prog.reused || 0) + (prog.extracted || 0)
+        + (prog.failed || 0) + (prog.skippedNoSpine || 0))
+      const busy = (prog.pending > 0) || (prog.inFlight > 0)
+      if (!busy) {
+        handleNikkeAbMeta(prog)
+        nikkeLastScannedDone = done
+        // 播放页不打扰：解包全部完成后也等回平铺页再扫（否则全屏遮罩盖住正在看的动画）
+        if (!S.busy && viewMode === 'grid') scan(true)
+        else if (viewMode !== 'grid') unpackRescanNeeded = true
+        return
+      }
+      // done 增加才 force scan（避免每次轮询都 prepare+walk 全库）；偶发兜底防漏
+      const shouldScan = (done > nikkeLastScannedDone) || (nikkePollTries % NIKKE_RESCAN_EVERY === 0)
+      if (shouldScan && !S.busy) {
+        if (viewMode !== 'grid') {
+          unpackRescanNeeded = true      // 回平铺页再扫，nikkeLastScannedDone 保持不动
+        } else {
+          nikkeLastScannedDone = done
+          await scan(true)
+        }
+      }
+    }
+    scheduleNikkePoll()
+  }, NIKKE_POLL_MS)
+}
+
+
+/* ---------------- JCZX 解包进度（与 NIKKE 同模型：并发队列 + 轮询重扫） ---------------- */
+let jczxPollGen = 0
+let jczxPollTries = 0
+let jczxPrev = null
+let jczxErrShown = false
+const JCZX_POLL_MS = 400
+const JCZX_POLL_MAX = 3000
+const JCZX_RESCAN_EVERY = 8
+let jczxLastScannedDone = -1
+
+function handleJczxMeta(meta) {
+  if (!meta) { setUnpackProgress(null); return }
+  const done = meta.done != null ? meta.done
+    : ((meta.reusedCount || 0) + (meta.extractedCount || 0)
+      + (meta.failed || 0) + (meta.skippedNoSpine || 0)
+      || ((Array.isArray(meta.reused) ? meta.reused.length : 0)
+        + (Array.isArray(meta.extracted) ? meta.extracted.length : 0)))
+  const playableDone = meta.playableDone != null ? meta.playableDone
+    : ((meta.reusedCount || 0) + (meta.extractedCount || 0)
+      || ((Array.isArray(meta.reused) ? meta.reused.length : 0)
+        + (Array.isArray(meta.extracted) ? meta.extracted.length : 0)))
+  const total = meta.total || meta.found || meta.bundles || 0
+  const prev = jczxPrev
+  jczxPrev = meta
+  mergePendingUnpackPlaceholders([...(meta.pendingRels || []), ...(meta.currentRels || [])])
+
+  if (meta.setup && meta.setup.message) {
+    if (meta.setup.ok) toast(meta.setup.message)
+    else toast(t('JCZX 环境未就绪：{msg}', { msg: meta.setup.message }))
+  }
+  if (meta.errors && meta.errors.length && !jczxErrShown && !(meta.setup && meta.setup.message)) {
+    jczxErrShown = true
+    toast(t('JCZX 提取失败：{msg}', { msg: meta.errors[0].error || String(meta.errors.length) }))
+  }
+
+  const left = (meta.pending || 0) + (meta.inFlight || 0)
+  // 仅看队列是否空闲：失败/跳过计入 done 后也不再靠 done<total 卡住 toast
+  const busy = left > 0
+  if (busy) {
+    setUnpackProgress({
+      done, total: total || Math.max(done, 1),
+      current: meta.current, pending: meta.pending, inFlight: meta.inFlight,
+      failed: meta.failed, skippedNoSpine: meta.skippedNoSpine,
+      playableDone, packProgress: true,
+    })
+    const el = $('assetCount')
+    if (el && !/\u89e3\u5305/.test(el.textContent) && !/unpack/i.test(el.textContent)) {
+      el.textContent += ' · ' + t('包处理中 {done}/{total}', { done, total: total || '?' })
+    }
+    if (!prev || !(prev.pending > 0 || prev.inFlight > 0)) {
+      toast(t('正在解包 JCZX 资产：已就绪 {done} 套，后台还在处理 {left} 个…',
+        { done: playableDone, left }))
+    }
+    if (S.mode === 'jczx') {
+      jczxPollTries = (!prev || !(prev.pending > 0 || prev.inFlight > 0)) ? 0 : jczxPollTries
+      scheduleJczxPoll()
+    }
+  } else {
+    setUnpackProgress(null)
+    if (prev && (prev.pending > 0 || prev.inFlight > 0)) {
+      toast(t('JCZX 提取完成：{done} 套可播放', { done: playableDone }))
+    } else if ((Array.isArray(meta.extracted) && meta.extracted.length)
+      || (Array.isArray(meta.reused) && meta.reused.length)) {
+      const n = (meta.extracted || []).length
+      const m = (meta.reused || []).length
+      if (n || m) toast(t('JCZX 提取：新建 {n}，复用 {m}', { n, m }))
+    }
+    jczxPollGen++
+    jczxPollTries = 0
+  }
+}
+
+async function fetchJczxProgress() {
+  try {
+    if (NATIVE) {
+      const raw = window.BD2Native.jczxUnpackProgress(S.rootId)
+      return raw ? JSON.parse(raw) : null
+    }
+    const res = await fetch(`/api/jczx/progress?root=${encodeURIComponent(S.rootId)}`)
+    if (!res.ok) return null
+    return await res.json()
+  } catch { return null }
+}
+
+function scheduleJczxPoll() {
+  if (jczxPollTries >= JCZX_POLL_MAX) {
+    if (jczxPollTries === JCZX_POLL_MAX) {
+      jczxPollTries++
+      toast(t('JCZX 资产仍在后台解包，稍后点「重新扫描」查看'))
+    }
+    return
+  }
+  const gen = ++jczxPollGen
+  jczxPollTries++
+  setTimeout(async () => {
+    if (gen !== jczxPollGen) return
+    if (S.mode !== 'jczx') return
+    const prog = await fetchJczxProgress()
+    if (prog && (prog.found || prog.bundles)) {
+      const done = prog.done != null ? prog.done : ((prog.reusedCount || 0) + (prog.extractedCount || 0)
+        + (prog.failed || 0) + (prog.skippedNoSpine || 0))
+      setUnpackProgress({
+        done,
+        total: prog.total || prog.found || prog.bundles || 1,
+        current: prog.current, pending: prog.pending, inFlight: prog.inFlight,
+        failed: prog.failed, skippedNoSpine: prog.skippedNoSpine,
+        playableDone: prog.playableDone, packProgress: true,
+      })
+      jczxPrev = prog
+      mergePendingUnpackPlaceholders([...(prog.pendingRels || []), ...(prog.currentRels || [])])
+      if (viewMode === 'grid') refreshLists()
+      const busy = (prog.pending > 0) || (prog.inFlight > 0)
+      if (!busy) {
+        handleJczxMeta(prog)
+        jczxLastScannedDone = done
+        if (!S.busy && viewMode === 'grid') scan(true)
+        else if (viewMode !== 'grid') unpackRescanNeeded = true
+        return
+      }
+      const shouldScan = (done > jczxLastScannedDone) || (jczxPollTries % JCZX_RESCAN_EVERY === 0)
+      if (shouldScan && !S.busy) {
+        if (viewMode !== 'grid') {
+          unpackRescanNeeded = true
+        } else {
+          jczxLastScannedDone = done
+          await scan(true)
+        }
+      }
+    }
+    scheduleJczxPoll()
+  }, JCZX_POLL_MS)
+}
+
 async function scan(force) {
   const seq = ++scanSeq
   if (!S.rootId) {
@@ -46704,6 +47312,7 @@ async function scan(force) {
     return
   }
   setBusy(true, S.mode === 'jczx' ? t('正在提取 JCZX 资产…') : t('扫描中…'))
+  setScanProgress(true, S.mode === 'jczx' ? t('正在提取 JCZX 资产…') : t('扫描中…'))
   // 先清掉：换了目录 / 扫描失败时不能留着上一个目录的绝对路径，
   // 否则菜单里会拿旧前缀去拼新资产的相对路径，拼出一条不存在的路径。
   S.rootPath = ''
@@ -46730,30 +47339,31 @@ async function scan(force) {
     // 过期的一轮：请求已经被后来的一次取代，整包丢弃（下面 catch/finally 同样只看代次）
     if (seq !== scanSeq) return
     S.items = data.items || []
+    // 归组立刻算一次（NIKKE 姿势 R18 / Lost Sword 两层角色 R19）：缩略图队列、删除、
+    // 深链都直接读条目上的 members / backLayer —— 不能指望「总会有人先渲染一遍列表」。
+    nikkeViewFor()
+    layerViewFor()
     // 绝对路径也一起收下：卡片菜单里的「复制路径」要靠它把相对路径拼成整条。
     // 两个数据源（Node 服务 / 原生壳）的扫描响应里都带 root.path，没有就是空串。
     S.rootPath = (data.root && data.root.path) || ''
     if (!data.exists) showError(t('目录不存在：{path}', { path: data.root.path }))
     $('assetCount').textContent = t('{ok}/{total} 可播放', { ok: data.playableCount, total: data.itemCount }) +
       (data.scanMs ? ` · ${data.scanMs}ms` : '')
-    if (data.jczx) {
-      const jz = data.jczx
-      if (jz.setup && jz.setup.message) {
-        if (jz.setup.ok) toast(jz.setup.message)
-        else toast(t('JCZX 环境未就绪：{msg}', { msg: jz.setup.message }))
-      }
-      if (jz.errors && jz.errors.length && !(jz.setup && jz.setup.message)) {
-        toast(t('JCZX 提取失败：{msg}', { msg: jz.errors[0].error || String(jz.errors.length) }))
-      } else if ((jz.extracted && jz.extracted.length) || (jz.reused && jz.reused.length)) {
-        const n = (jz.extracted || []).length
-        const m = (jz.reused || []).length
-        if (n || m) toast(t('JCZX 提取：新建 {n}，复用 {m}', { n, m }))
-      }
+    if (data.jczx) handleJczxMeta(data.jczx)
+    // NIKKE 的 mod 包（UnityFS）在服务端/原生侧解包，**分批进行**：第一次扫描只解
+    // 前一批（几十个包），剩下的在后台继续。这里给提示并轮询重扫，直到 pending 归零。
+    // 轮询用 force（绕开服务端 15s 的扫描缓存），并且只在 NIKKE 档做。
+    if (data.nikkeAb) handleNikkeAbMeta(data.nikkeAb)
+    else if (S.mode === 'nikke' && nikkeAbPrev) {
+      mergePendingUnpackPlaceholders([
+        ...(nikkeAbPrev.pendingRels || []),
+        ...(nikkeAbPrev.currentRels || []),
+      ])
     }
   } catch (err) {
     if (seq === scanSeq) showError(t('扫描失败：') + err.message)
   } finally {
-    if (seq === scanSeq) setBusy(false)
+    if (seq === scanSeq) { setBusy(false); setScanProgress(false) }
   }
   // 平铺页要用：先把 IndexedDB 里上次生成的缩略图读进内存，
   // 这样卡片一渲染就直接有图，不用每次启动都重新渲一遍。
@@ -46777,25 +47387,95 @@ async function scan(force) {
 }
 
 /**
- * 保留导出钩子（测试 / 调试用）。产品不再按骨架世代做跨模式隔离，
- * 可见口径只靠「当前扫到的条目」+ NIKKE 姿势归组（R18）。
+ * 模式隔离：按路径缓存目录过滤，避免 JCZX / NIKKE 解包产物串味。
+ * 骨架世代仍由 spineMinorFor 选运行时；这里只管「该不该出现在当前档的 gallery」。
  */
 function matchesAssetMode(item) {
-  return !!item
+  if (!item) return false
+  const rel = String(item.relAtlas || item.id || '').replace(/\\/g, '/')
+  const isJczx = rel === 'bd2viewer-jczx' || rel.startsWith('bd2viewer-jczx/')
+    || rel.includes('/bd2viewer-jczx/')
+    || rel === '.bd2viewer-jczx' || rel.startsWith('.bd2viewer-jczx/')
+    || rel.includes('/.bd2viewer-jczx/')
+  const isNikkeCache = rel === 'bd2viewer-nikke' || rel.startsWith('bd2viewer-nikke/')
+    || rel.includes('/bd2viewer-nikke/')
+    || rel === '.bd2viewer-nikke' || rel.startsWith('.bd2viewer-nikke/')
+    || rel.includes('/.bd2viewer-nikke/')
+  if (S.mode === 'jczx') return isJczx || !!item.pendingUnpack
+  if (isJczx) return false
+  if (S.mode !== 'nikke' && isNikkeCache) return false
+  return true
 }
 
 function allItems() {
-  const base = [...S.customItems, ...S.items]
-  if (S.mode !== 'nikke') return base
-  const v = nikkeViewFor()
-  // NIKKE 档：藏姿势变体（成员挂到主条目上，见 R18）
-  return base.filter(i => !v.variantKeys.has(itemKey(i)))
+  const base = [...S.customItems, ...S.items].filter(matchesAssetMode)
+  if (S.mode === 'nikke') {
+    // NIKKE 档：藏姿势变体（成员挂到主条目上，见 R18）
+    return base.filter(i => !nikkeViewFor().variantKeys.has(itemKey(i)))
+  }
+  if (S.mode === 'lostsword') {
+    // Lost Sword 档：藏「两层角色」的背层（`_B`，挂到 `_F` 上叠着渲染，见 R19）
+    return base.filter(i => !layerViewFor().hiddenKeys.has(itemKey(i)))
+  }
+  return base
+}
+
+/* ---------------- Lost Sword：两层角色（`_B` 背层 + `_F` 前层）（R19）
+   LobbyUnit 里 11 个角色的骨架是**两套**：`Lobby_Merlin_B`（背层：大头发 / 披风，
+   实测只有 10 个槽位）与 `Lobby_Merlin_F`（前层：完整人物，36 个槽位）。
+   游戏里是背层在下、前层在上叠着画的 —— 单独打开背层看着就是「残的」
+   （用户反馈的「动画加载错误」就是这个：能播、不报错，但只有半个角色）。
+
+   所以：**同一目录**里 `<X>_B` 与 `<X>_F` 成对出现时归成一套资产：
+   · 条目本体是 `_F`（完整的那层），背层挂在 `item.backLayer` 上；
+   · `_B` 不再单独成卡（从可见口径里藏掉），播放时两层一起渲染；
+   · 只有 `_B` 没有 `_F` 时不归组（照旧单独成卡，用户还能看到一个"半层"）。
+   与 NIKKE 归组一样，只改可见口径，`S.items` 仍然是原始条目。 */
+
+let layerView = null   // { src, mode, hiddenKeys } —— S.items 或 S.mode 变了就重算
+
+/** `Lobby_Merlin_B` → { id: 'Lobby_Merlin', side: 'B' }；不匹配返回 null。 */
+function layerPartsOf(base) {
+  const m = /^(.*)_([BF])$/.exec(String(base || ''))
+  return m ? { id: m[1], side: m[2] } : null
+}
+
+function layerViewFor() {
+  if (layerView && layerView.src === S.items && layerView.mode === S.mode) return layerView
+  const hiddenKeys = new Set()
+  if (S.mode === 'lostsword') {
+    const groups = new Map()      // 目录 + '/' + id → { B, F }
+    for (const it of S.items) {
+      const p = layerPartsOf(it.base)
+      if (!p) continue
+      const dir = String(it.relAtlas || '').split('/').slice(0, -1).join('/')
+      const gk = dir + '|' + p.id
+      let g = groups.get(gk)
+      if (!g) { g = {}; groups.set(gk, g) }
+      if (!g[p.side]) g[p.side] = it
+    }
+    for (const g of groups.values()) {
+      if (!g.B || !g.F) continue
+      g.F.backLayer = g.B
+      g.B.frontLayer = g.F
+      hiddenKeys.add(itemKey(g.B))
+    }
+  }
+  layerView = { src: S.items, mode: S.mode, hiddenKeys }
+  return layerView
 }
 
 /* ---------------- NIKKE 模式：一个角色一套资产（R18） ----------------
    `<id>_00` 是本体；`<id>_aim_00` / `<id>_cover_00` 是**同一个角色**的
    「瞄准 / 掩体」姿势 —— 与参考站（Nikke-db）的组织方式一致：一个角色一份，
    播放页里切姿势，而不是把三套骨架摆成三张卡。
+
+   需求 6 之后解包缓存是「每包一文件夹」：
+     bd2viewer-nikke/<packFolder>/c022_00.atlas
+     bd2viewer-nikke/<otherPack>/c022_aim_00.atlas
+   同一角色的 standing / aim / cover 落在**不同包文件夹**里。归组键 =
+   （缓存 `c|` / 用户自有 `r|`）+ 从骨架基名解析的角色 id（`nikkeGroupOf`），
+   **跨同层包文件夹合并**，不再要求同目录。同一姿势多份 mod 只留第一份。
 
    分组 + 变体隐藏都只发生在「可见口径」这一层：
    · `S.items` 始终存**原始条目** —— 删除 / 扫描缓存 / 上传 / 缩略图队列都不必知道分组存在；
@@ -46829,22 +47509,42 @@ function nikkeViewFor() {
       String(a.relAtlas || '').localeCompare(String(b.relAtlas || '')))
     for (const it of sorted) {
       const g = nikkeGroupOf(it.base)
-      let grp = groups.get(g.id)
-      if (!grp) { grp = []; groups.set(g.id, grp) }
+      // 分组键 = 角色id + **来源**（解包缓存 / 用户自有文件）。1.07 踩过的坑：
+      // 解包缓存里的 `c022_00`（mod 包内名）会和用户自己的 `c022/c022_00.atlas`
+      // 撞成一组，缓存项排前面还把主条目顶掉 —— 同一角色两份来源应当是两张卡。
+      // 需求 6：缓存侧跨 sibling 包文件夹归组（key 不含 folder；同 id 的 aim/cover
+      // 即使在不同 <packFolder> 里也会并到一张卡）。
+      const key = (isNikkeCacheItem(it) ? 'c|' : 'r|') + g.id
+      let grp = groups.get(key)
+      if (!grp) { grp = []; groups.set(key, grp) }
       grp.push({ item: it, pose: g.pose })
     }
     for (const grp of groups.values()) {
       // 本体在最前；其余按 pose 名排，保证顺序稳定
       grp.sort((a, b) => (a.pose === 'normal' ? -1 : b.pose === 'normal' ? 1 : a.pose.localeCompare(b.pose)))
-      if (grp.length < 2) continue
-      const main = grp[0].item
-      main.members = grp
+      // 同一姿势出现多次（同一个角色姿势的多份 mod）只保留第一份，否则姿势切换对不上一一映射
+      const seen = new Set()
+      const uniq = grp.filter(m => (seen.has(m.pose) ? false : (seen.add(m.pose), true)))
+      if (uniq.length < 2) continue
+      const main = uniq[0].item
+      main.members = uniq
       main.groupId = nikkeGroupOf(main.base).id
-      for (const m of grp.slice(1)) variantKeys.add(itemKey(m.item))
+      for (const m of uniq.slice(1)) variantKeys.add(itemKey(m.item))
     }
   }
   nikkeView = { src: S.items, mode: S.mode, variantKeys }
   return nikkeView
+}
+
+/** 解包缓存里的条目（目录名与服务端 /ScanEngine 的常量保持一致）。 */
+function isNikkeCacheItem(it) {
+  const r = String(it.relAtlas || '')
+  return r.startsWith('bd2viewer-nikke/') || r.includes('/bd2viewer-nikke/')
+}
+function isJczxCacheItem(it) {
+  const r = String(it.relAtlas || '')
+  return r.startsWith('bd2viewer-jczx/') || r.includes('/bd2viewer-jczx/')
+    || r.startsWith('.bd2viewer-jczx/') || r.includes('/.bd2viewer-jczx/')
 }
 
 /** 当前播放姿势实际指向的条目：主条目本身，或它 members 里的那个变体。 */
@@ -47102,7 +47802,8 @@ function filteredItems() {
   const { q, onlyOk } = filters
   searchHits.clear()
   return orderedList(allItems().filter(i => {
-    if (onlyOk && !i.ok) return false
+    // 尚未解包的占位卡（需求 1）即使开了「仅可播放」也要看得见，才能点开优先解包
+    if (onlyOk && !i.ok && !i.pendingUnpack) return false
     if (!q) return true
     if (!searchHaystack(i).includes(q)) return false
     const why = hitReason(i, q)
@@ -47218,6 +47919,9 @@ const thumbFailed = new Set()     // 已确认生成不了的 cacheKey（Indexed
 const thumbAsked = new Set()      // 正在生成 / 已尝试过的 cacheKey，避免重复排
 let thumbRunning = false
 let thumbDone = 0
+// 生成后是否把缩略图写回资产目录（需求 5：源文件夹里放一个 thumb.png，重开不用重灌）。
+// 自动化测试必须关掉 —— 它会改用户磁盘，也会让「有多少资产需要生成」这个前提漂移。
+let thumbPersist = true
 
 /** 缩略图缓存 key：同一套资产文件换了（mtime 变）就换 key，等于自动失效 */
 function thumbKey(item) {
@@ -47368,6 +48072,11 @@ function setView(mode) {
     // 抽屉不能跨视图留在半开状态：平铺页里底部标签栏整条没了，收不回去就卡住
     if (sheetOpen) toggleSheet('')
     renderGallery()
+    // 播放页里攒下的后台解包重扫：回到平铺页再补一次（不在播放页打扰观看）
+    if (unpackRescanNeeded && !S.busy) {
+      unpackRescanNeeded = false
+      scan(true)
+    }
   }
   syncTouchSettingsEntry()
   // 视口尺寸变了：让播放器按新尺寸重排（回到播放页时画面不能歪）
@@ -47384,12 +48093,81 @@ function syncTouchSettingsEntry() {
   if (set) set.hidden = viewMode !== 'grid'
 }
 
-/** 打开某套资产：切到播放页，可选直接全屏 */
+/** 打开某套资产：切到播放页，可选直接全屏。
+ *  需求 1：尚未解包的占位卡 → 抬优先级并等解完再播；已解的 NIKKE 卡也抬同角色姿势兄弟。 */
 function openItem(item, opts) {
   if (!item) return
   setView('player')
+  if (item.pendingUnpack && item.bundleRel) {
+    openPendingUnpack(item, opts)
+    return
+  }
+  if (S.mode === 'nikke') {
+    const keys = []
+    if (item.groupId) keys.push(item.groupId)
+    else if (item.base) {
+      const g = nikkeGroupOf(item.base)
+      if (g && g.id) keys.push(g.id)
+    }
+    if (keys.length) prioritizeNikke([], keys)
+  }
   selectItem(item)
   if (opts && opts.fullscreen) setFullscreen(true)
+}
+
+async function prioritizeJczx(rels) {
+  const list = (rels || []).filter(Boolean)
+  if (!list.length) return null
+  if (NATIVE) {
+    try {
+      const raw = window.BD2Native.jczxUnpackPrioritize && window.BD2Native.jczxUnpackPrioritize(S.rootId, JSON.stringify(list))
+      return raw ? JSON.parse(raw) : null
+    } catch { return null }
+  }
+  try {
+    const res = await fetch('/api/jczx/prioritize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ root: S.rootId, rels: list }),
+    })
+    return await res.json()
+  } catch { return null }
+}
+
+async function openPendingUnpack(item, opts) {
+  const rel = item.bundleRel
+  setBusy(true, t('等待解包…'))
+  setLoadProgress({ stage: t('阶段：解包'), indeterminate: true })
+  if (S.mode === 'jczx') await prioritizeJczx([rel])
+  else await prioritizeNikke([rel], [])
+  toast(t('解包优先已排到队首'))
+  const deadline = Date.now() + 180000
+  while (Date.now() < deadline) {
+    const prog = S.mode === 'jczx' ? await fetchJczxProgress() : await fetchNikkeProgress()
+    if (prog) setUnpackProgress(prog)
+    const still = prog && ((prog.pendingRels || []).includes(rel) || (prog.currentRels || []).includes(rel)
+      || (prog.current || []).includes(String(rel).split('/').pop()))
+    // 不在 pending/inFlight 里了 → 认为已经处理完（成功或跳过）
+    if (prog && !still && (prog.found || prog.bundles)) break
+    await new Promise(r => setTimeout(r, 400))
+  }
+  // 强制重扫拿到真资产
+  await scan(true)
+  const base = String(rel).split('/').pop()
+  const found = allItems().find(i => i.ok && !i.pendingUnpack && (
+    i.bundleRel === rel ||
+    (i.folder && i.folder.includes(base)) ||
+    (i.base && base.startsWith(i.base)) ||
+    (i.relAtlas && i.relAtlas.includes(base))
+  ))
+  setBusy(false)
+  if (found) {
+    selectItem(found)
+    if (opts && opts.fullscreen) setFullscreen(true)
+  } else {
+    showError(t('等待解包…') + ' — ' + base)
+    setView('grid')
+  }
 }
 
 /* 上一次返回被哪一层消化了（'none' = 交给宿主退 App）。
@@ -47531,6 +48309,28 @@ function absPathOf(item, kind = 'dir') {
  *   ② 浏览器 Clipboard API —— 桌面版跑在 http://127.0.0.1，属于安全上下文，可用
  *   ③ 临时 textarea + execCommand —— 非安全上下文 / 剪贴板权限被拒时的兜底
  */
+/**
+ * 资产相对根目录的「所在文件夹」路径（用 /）。
+ * 资产直接放在根下时返回 ''（空 = 根目录本身，不能整夹删除）。
+ */
+function relDirOfItem(item) {
+  const rel = String(item?.relAtlas || item?.id || '').split(/[/\\]/).filter(Boolean)
+  if (rel.length <= 1) return ''
+  return rel.slice(0, -1).join('/')
+}
+
+/** 与某文件夹同目录（或更深）的磁盘资产 */
+function itemsUnderRelDir(relDir) {
+  const prefix = relDir ? relDir.replace(/\/+$/, '') + '/' : ''
+  return allItems().filter(i => {
+    if (!isDiskItem(i)) return false
+    const d = relDirOfItem(i)
+    if (!relDir) return true
+    return d === relDir || d.startsWith(prefix)
+  })
+}
+
+
 async function copyToClipboard(text) {
   if (!text) return false
   try { window.BD2Native.copyText(text); return true } catch { /* 桌面版没有这个口 */ }
@@ -47758,6 +48558,150 @@ async function runDelete(items) {
   toast(gone.size ? t('已删除 {n} 个资产', { n: gone.size }) : t('没有资产被删除'))
 }
 
+/** 当前选中的根是否允许从配置列表移除（安卓自动目录 __* 不可移除）。 */
+function canRemoveRoot(rootId) {
+  if (!rootId) return false
+  if (NATIVE && String(rootId).startsWith('__')) return false
+  return !!(S.config && Array.isArray(S.config.roots) && S.config.roots.some(r => r.id === rootId))
+}
+
+/** 顶栏「删除这个文件路径」可用性：跟当前下拉选中项走。
+ *  安卓只有用户授权的 SAF 根可移除；若列表里一个都没有，整颗按钮藏起来，避免顶栏挤。 */
+function syncRemoveRootBtn() {
+  const btn = $('btnRemoveRoot')
+  if (!btn) return
+  const roots = (S.config && S.config.roots) || []
+  const anyRemovable = roots.some(r => r && r.id && !(NATIVE && String(r.id).startsWith('__')))
+  // 桌面始终显示（配置里的 roots 都能移除）；安卓无用户根时隐藏
+  btn.hidden = NATIVE && !anyRemovable
+  const id = S.rootId
+  const ok = canRemoveRoot(id)
+  btn.disabled = !ok
+  if (!id) {
+    btn.title = t('没有可移除的根目录')
+  } else if (NATIVE && String(id).startsWith('__')) {
+    btn.title = t('系统自动目录不能从列表移除')
+  } else {
+    btn.title = t('从配置列表移除当前根目录（不删磁盘文件）')
+  }
+}
+
+/** 二次确认：只从配置列表去掉根路径，不碰磁盘。 */
+function confirmRemoveRoot(root) {
+  return new Promise(resolve => {
+    const mask = $('confirmModal')
+    const list = $('confirmList')
+    const label = (root && (root.label || root.path || root.id)) || ''
+    const pathStr = (root && root.path) || ''
+    $('confirmTitle').textContent = t('移除这个文件路径？')
+    $('confirmWarn').innerHTML = t(
+      '⚠️ 只会从查看器配置里去掉这条根路径，<b>不会删除磁盘上的任何文件</b>。之后可再点「添加目录」加回来。',
+    )
+    list.innerHTML = ''
+    const row = document.createElement('div')
+    row.className = 'confirm-row'
+    const nm = document.createElement('div')
+    nm.className = 'cr-name'
+    nm.textContent = label
+    const fl = document.createElement('div')
+    fl.className = 'cr-files'
+    fl.textContent = pathStr || String((root && root.id) || '')
+    row.appendChild(nm); row.appendChild(fl)
+    list.appendChild(row)
+    $('confirmYes').textContent = t('确认移除')
+    mask.hidden = false
+    const onMask = e => { if (e.target === mask) done(false) }
+    const done = ok => {
+      mask.hidden = true
+      mask.__cancel = null
+      mask.removeEventListener('click', onMask)
+      $('confirmYes').onclick = null
+      $('confirmNo').onclick = null
+      resolve(ok)
+    }
+    mask.__cancel = () => done(false)
+    mask.addEventListener('click', onMask)
+    $('confirmYes').onclick = () => done(true)
+    $('confirmNo').onclick = () => done(false)
+  })
+}
+
+/** 调服务端 / 原生：从配置列表移除根路径（不删磁盘）。 */
+async function removeRootFromConfig(rootId) {
+  if (NATIVE) {
+    if (!window.BD2Native.removeRoot) throw new Error(t('移除路径失败：') + 'native removeRoot unavailable')
+    const raw = window.BD2Native.removeRoot(String(rootId || ''))
+    const data = JSON.parse(raw || '{}')
+    if (!data.ok) throw new Error(data.error || t('删除失败'))
+    return data
+  }
+  const res = await fetch('/api/roots', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: rootId }),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok || !data.ok) throw new Error(data.error || t('删除失败'))
+  return data
+}
+
+/**
+ * 从配置列表移除当前根路径（不删磁盘文件）。
+ * 成功后刷新根列表；若还有剩余则切到第一个并重扫，否则清空并提示添加。
+ */
+async function runRemoveRoot() {
+  const id = S.rootId
+  if (!canRemoveRoot(id)) {
+    showError(id && NATIVE && String(id).startsWith('__')
+      ? t('系统自动目录不能从列表移除')
+      : t('没有可移除的根目录'))
+    return
+  }
+  const root = (S.config.roots || []).find(r => r.id === id)
+  if (!root) {
+    showError(t('没有可移除的根目录'))
+    return
+  }
+  if (!await confirmRemoveRoot(root)) return
+  try {
+    await removeRootFromConfig(id)
+  } catch (err) {
+    showError(t('移除路径失败：') + err.message)
+    return
+  }
+  // 刷新配置里的 roots
+  if (NATIVE) {
+    try {
+      S.config.roots = await nativeAsk('roots', () => window.BD2Native.requestRoots(), 15000)
+    } catch {
+      S.config.roots = (S.config.roots || []).filter(r => r.id !== id)
+    }
+  } else {
+    await loadConfig()
+  }
+  const label = root.label || root.path || id
+  // 清掉当前播放 / 列表，避免还指向已移除的根
+  S.current = null
+  disposePlayer()
+  S.items = []
+  S.rootPath = ''
+  selectedKeys.clear()
+  const remain = S.config.roots || []
+  S.rootId = remain.length ? remain[0].id : null
+  renderRootOptions()
+  syncRemoveRootBtn()
+  applySelectUI()
+  const es = $('emptyState')
+  if (es) es.hidden = false
+  setView('grid')
+  if (S.rootId) {
+    try { await scan(true) } catch { refreshLists() }
+  } else {
+    refreshLists()
+  }
+  toast(t('已从配置移除：{label}', { label }))
+}
+
 function renderGallery() {
   const grid = $('galGrid')
   if (!grid) return
@@ -47773,6 +48717,7 @@ function galleryCard(item) {
   const key = itemKey(item)
   const el = document.createElement('div')
   el.className = 'card' + (item.ok ? '' : ' bad') +
+    (item.pendingUnpack ? ' pending-unpack' : '') +
     (S.current && itemKey(S.current) === key ? ' active' : '') +
     (selectMode && selectedKeys.has(key) ? ' sel' : '')
   el.dataset.key = key
@@ -47787,9 +48732,10 @@ function galleryCard(item) {
     '<div class="card-hit" hidden></div></div>'
 
   el.querySelector('.card-name').textContent = item.folder
-  el.querySelector('.card-sub').textContent =
-    item.base + (item.skeletonKind ? `.${item.skeletonKind}` : '') +
-    t(' · {n} 图', { n: item.images.length })
+  el.querySelector('.card-sub').textContent = item.pendingUnpack
+    ? t('尚未解包')
+    : (item.base + (item.skeletonKind ? `.${item.skeletonKind}` : '') +
+       t(' · {n} 图', { n: (item.images || []).length }))
 
   // 搜索命中的是**内部资源文件**（不是目录名 / 文件名）时，卡片上要说明一句，
   // 否则用户看到一堆名字里没有关键词的卡片会以为搜错了。
@@ -47831,8 +48777,8 @@ function galleryCard(item) {
     if (selectMode) { toggleSelectKey(key); return }
     openCardMenu(item)
   })
-  // 整张卡片都能起手拖：把手按下立刻拖；卡片其它地方触屏长按 180ms（鼠标移动 4px）后拖。
-  // 短按仍然是「打开资产」、滑动仍然是滚动 —— 判定都在 startCardDrag 里做。
+  // 需求 3：只有 ⠿ 把手起手才拖；主体 click / 短按 = 打开；触屏主体长按 = 菜单。
+  // 放大镜 (.card-fs) 独立，不进拖拽状态机。判定都在 startCardDrag 里做。
   el.addEventListener('pointerdown', e => {
     if (e.isPrimary === false) return                    // 多指：只认第一根手指，换指时卡片不会跳位
     if (e.button != null && e.button !== 0) return        // 只认主键
@@ -47840,8 +48786,8 @@ function galleryCard(item) {
     startCardDrag(e, el)
   })
 
-  // 已有缓存 / 失败标记 / 磁盘 thumb.png：都不进离屏渲染队列
-  if (!(lookup && (lookup.url || lookup.failed)) && !builtin) {
+  // 已有缓存 / 失败标记 / 磁盘 thumb.png / 尚未解包占位：都不进离屏渲染队列
+  if (!item.pendingUnpack && !(lookup && (lookup.url || lookup.failed)) && !builtin) {
     if (thumbObserver) thumbObserver.observe(el)
     else el.__wantThumb = true
   }
@@ -47861,12 +48807,19 @@ function setCardThumb(box, url) {
 
 function updateThumbStatus() {
   const el = $('galThumb')
-  if (!el) return
   const cards = document.querySelectorAll('#galGrid .card')
+  const total = cards.length
   const done = [...cards].filter(c => !c.querySelector('.card-thumb.pending')).length
-  if (!cards.length || done >= cards.length) { el.hidden = true; return }
-  el.hidden = false
-  el.textContent = t('缩略图 {done}/{total}', { done, total: cards.length })
+  if (!total || done >= total) {
+    if (el) el.hidden = true
+    setThumbProgress(0, 0)
+    return
+  }
+  if (el) {
+    el.hidden = false
+    el.textContent = t('缩略图 {done}/{total}', { done, total })
+  }
+  setThumbProgress(done, total)
 }
 
 /** 依次给视野里的卡片生成缩略图；播放页不抢 GL，回平铺页再继续 */
@@ -47944,19 +48897,38 @@ function setCardThumbFailed(box) {
  */
 async function makeThumb(item, size = 220) {
   const urls = urlsForItem(item)
-  // ① 骨架 JSON 预校验（.skel 二进制骨架没有这一步，跳过）
-  const jsonUrl = urls.jsonUrl ||
+  // 离屏播放器用到的 blob（3.x→4.x 转换产物）在本函数结束时回收 —— 缩略图队列
+  // 和主播放器可能同时在跑，所以用局部数组，不碰主播放器那份。
+  const thumbBlobs = []
+  // ① 骨架 JSON 预校验（.skel 二进制骨架没有这一步，跳过）。
+  //    3.x 的顺手转成 4.x 能读的形状，直接用转换结果建 blob URL（省一次下载）。
+  const rawJsonUrl = urls.jsonUrl ||
     (urls.skeletonUrl && urls.skeletonKind === 'json' ? urls.skeletonUrl : null)
-  if (jsonUrl) {
-    const res = await fetch(jsonUrl)
+  let jsonCompat = null
+  if (rawJsonUrl) {
+    const res = await fetch(rawJsonUrl)
     if (!res.ok) throw new Error(t('读不到骨架文件（HTTP {status}）', { status: res.status }))
     const text = await res.text()
     try { JSON.parse(text) } catch (e) { throw new Error(t('JSON 损坏：{msg}', { msg: e.message })) }
+    if (/"spine"\s*:\s*"3\./.test(text.slice(0, 4096))) {
+      item._spine38 = true
+      const fixed = spineJson38to41(text)
+      if (fixed) {
+        const blob = URL.createObjectURL(new Blob([fixed], { type: 'application/json' }))
+        thumbBlobs.push(blob)
+        jsonCompat = { url: blob, blob }
+      }
+    }
   }
 
   // ② 按骨架版本挑运行时（NIKKE 4.0 / BD2·Lost Sword 4.1）。缩略图队列和主播放器
   //    可能同时在跑，所以这里用局部 rt，不去动 S.spine。
-  const rt = spineRuntimeForVer(await spineMinorFor(item))
+  const minor = await spineMinorFor(item)
+  // 旧世代的**二进制**骨架没有对应运行时：与其拿 4.x 硬读出一张坏图（还会浪费一次
+  // 离屏渲染），直接判失败让卡片走「无缩略图」占位 —— 点进去时正片会给那句明确提示。
+  // （JSON 的 3.x 已被上面的转换救回来，spineMinorFor 会报 4.1，不会走到这里。）
+  if (minor && !/^4\.[012]$/.test(minor)) throw new Error(t('不支持的 Spine 版本：{v}', { v: minor }))
+  const rt = spineRuntimeForVer(minor)
 
   const host = document.createElement('div')
   host.style.cssText =
@@ -47972,9 +48944,13 @@ async function makeThumb(item, size = 220) {
     clearTimeout(timer)
     try { player?.dispose() } catch { /* ignore */ }
     host.remove()
+    for (const u of thumbBlobs) { try { URL.revokeObjectURL(u) } catch { /* ignore */ } }
   }
 
   try {
+    // 两层角色（R19）时两个播放器都必须**透明**（alpha:true + 透明背景），
+    // 由合成画布负责铺底色 —— 否则主体的不透明背景会把背层整个盖住（实测过）。
+    const layered = !!item.backLayer
     const p = await new Promise((resolve, reject) => {
       // ② 兜底超时：就算播放器内部再出幺蛾子（不走 error 回调），队列也能继续
       timer = setTimeout(() => reject(new Error(t('缩略图生成超时'))), 25000)
@@ -47982,17 +48958,15 @@ async function makeThumb(item, size = 220) {
         showControls: false,
         showLoading: false,
         atlasUrl: urls.atlasUrl,
-        backgroundColor: S.bgColor || '#1f2937',
+        backgroundColor: layered ? '00000000' : (S.bgColor || '#1f2937'),
         premultipliedAlpha: S.premultiplied,
-        alpha: false,
+        alpha: layered,
         preserveDrawingBuffer: true,
         viewport: { padLeft: 6, padRight: 6, padTop: 6, padBottom: 6, transitionTime: 0, animations: {} },
         success: p => resolve(p),
         error: (p, msg) => reject(new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))),
       }
-      if (urls.jsonUrl) cfg.jsonUrl = urls.jsonUrl
-      else if (urls.skeletonUrl && urls.skeletonKind === 'json') cfg.jsonUrl = urls.skeletonUrl
-      else if (urls.skeletonUrl) cfg.binaryUrl = urls.skeletonUrl
+      applySkeletonCfg(cfg, urls, jsonCompat)
       if (Object.keys(urls.rawDataURIs || {}).length) cfg.rawDataURIs = urls.rawDataURIs
       try { player = new rt.SpinePlayer(host, cfg) } catch (e) { reject(e) }
     })
@@ -48020,24 +48994,103 @@ async function makeThumb(item, size = 220) {
         for (let i = 0; i < 3; i++) { p.drawFrame(false); await new Promise(r => requestAnimationFrame(r)) }
       } catch { /* 尽力而为 */ }
     }
-    const canvas = p.canvas
+    // 两层角色（R19）：把背层也渲进卡面 —— 有些角色 `_F` 只有十来个 region
+    // （实测 Lobby_Morganlefay：F=10 / B=94），只画本体层卡片几乎是空的。
+    // 背层失败就当单层，不影响出图。
+    const backUrl = item.backLayer ? urlsForItem(item.backLayer) : null
+    // 背层理论上也是 4.x（Lost Sword），但同一套兜底顺手接上，免得以后出个 3.8 背层又踩一遍
+    const backCompat = backUrl && backUrl.skeletonKind === 'json'
+      ? await spineJsonUrlFor(item.backLayer, backUrl) : null
+    if (backCompat && backCompat.blob) thumbBlobs.push(backCompat.blob)
+    let backP = null
+    if (backUrl) {
+      try {
+        const brt = spineRuntimeForVer(await spineMinorFor(item.backLayer))
+        const bhost = document.createElement('div')
+        bhost.style.cssText = host.style.cssText
+        document.body.appendChild(bhost)
+        host.__backHost = bhost
+        backP = await new Promise((resolve, reject) => {
+          const bt = setTimeout(() => reject(new Error('back timeout')), 20000)
+          const bcfg = Object.assign({}, {
+            showControls: false, showLoading: false,
+            atlasUrl: backUrl.atlasUrl,
+            backgroundColor: '00000000',
+            premultipliedAlpha: S.premultiplied,
+            alpha: true, preserveDrawingBuffer: true,
+            viewport: { padLeft: 6, padRight: 6, padTop: 6, padBottom: 6, transitionTime: 0, animations: {} },
+            success: bp => { clearTimeout(bt); resolve(bp) },
+            error: (bp, msg) => { clearTimeout(bt); reject(new Error(String(msg))) },
+          })
+          applySkeletonCfg(bcfg, backUrl, backCompat)
+          if (Object.keys(backUrl.rawDataURIs || {}).length) bcfg.rawDataURIs = backUrl.rawDataURIs
+          try { const bp = new brt.SpinePlayer(bhost, bcfg); host.__backPlayer = bp } catch (e) { clearTimeout(bt); reject(e) }
+        })
+        // 背层跟本体用同一个姿势：同一个动画名 + 同一时间点
+        try {
+          const bAnims = (backP.animationState?.data?.skeletonData?.animations || []).map(a => a.name)
+          const bn = name && bAnims.includes(name) ? name : (bAnims.find(n => /idle/i.test(n)) || bAnims[0])
+          if (bn) {
+            backP.animationState.setAnimation(0, bn, true)
+            await new Promise(r => setTimeout(r, 200))
+            // 和主体那条路一样：先按动画名让播放器算好取景，否则背层会被画到画布外
+            try { backP.setViewport(bn) } catch { /* 用默认取景 */ }
+            const me = p.animationState.getCurrent(0)
+            const be = backP.animationState.getCurrent(0)
+            if (me && be) be.trackTime = me.trackTime
+            backP.animationState.apply(backP.skeleton)
+            backP.skeleton.updateWorldTransform()
+          }
+          backP.drawFrame(false)
+        } catch { /* 背层姿势同步失败也用它的默认姿势 */ }
+      } catch { backP = null }
+    }
+    const canvas0 = p.canvas
+    let canvas = canvas0
+    if (backP && backP.canvas && backP.canvas.width) {
+      try {
+        const off = document.createElement('canvas')
+        off.width = canvas0.width
+        off.height = canvas0.height
+        const c = off.getContext('2d')
+        c.fillStyle = S.bgColor || '#1f2937'                     // 底色由合成层负责
+        c.fillRect(0, 0, off.width, off.height)
+        c.drawImage(backP.canvas, 0, 0, off.width, off.height)   // 背层在下
+        c.drawImage(canvas0, 0, 0, off.width, off.height)        // 本体在上
+        canvas = off
+      } catch { /* 合成失败就用本体那张 */ }
+    }
+    // 内存/IndexedDB 仍用 jpeg（体积小）；磁盘 thumb.png 用最终合成图的 PNG（需求 5 / R19）
     let url = null
+    let pngUrl = null
     try { url = canvas.toDataURL('image/jpeg', 0.62) } catch { url = null }
+    try { pngUrl = canvas.toDataURL('image/png') } catch { pngUrl = null }
     if (!url) throw new Error(t('缩略图渲染失败'))
+    // 落盘失败不挡卡面：内存缓存照常可用；下次扫描仍会重渲
+    // ⚠️ 落盘会**往用户的资产目录里写文件**（需求 5：生成后放一个 thumb.png 免得重复加载）。
+    // 自动化测试必须关掉它（__bd2viewer.setThumbPersist(false)）—— 否则跑一次测试就在
+    // 用户的 mods 目录里多出一堆 thumb.png（2026-10-02 实测：本机被写进 124 个），
+    // 而且会改掉「有多少资产需要生成缩略图」这个前提，让测试自己把自己搞脆。
+    if (pngUrl && thumbPersist) {
+      try { await persistThumbPng(item, pngUrl) } catch { /* ignore */ }
+    }
     return url
   } finally {
+    try { host.__backPlayer?.dispose() } catch { /* ignore */ }
+    try { host.__backHost?.remove() } catch { /* ignore */ }
     cleanup()
   }
 }
 
 /* ------------------------------------------------------------ 拖动改顺序
 
-   交互模型（2026-09-25 重写，解决「拖起来不舒服」）：
+   交互模型（2026-10-01 需求 3：PC 点击对齐手机）：
 
-   起手
-     · 按住卡片左上角 ⠿ → 立刻开始拖（把手 touch-action:none，不可能是滚动）
-     · 按住卡片其它地方 → 触屏长按 180ms 后开始拖；鼠标/触控笔移动 4px 即开始
-     滚动和拖动于是不再互相抢：滑动就是滚动，按住不动才是抬起卡片。
+   起手（PC / 触屏同一状态机，R14）
+     · 只有按住卡片左上角 ⠿ 把手才进入拖拽排序（立刻抬起；把手 touch-action:none）
+     · 卡片主体：鼠标单击 = 进播放页；触屏短按 = 进播放页，长按 ≈500ms = 操作菜单
+     · 放大镜（.card-fs）保持独立，不进本状态机
+     主体上按住移动不再触发排序 —— 避免 PC 上「想点开却拖走了」。
 
    抬起
      卡片脱离子网格、固定到视口，用 transform 1:1 跟手，并保留「手指按在卡片
@@ -48046,7 +49099,7 @@ async function makeThumb(item, size = 220) {
    空位
      网格里留一个同尺寸占位块（.card-ph），它的位置就是落点。越过其他卡片中线
      时占位块移动，被挤开的卡片用 FLIP（先量后写）平移过去，200ms ease-out。
-     这样既有实时预览，又不会像旧实现那样让指针底下的卡片乱跳。
+     命中测试用 layoutRect()（反解 transform），与落点判定同源。
 
    到边自动滚
      指针进入滚动容器上下 56px 内，按深入程度线性加速滚动（最多 1100px/s）。
@@ -48056,17 +49109,16 @@ async function makeThumb(item, size = 220) {
 
    反馈
      抬起 10ms / 落位 8ms 振动（不支持的机型静默跳过），与视觉同一帧触发。
-     拖动结束后那一下 click 会被吃掉，不会误开资产。
+     真的拖过之后 endCardDrag 装 700ms click 抑制窗，不会误开资产。
 
    排序模式
-     处于名称/日期排序时，第一次真的拖动会先把当前看到的顺序固化成手动顺序，
-     再切到手动 —— 用户想微调的意图被接住，而不是撞上「这里不能拖」的死胡同。 */
+     非手动排序时把手也不能拖（名称/日期是算出来的）；触屏长按菜单仍可用。 */
 
 const DRAG = {
-  HOLD_MS: 180,      // 触屏长按多久算「抬起」
-  MOVE_SLOP: 8,      // 长按判定前允许的抖动（超过就当滚动，放弃拖动）
-  MOUSE_SLOP: 4,     // 鼠标按下后移动多少像素开始拖
-  MENU_MS: 320,      // 抬起后又保持不动这么久（合计 ~500ms）→ 当长按，弹操作菜单
+  HOLD_MS: 180,      // 触屏长按菜单的前半段
+  MOVE_SLOP: 8,      // 长按判定前允许的抖动（超过就当滚动，放弃菜单）
+  MOUSE_SLOP: 4,     // 保留：历史阈值；需求 3 后拖拽只从把手起手，不再用
+  MENU_MS: 320,      // 再保持不动这么久（合计 ~500ms）→ 弹操作菜单
   EDGE: 56,          // 自动滚动的触发边距
   EDGE_SPEED: 1100,  // 自动滚动最大速度 px/s
   LIFT: 1.04,        // 抬起后的缩放
@@ -48107,8 +49159,9 @@ function cardDragReset() {
 }
 
 /**
- * 开始拖动。e 是起手的那次 pointerdown（或长按到期后用它记录的位置）。
- * 只有「指针按在卡片上」这一个前提，其它判定都在这里做。
+ * 卡片指针起手（需求 3 / R14：PC+触屏同一状态机）。
+ * · ⠿ 把手 → 立刻拖（仅手动排序）
+ * · 主体 → 不进拖拽；触屏长按弹菜单；鼠标交给 click 打开播放页
  */
 function startCardDrag(e, card) {
   if (cardDrag) return
@@ -48117,19 +49170,15 @@ function startCardDrag(e, card) {
   if (!grid || !card || card.parentElement !== grid) return
 
   // 非手动排序（名称 / 日期）下不给拖 —— 那两个顺序是算出来的，拖了也无处可存。
-  // 但**不能在这里直接 return**：触屏的「长按弹菜单」是同一套起手逻辑，
-  // 它跟排序模式无关。所以只掐掉拖动，放行到长按分支（见 needHold 那段）。
+  // 触屏长按菜单与排序无关，所以只掐拖动，不掐菜单分支。
   const canDrag = sortState.mode === 'manual'
 
   const pid = e.pointerId
   const fromHandle = !!(e.target && e.target.closest && e.target.closest('.card-drag'))
   const isTouch = e.pointerType === 'touch'
-  const needHold = isTouch && !fromHandle
-  const slop = needHold ? DRAG.MOVE_SLOP : DRAG.MOUSE_SLOP
   const downX = e.clientX, downY = e.clientY
 
   let holdT = 0
-  let started = false
   let waitX = downX, waitY = downY
 
   const stopWaiting = () => {
@@ -48140,21 +49189,14 @@ function startCardDrag(e, card) {
   }
   function onWaitMove(ev) {
     waitX = ev.clientX; waitY = ev.clientY
-    if (Math.abs(waitX - downX) > slop || Math.abs(waitY - downY) > slop) stopWaiting()
+    // 抖动超 slop → 当滚动，放弃长按菜单
+    if (Math.abs(waitX - downX) > DRAG.MOVE_SLOP || Math.abs(waitY - downY) > DRAG.MOVE_SLOP) {
+      stopWaiting()
+    }
   }
   function onWaitUp() { stopWaiting() }
 
-  const begin = (x, y) => {
-    if (started || cardDrag) return
-    started = true
-    stopWaiting()
-    beginCardDrag(card, grid, pid, x, y, isTouch)
-  }
-
-  // 不能拖的时候：触屏仍然要能长按弹菜单，鼠标则什么都不做（右键菜单另有 contextmenu 处理）。
-  // 这里复用拖动引擎的重型超时（HOLD_MS + MENU_MS ≈ 500ms），保持两种模式手感一致。
-  if (!canDrag) {
-    if (!isTouch) return
+  const armLongPressMenu = () => {
     card.addEventListener('pointermove', onWaitMove)
     card.addEventListener('pointerup', onWaitUp)
     card.addEventListener('pointercancel', onWaitUp)
@@ -48165,14 +49207,24 @@ function startCardDrag(e, card) {
       haptic(10)
       openCardMenu(card.__item)
     }, DRAG.HOLD_MS + DRAG.MENU_MS)
+  }
+
+  // 需求 3：非把手区域绝不进入拖拽排序（PC 主体 click = 播放；触屏主体长按 = 菜单）
+  if (!fromHandle) {
+    if (!isTouch) return
+    armLongPressMenu()
     return
   }
 
-  if (!needHold) { begin(downX, downY); return }
-  card.addEventListener('pointermove', onWaitMove)
-  card.addEventListener('pointerup', onWaitUp)
-  card.addEventListener('pointercancel', onWaitUp)
-  holdT = setTimeout(() => begin(waitX, waitY), DRAG.HOLD_MS)
+  // 把手区：非手动排序时触屏仍可长按菜单；鼠标无操作（右键有 contextmenu）
+  if (!canDrag) {
+    if (!isTouch) return
+    armLongPressMenu()
+    return
+  }
+
+  // 把手 + 手动排序：立刻抬起（PC / 触屏同一路径）
+  beginCardDrag(card, grid, pid, downX, downY, isTouch)
 }
 
 function beginCardDrag(card, grid, pid, x, y, isTouch) {
@@ -48515,7 +49567,45 @@ async function rebuildThumbs() {
 /** root 相对路径 → 可取的 URL。两个数据源（Node 服务 / WebView 拦截）都认 /spine/<rootId>/<rel>。 */
 function assetUrl(rel) {
   if (!rel) return null
-  return `/spine/${S.rootId}/${rel.split('/').map(encodeURIComponent).join('/')}`
+  // Encode rootId too so Chinese/space roots round-trip with server decodeURIComponent.
+  const rootSeg = String(S.rootId || '').split('/').map(encodeURIComponent).join('/')
+  const relSeg = String(rel).replace(/\\/g, '/').split('/').filter(Boolean).map(encodeURIComponent).join('/')
+  return `/spine/${rootSeg}/${relSeg}`
+}
+
+/** 需求 5：把离屏合成图写成资产目录里的 thumb.png（与 builtinThumbUrl 同源）。
+ *  路径 = atlas 同目录；解包缓存（bd2viewer-nikke/…）同样适用。
+ *  写成功后立刻挂上 item.relThumb，本会话内不必等重扫。 */
+async function persistThumbPng(item, pngDataUrl) {
+  if (!item || !pngDataUrl || !isDiskItem(item)) return null
+  // Mode isolation: never write a BD2 path under jczx/nikke root (mkdir would
+  // create foreign folders like Celia_* / 神悠* inside the JCZX game directory).
+  if (typeof matchesAssetMode === 'function' && !matchesAssetMode(item)) return null
+  if (item.pendingUnpack) return null
+  const relAtlas = item.relAtlas || item.id
+  if (!relAtlas || typeof relAtlas !== 'string') return null
+  const slash = relAtlas.lastIndexOf('/')
+  // Must be nested under an existing asset folder — refuse bare root thumb.png
+  if (slash < 0) return null
+  const relThumb = relAtlas.slice(0, slash + 1) + 'thumb.png'
+  const comma = pngDataUrl.indexOf(',')
+  const b64 = comma >= 0 ? pngDataUrl.slice(comma + 1) : ''
+  if (!b64) return null
+  if (NATIVE) {
+    try {
+      const ok = window.BD2Native.writeThumb && window.BD2Native.writeThumb(S.rootId || '', relThumb, b64)
+      if (ok) { item.relThumb = relThumb; return relThumb }
+    } catch { /* 原生写失败就算了 */ }
+    return null
+  }
+  const res = await fetch('/api/thumb', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rootId: S.rootId, rel: relThumb, data: b64 }),
+  })
+  if (!res.ok) return null
+  item.relThumb = relThumb
+  return relThumb
 }
 
 /** 资产目录里自带的缩略图（Lost Sword 的 thumb.png）。没有就返回 null。
@@ -48574,36 +49664,200 @@ function urlsForItem(item) {
  *
  * 结果按条目录在 item._spineMinor 上：缩略图与正片只会各测一次，之后命中缓存。
  */
+
+/** 探测失败时按当前 mode / 条目来源选默认骨架世代。
+ *  JCZX → 4.2；NIKKE 解包缓存（bd2viewer-nikke，UnityFS 抽出的是 4.1 二进制）→ 4.1；
+ *  其余 NIKKE（标准导出）→ 4.0；其它 → 4.1。
+ *  探测成功时仍以骨架头 / item.spineMinor 为准（见 spineMinorFor）。 */
+function modeDefaultSpineMinor(item) {
+  if (S.mode === 'jczx') return '4.2'
+  if (S.mode === 'nikke') {
+    // 解包缓存是 4.1；误用 4.0 运行时读 4.1 .skel → 动画列表空 →「这个骨架里没有任何动画」
+    if (item && isNikkeCacheItem(item)) return '4.1'
+    return '4.0'
+  }
+  return '4.1'
+}
+
+/* ------------------------------------------------------------------ 3.x JSON 兼容层
+ *
+ * Spine 的 JSON 格式在 3.8 → 4.0 之间变了几处，而 4.x 运行时读不出来的字段
+ * **不会报错，只会变成 undefined → NaN**。表现很迷惑：骨架能载入、骨头/插槽数量都对、
+ * 动画列表也正常，但取景算出 NaN，播放器抛 `Animation bounds are invalid: <动画名>`。
+ *
+ * 实测（交错战线 3.8 CG 资产，455 骨 / 302 槽）：绑定姿势 100% 正常（0 根坏骨），
+ * 只有「应用动画」之后 133 根骨头变 NaN —— 就是下面这几处字段差异。
+ * JCZX 缓存里 135 个带骨架的目录有 131 个是 3.8 JSON，所以这层很关键。
+ *
+ * 差异清单：
+ *   ① 旋转时间轴：3.8 用 "angle"，4.x 用 "value"
+ *   ② 曲线写法：3.8 是「紧凑系数」（"curve" 是数字，其余系数散在 "c2"/"c3"/"c4"），
+ *      4.x 要 "curve": [cx1,cy1,cx2,cy2]。缺省规则（实测推得：{"curve":0.25,"c3":0.75}
+ *      → [.25,.25,.75,.75] 正是最常见的 ease-in-out）：cy1 缺省 = cx1、cy2 缺省 = cx2。
+ *   ③ **4.x 的 curve 按分量分槽**（readCurve 里 `i = value << 2`）：2 分量时间轴
+ *      （translate/scale/shear）要 8 个数、4 分量（rgba）要 16 个 —— 只给 4 个的话
+ *      第 2 个分量读到 undefined，又变 NaN（这个坑踩过一次，表现为「转了一半还是坏」）。
+ *   ④ 插槽颜色时间轴：3.8 叫 "color"，4.x 叫 "rgba"（值同为 8 位十六进制，原样搬）
+ *
+ * 明确不搬（4.x 读法/字段名不同，硬搬更歪，整段删掉让运行时用绑定姿势的取值）：
+ *   · `transform`（变换约束）：3.8 字段是 rotateMix/translateMix/…，4.x 是
+ *     mixRotate/mixX/…；名字对不上时 4.x 取默认值 1（混合拉满），比没有动画更歪。
+ *   · `deform`（网格顶点变形）：3.8 挂在动画级，4.x 只认附件级。要正确搬家得逐帧
+ *     解析「该插槽当时挂的是哪个附件」——代价大。表现为头发/布料的细微顶点摆动没有了，
+ *     骨骼驱动的部分照常。
+ *
+ * 返回转换后的 JSON 文本；不是 3.x 骨架则返回 null（调用方保持原样）。
+ */
+function spineJson38to41(text) {
+  let j
+  try { j = JSON.parse(text) } catch { return null }
+  const ver = (j.skeleton && j.skeleton.spine) || ''
+  if (!/^3\./.test(ver)) return null
+
+  // 每条时间轴在 4.x 里占几个「曲线分量」（决定 curve 数组要几组 4 个数）
+  const COMP = {
+    bones: {
+      rotate: 1, translate: 2, translatex: 1, translatey: 1,
+      scale: 2, scalex: 1, scaley: 1, shear: 2, shearx: 1, sheary: 1,
+    },
+    slots: { rgba: 4, rgb: 3, rgba2: 7, alpha: 1, attachment: 0 },
+  }
+  // 一串关键帧：① angle→value ② 紧凑曲线 → 按分量展开的数组
+  const fixFrames = (tl, comp) => {
+    if (!Array.isArray(tl)) return
+    for (const kf of tl) {
+      if (!kf || typeof kf !== 'object') continue
+      if (kf.angle !== undefined && kf.value === undefined) {
+        kf.value = kf.angle
+        delete kf.angle
+      }
+      let base = null
+      const c = kf.curve
+      if (typeof c === 'number') {
+        const cy1 = (kf.c2 !== undefined) ? kf.c2 : c
+        const cx2 = (kf.c3 !== undefined) ? kf.c3 : c
+        const cy2 = (kf.c4 !== undefined) ? kf.c4 : cx2
+        base = [c, cy1, cx2, cy2]
+      } else if (Array.isArray(c) && c.length) {
+        base = c.slice(0, 4)
+        while (base.length < 4) base.push(base[base.length - 1])
+      }
+      delete kf.c2; delete kf.c3; delete kf.c4
+      if (!base) continue
+      if (!comp) { delete kf.curve; continue }   // 分量未知 → 退化成线性（安全）
+      const out = []
+      for (let i = 0; i < comp; i++) out.push(...base)
+      kf.curve = out
+    }
+  }
+
+  const anims = j.animations || {}
+  for (const name in anims) {
+    const a = anims[name]
+    if (!a || typeof a !== 'object') continue
+    if (a.slots && typeof a.slots === 'object') {
+      for (const s in a.slots) {
+        const ent = a.slots[s]
+        if (!ent || typeof ent !== 'object') continue
+        if (ent.color && !ent.rgba) { ent.rgba = ent.color; delete ent.color }   // ④
+        for (const tn in ent) fixFrames(ent[tn], COMP.slots[tn] || 0)
+      }
+    }
+    if (a.bones && typeof a.bones === 'object') {
+      for (const b in a.bones) {
+        const ent = a.bones[b]
+        if (!ent || typeof ent !== 'object') continue
+        for (const tn in ent) fixFrames(ent[tn], COMP.bones[tn] || 0)
+      }
+    }
+    // ik 是「约束名 → 关键帧数组」的直接形态，字段名（mix/softness/bendPositive）与 4.x 一致
+    if (a.ik && typeof a.ik === 'object') {
+      for (const n in a.ik) fixFrames(a.ik[n], 2)
+    }
+    delete a.transform
+    delete a.deform
+  }
+  return JSON.stringify(j)
+}
+
+/** 当前正在用的「3.x → 4.x 转换后」骨架 blob URL（每帧只可能有一套主骨架 + 一个背层）。
+ *  建新播放器之前统一回收 —— 不回收会一直占内存（3.8 CG 的 JSON 有几 MB）。 */
+let spineJsonBlobs = []
+function dropSpineJsonBlobs() {
+  for (const u of spineJsonBlobs) {
+    try { URL.revokeObjectURL(u) } catch { /* ignore */ }
+  }
+  spineJsonBlobs = []
+}
+
+/**
+ * 取「该用哪个地址当 jsonUrl」：3.x 骨架先转换、包成 blob URL。
+ * 返回 `{ url, blob }`；blob 非 null 表示这次真做了转换（调用方负责回收）。
+ */
+async function spineJsonUrlFor(item, urls) {
+  const orig = (urls && (urls.jsonUrl || (urls.skeletonKind === 'json' ? urls.skeletonUrl : null))) || null
+  if (!orig) return null
+  if (!item || !item._spine38) return { url: orig, blob: null }
+  try {
+    const res = await fetch(orig)
+    if (!res.ok) return { url: orig, blob: null }
+    const fixed = spineJson38to41(await res.text())
+    if (!fixed) return { url: orig, blob: null }
+    const blob = URL.createObjectURL(new Blob([fixed], { type: 'application/json' }))
+    return { url: blob, blob }
+  } catch {
+    return { url: orig, blob: null }
+  }
+}
+
+/** 把「骨架该从哪取」装进播放器配置：优先用转换后的 blob（3.x JSON 才有），
+ *  否则按老规矩 jsonUrl / binaryUrl。四处建播放器的地方共用，别各写一份。 */
+function applySkeletonCfg(cfg, urls, compat) {
+  if (compat && compat.url) { cfg.jsonUrl = compat.url; return }
+  if (urls.jsonUrl) cfg.jsonUrl = urls.jsonUrl
+  else if (urls.skeletonUrl && urls.skeletonKind === 'json') cfg.jsonUrl = urls.skeletonUrl
+  else if (urls.skeletonUrl) cfg.binaryUrl = urls.skeletonUrl
+}
+
 async function spineMinorFor(item) {
   if (item._spineMinor !== undefined) return item._spineMinor
   // 服务端扫描已读过骨架头 / JSON 的 spine 字段（含 JCZX 4.2）
   if (item.spineMinor === '4.0' || item.spineMinor === '4.1' || item.spineMinor === '4.2') {
     return (item._spineMinor = item.spineMinor)
   }
+  const fallback = () => modeDefaultSpineMinor(item)
   if (item.skeletonKind === 'json') {
     const url = (urlsForItem(item) || {}).skeletonUrl
-    if (!url) return (item._spineMinor = null)
+    if (!url) return (item._spineMinor = fallback())
     try {
       const res = await fetch(url)
-      if (!res.ok) return (item._spineMinor = null)
+      if (!res.ok) return (item._spineMinor = fallback())
       const text = await res.text()
-      const m = /"spine"\s*:\s*"4\.(\d)\./.exec(text.slice(0, 4096))
-      return (item._spineMinor = m ? `4.${m[1]}` : null)
+      const m = /"spine"\s*:\s*"(\d+)\.(\d+)/.exec(text.slice(0, 4096))
+      if (!m) return (item._spineMinor = fallback())
+      // 3.x 的 JSON：字段格式与 4.x 不同（angle/value、紧凑曲线系数……），但我们能在
+      // 加载前把它转成 4.x 能读的形状（spineJson38to41）→ 用 4.1 运行时正常播。
+      // 标记一下，加载时换成「转换后的 blob URL」。
+      if (m[1] === '3') {
+        item._spine38 = true
+        return (item._spineMinor = '4.1')
+      }
+      return (item._spineMinor = `4.${m[2]}`)
     } catch {
-      return (item._spineMinor = null)
+      return (item._spineMinor = fallback())
     }
   }
-  if (item.skeletonKind !== 'skel') return (item._spineMinor = null)
+  if (item.skeletonKind !== 'skel') return (item._spineMinor = fallback())
   // 走 urlsForItem 而不是直接拼 assetUrl：手动上传的条目只有 blob URL，
   // 没有 relSkeleton / rootId，直接拼会拼出 null 再去 fetch 当前页面。
   const url = (urlsForItem(item) || {}).skeletonUrl
-  if (!url) return (item._spineMinor = null)
+  if (!url) return (item._spineMinor = fallback())
 
   let head = null
   // ① 优先分流读，只取头部就 cancel（大骨架不必整份拉下来）
   try {
     const res = await fetch(url)
-    if (!res.ok) return (item._spineMinor = null)
+    if (!res.ok) return (item._spineMinor = fallback())
     if (res.body && typeof res.body.getReader === 'function') {
       const reader = res.body.getReader()
       let buf = new Uint8Array(0)
@@ -48629,17 +49883,38 @@ async function spineMinorFor(item) {
   if (!head) {
     try {
       const res = await fetch(url)
-      if (!res.ok) return (item._spineMinor = null)
+      if (!res.ok) return (item._spineMinor = fallback())
       head = new Uint8Array(await res.arrayBuffer()).slice(0, 32)
     } catch {
-      return (item._spineMinor = null)
+      return (item._spineMinor = fallback())
     }
   }
 
-  let text = ''
-  for (let i = 0; i < head.length; i++) text += String.fromCharCode(head[i])
-  const m = /4\.(\d)\.\d+/.exec(text)
-  return (item._spineMinor = m ? `4.${m[1]}` : null)
+  // 优先按 Spine 二进制布局读： [0..7] hash、[8] 长度、[9..] "4.x.y\0"
+  // 全头正则可能被 hash 字节里碰巧出现的 "4.0.x" 误导（解包 4.1 却判成 4.0）。
+  let ver = null
+  if (head.length > 10) {
+    // 长度字节的编码是「实际长度 + 1」：0 = null、1 = 空串。所以字符数 = head[8] - 1。
+    // （按 n 读会多吃一个字节，串尾带上 0xc4 之类的垃圾 —— 之前只靠正则没要求结尾才没炸。）
+    const n = (head[8] | 0) - 1
+    if (n > 0 && n < 24 && 9 + n <= head.length) {
+      let s = ''
+      for (let i = 9; i < 9 + n; i++) {
+        const c = head[i]
+        if (c === 0) break
+        s += String.fromCharCode(c)
+      }
+      const vm = /^(\d+)\.(\d+)\.\d+$/.exec(s)
+      if (vm) ver = vm[1] === '4' ? `4.${vm[2]}` : `${vm[1]}.x`
+    }
+  }
+  if (!ver) {
+    let text = ''
+    for (let i = 0; i < head.length; i++) text += String.fromCharCode(head[i])
+    const m = /(\d+)\.(\d+)\.\d+/.exec(text)
+    if (m) ver = m[1] === '4' ? `4.${m[2]}` : `${m[1]}.x`
+  }
+  return (item._spineMinor = ver || fallback())
 }
 
 function selectItem(item, pose) {
@@ -48672,6 +49947,11 @@ function switchPose(pose) {
 async function loadCurrent() {
   const item = S.current
   if (!item) return
+  // Never start spine-player on an unpack placeholder — invalid bounds / 404.
+  if (item.pendingUnpack) {
+    openPendingUnpack(item)
+    return
+  }
   disposePlayer()
   clearError()
   resetMeta()
@@ -48679,17 +49959,35 @@ async function loadCurrent() {
   $('currentName').textContent = item.folder
   // NIKKE 姿势变体：副标题里写明当前加载的是哪个成员（c022_aim_00），别让人以为还在本体上
   const member = activeMemberOf(item)
-  $('currentSub').textContent = [item.group, member.base, item.skeletonKind ? `.${item.skeletonKind}` : '']
+  $('currentSub').textContent = [item.group, member.base, item.skeletonKind ? `.${item.skeletonKind}` : '',
+    item.backLayer ? t('含背层') : '']
     .filter(Boolean).join(' · ')
   $('emptyState').hidden = true
   setBusy(true, t('载入中…'))
+  setLoadProgress({ stage: t('阶段：加载骨架'), indeterminate: true })
 
   const urls = urlsForItem(member)
 
   // 骨架版本 → 运行时。要 await（读骨架头），所以放在建播放器之前。
-  // 除了钉在 S.spine 上，还挂到 player 实例上（__spineRt）：onLoaded 是异步回调，
-  // 期间用户可能已经切到别的资产并把 S.spine 改成另一套，只有实例上的那份不会错。
-  const rt = spineRuntimeForVer(await spineMinorFor(member))
+  // 除了钉在 S.spine 上，还挂到 player 实例上（__spineRt / __spineMinor）：onLoaded
+  // 是异步回调，期间用户可能已经切到别的资产并把 S.spine 改成另一套，只有实例上
+  // 的那份不会错。__spineMinor 供 onLoaded 对照骨架自报版本，错世代时重载一次。
+  const spineMinor = await spineMinorFor(member)
+  // 旧世代的**二进制**骨架：4.x 的 SkeletonBinary 读不了（会抛一句看不懂的话），
+  // 与其给用户一条无从下手的报错，不如在初始化前说清楚。
+  //
+  // ⚠️ 只对二进制拦。**JSON 骨架不要拦** —— 实测 3.8.99 导出的 JSON 用 4.1 运行时
+  // 能正常读（骨/槽/动画都在，逐条播放无 NaN）。JCZX 缓存里 131/135 就是这种，
+  // 一揽子拦掉等于把这批资产全废掉。（当初看到「Animation bounds are invalid」
+  // 以为是世代问题，其实是提取器漏导骨架导致的空骨架，见 jczx_extract.py。）
+  if (member.skeletonKind === 'skel' && spineMinor && !/^4\.[012]$/.test(spineMinor)) {
+    setBusy(false)
+    setLoadProgress(null)
+    showError(t('这套资产由 Spine {v} 导出，查看器目前支持 Spine 4.0 / 4.1 / 4.2，暂时播不了。\n'
+      + '可以用 Spine 官方编辑器把它重新导出为 4.x 再放进目录。', { v: spineMinor.replace(/\.x$/, '') }))
+    return
+  }
+  const rt = spineRuntimeForVer(spineMinor)
   S.spine = rt
 
   const cfg = {
@@ -48697,7 +49995,7 @@ async function loadCurrent() {
     showLoading: false,
     atlasUrl: urls.atlasUrl,
     backgroundColor: '00000000',
-    premultipliedAlpha: true,
+    premultipliedAlpha: S.premultiplied,
     preserveDrawingBuffer: true,
     alpha: true,
     viewport: {
@@ -48709,12 +50007,28 @@ async function loadCurrent() {
     success: onLoaded,
     error: (p, msg) => {
       setBusy(false)
-      showError(t('载入失败：') + (typeof msg === 'string' ? msg : JSON.stringify(msg)))
+      const m = typeof msg === 'string' ? msg : JSON.stringify(msg)
+      // Spine-player: incomplete extract / missing textures → empty getBounds.
+      // If unpack toast still running, send user back to wait instead of hard fail.
+      if (/Animation bounds are invalid/i.test(m)) {
+        // 只有真的还有包在后台解包时才提示「等解包」——别把 3.x 旧骨架等其它原因
+        // 也误报成「尚未解包完成」（2026-10-01 用户截图）。
+        const unpacking = (jczxPrev && ((jczxPrev.pending || 0) + (jczxPrev.inFlight || 0) > 0))
+          || (nikkeAbPrev && ((nikkeAbPrev.pending || 0) + (nikkeAbPrev.inFlight || 0) > 0))
+        if (unpacking) {
+          toast(t('等待解包…'))
+          showError(t('载入失败：') + m + '\n' + t('资产可能尚未解包完成，请稍后再打开。'))
+          return
+        }
+      }
+      showError(t('载入失败：') + m)
     },
   }
-  if (urls.jsonUrl) cfg.jsonUrl = urls.jsonUrl
-  else if (urls.skeletonUrl && urls.skeletonKind === 'json') cfg.jsonUrl = urls.skeletonUrl
-  else if (urls.skeletonUrl) cfg.binaryUrl = urls.skeletonUrl
+  // 3.x 的 JSON 骨架先转成 4.x 能读的形状（见 spineJson38to41），包成 blob URL 给播放器。
+  // 不回收会一直占内存 → 每轮加载开头统一回收上一轮的（见 disposePlayer）。
+  const jsonCompat = await spineJsonUrlFor(member, urls)
+  if (jsonCompat && jsonCompat.blob) spineJsonBlobs.push(jsonCompat.blob)
+  applySkeletonCfg(cfg, urls, jsonCompat)
   if (Object.keys(urls.rawDataURIs || {}).length) cfg.rawDataURIs = urls.rawDataURIs
 
   // 骨架 JSON 先自己验一遍再交给播放器：spine-player 内部的 JSON.parse 抛出的
@@ -48742,15 +50056,157 @@ async function loadCurrent() {
   }
 
   try {
+    setLoadProgress({ stage: t('阶段：渲染'), indeterminate: true })
     S.player = new rt.SpinePlayer($('playerHost'), cfg)
     S.player.__spineRt = rt
+    S.player.__spineMinor = spineMinor
+    S.player.__spineVerRetry = !!member.__spineVerRetry
+    member.__spineVerRetry = false
   } catch (err) {
     setBusy(false)
     showError(t('初始化播放器失败：') + err.message)
   }
+
+  // Lost Sword 两层角色：背层单独一个播放器，叠在本体下面（R19）。
+  // 背层加载失败只丢背层，本体照常显示 —— 不能因为一层坏了整张卡打不开。
+  if (S.mode === 'lostsword' && item.backLayer) createBackLayer(item.backLayer, rt)
+}
+
+/** 建背层播放器（Lost Sword 的 `_B`）。它被 stopRendering + 暂停，
+ *  时间轴与相机全由主循环的 syncBackLayer() 驱动，所以两层永远同步。 */
+function createBackLayer(backItem, mainRt) {
+  const host = document.createElement('div')
+  host.className = 'player-host-back'
+  host.id = 'playerBackHost'
+  const stage = $('stageInner')
+  const mainHost = $('playerHost')
+  if (!stage || !mainHost) return
+  stage.insertBefore(host, mainHost)     // 主体之下
+  S.backItem = backItem
+
+  const build = async () => {
+    let rt = mainRt
+    try { rt = spineRuntimeForVer(await spineMinorFor(backItem)) } catch { /* 用本体的运行时 */ }
+    const urls = urlsForItem(backItem)
+    const cfg = {
+      showControls: false,
+      showLoading: false,
+      atlasUrl: urls.atlasUrl,
+      backgroundColor: '00000000',
+      premultipliedAlpha: S.premultiplied,
+      preserveDrawingBuffer: true,
+      alpha: true,
+      viewport: {
+        x: 0, y: 0, width: 100, height: 100,
+        padLeft: 0, padRight: 0, padTop: 50, padBottom: 50,
+        transitionTime: 0,
+      },
+      success: bp => {
+        if (S.backPlayer !== bp) return       // 期间用户已经切走 → 丢掉这一层
+        try {
+          const data = bp.skeleton?.data
+          const best = data && (data.skins || []).length > 1 ? fullestSkin(data) : null
+          if (best) {
+            const composed = composeSkin(rt, data, best.name)
+            if (composed) bp.skeleton.setSkin(composed)
+            else bp.skeleton.setSkinByName(best.name)
+          }
+          bp.skeleton.setSlotsToSetupPose()
+          skeletonUpdateWorld(bp.skeleton)
+        } catch { /* 尽力而为 */ }
+        bp.pause()
+        bp.stopRendering()                    // 只由主循环驱动，避免两套 rAF 各画一帧
+        drawBackLayer()
+        if (S.bounds) refitBounds(false)      // 背层常比本体宽，重新取景把两层都框进来
+      },
+      error: () => { /* 背层失败：静默丢掉，本体照常 */ },
+    }
+    if (urls.skeletonKind === 'json' && backItem._spine38) {
+      // 背层是 3.8 JSON 的话也走一遍转换（Lost Sword 全是 4.1，但别留死角）
+      const bc = await spineJsonUrlFor(backItem, urls)
+      if (bc && bc.blob) spineJsonBlobs.push(bc.blob)
+      applySkeletonCfg(cfg, urls, bc)
+    } else {
+      applySkeletonCfg(cfg, urls, null)
+    }
+    if (Object.keys(urls.rawDataURIs || {}).length) cfg.rawDataURIs = urls.rawDataURIs
+    try {
+      const bp = new rt.SpinePlayer(host, cfg)
+      bp.__spineRt = rt
+      bp.__item = backItem
+      S.backPlayer = bp
+    } catch { /* 建不起来就当没有背层 */ }
+  }
+  build().catch(() => { /* 背层整条链失败也不影响本体 */ })
+}
+
+/** 背层沿**它自己的**动画采样测内容框。
+ *  不能用本体的 animationState：Spine 的时间轴按各自骨架的索引算，交叉 apply 会错位。 */
+function backLayerBounds() {
+  const bp = S.backPlayer
+  if (!bp || !bp.skeleton) return null
+  const st = bp.animationState
+  const entry = st && st.getCurrent(0)
+  const frames = []
+  if (entry && entry.animation) {
+    const saved = entry.trackTime
+    for (let i = 0; i < 16; i++) {
+      try {
+        entry.trackTime = (i / 16) * (entry.animation.duration || 0)
+        entry.animationLast = -1
+        entry.nextAnimationLast = -1
+        st.apply(bp.skeleton)
+        skeletonUpdateWorld(bp.skeleton)
+      } catch { continue }
+      const box = contentBoxOf(bp.skeleton)
+      if (box) frames.push(box)
+    }
+    try {
+      entry.trackTime = saved
+      st.apply(bp.skeleton)
+      skeletonUpdateWorld(bp.skeleton)
+    } catch { /* ignore */ }
+  } else {
+    try {
+      bp.skeleton.setToSetupPose()
+      skeletonUpdateWorld(bp.skeleton)
+    } catch { /* ignore */ }
+  }
+  const box = frames.length ? unionBoxes(frames) : contentBoxOf(bp.skeleton)
+  return boundsFromBox(box)
+}
+
+function unionBounds(a, b) {
+  if (!a) return b
+  if (!b) return a
+  const V2 = activeSpine().Vector2
+  const minX = Math.min(a.offset.x, b.offset.x)
+  const minY = Math.min(a.offset.y, b.offset.y)
+  const maxX = Math.max(a.offset.x + a.size.x, b.offset.x + b.size.x)
+  const maxY = Math.max(a.offset.y + a.size.y, b.offset.y + b.size.y)
+  return { offset: new V2(minX, minY), size: new V2(maxX - minX, maxY - minY) }
+}
+
+/** 取景用的内容框 = 本体 ∪ 背层（R19）。背层（大头发 / 披风）常比本体宽，只按本体量会切边。 */
+function computeStageBounds() {
+  const p = S.player
+  if (!p || !p.skeleton) return null
+  const main = computeBounds(p.skeleton)
+  return unionBounds(main, backLayerBounds())
 }
 
 function disposePlayer() {
+  // 本轮加载用过的「3.x→4.x 转换后」blob 在这里回收（必须在下面的 early return 之前，
+  // 否则「主体还没建起来就切走」的情况会把 blob 漏掉）
+  dropSpineJsonBlobs()
+  // 背层先拆（它是独立的播放器 + DOM，不跟着本体走）
+  if (S.backPlayer) {
+    try { S.backPlayer.dispose() } catch { /* ignore */ }
+    S.backPlayer = null
+  }
+  S.backItem = null
+  const bh = document.getElementById('playerBackHost')
+  if (bh) bh.remove()
   if (!S.player) return
   try { S.player.dispose() } catch { /* ignore */ }
   S.player = null
@@ -48785,11 +50241,33 @@ function onLoaded(player) {
     return
   }
 
+  // R16：错世代运行时读二进制时，版本串往往仍正确，但动画会被读空。
+  // 对照骨架自报版本，不一致则按正确 minor 重载一次（解包 NIKKE=4.1 却落到 4.0 默认时）。
+  const reported = String(skeleton.data?.version || '')
+  const rm = /^4\.(\d)\./.exec(reported)
+  if (rm) {
+    const actual = `4.${rm[1]}`
+    const used = player.__spineMinor
+    if (used && actual !== used && !player.__spineVerRetry) {
+      const member = S.current ? activeMemberOf(S.current) : null
+      if (member) {
+        member._spineMinor = actual
+        member.spineMinor = actual
+        member.__spineVerRetry = true
+        setTimeout(() => { try { loadCurrent() } catch { /* ignore */ } }, 0)
+        return
+      }
+    }
+  }
+
   skeleton.setToSetupPose()
   skeletonUpdateWorld(skeleton)
 
-  // 动画 / 皮肤 / 图层
-  S.animations = (player.animationState?.data?.skeletonData?.animations || []).map(a => a.name)
+  // 动画 / 皮肤 / 图层（优先 animationState；空时回退 skeleton.data，避免偶发空列表）
+  const animSrc = player.animationState?.data?.skeletonData?.animations
+  const animFallback = skeleton.data?.animations
+  const animList = (animSrc && animSrc.length ? animSrc : (animFallback || []))
+  S.animations = animList.map(a => a.name)
   S.skins = (skeleton.data?.skins || []).map(s => s.name)
   S.slots = (skeleton.data?.slots || []).map(s => s.name)
   renderAnimList()
@@ -48815,8 +50293,8 @@ function onLoaded(player) {
     showError(t('这个骨架里没有任何动画'))
   }
 
-  // 取景框（沿当前动画采样实测内容范围）
-  S.bounds = computeBounds(skeleton)
+  // 取景框（沿当前动画采样实测内容范围；有背层时按两层并集，R19）
+  S.bounds = computeStageBounds()
   player.config.viewport = {
     x: S.bounds.offset.x, y: S.bounds.offset.y,
     width: Math.max(S.bounds.size.x, 1), height: Math.max(S.bounds.size.y, 1),
@@ -49029,6 +50507,38 @@ function onFrame(player) {
   applyLayerVisibility(player.skeleton)
   drawOverlay()
   updateProgressReadout()
+  syncBackLayer()
+}
+
+/** 背层跟随本体：动画名 → 时间轴 → 相机（R19）。
+ *  背层是 pause + stopRendering 的，所以它每一帧的画面完全由这里驱动 ——
+ *  两层用同一个时间轴，动作不会错位。 */
+function syncBackLayer() {
+  const bp = S.backPlayer
+  if (!bp || !bp.skeleton) return
+  try {
+    const mainEntry = S.player?.animationState?.getCurrent(0)
+    if (mainEntry && mainEntry.animation) {
+      const name = mainEntry.animation.name
+      const cur = bp.animationState.getCurrent(0)
+      if (!cur || cur.animation.name !== name) {
+        // 两层的动画集合可能不同：背层没有同名动画时保持它自己的，别清空
+        const has = (bp.animationState.data?.skeletonData?.animations || []).some(a => a.name === name)
+        if (has) bp.animationState.setAnimation(0, name, S.loop)
+      }
+      const be = bp.animationState.getCurrent(0)
+      if (be) be.trackTime = mainEntry.trackTime
+      bp.animationState.apply(bp.skeleton)
+      skeletonUpdateWorld(bp.skeleton)
+    }
+  } catch { /* 背层同步失败不该影响本体 */ }
+  if (S.camera) {
+    const bcam = bp.sceneRenderer.camera
+    bcam.position.x = S.camera.position.x
+    bcam.position.y = S.camera.position.y
+    bcam.zoom = S.camera.zoom
+  }
+  drawBackLayer()
 }
 
 function applyLayerVisibility(skeleton) {
@@ -49106,7 +50616,7 @@ function refitBounds(keepUserZoom) {
     Math.abs(ratio - 1) > 0.01
     || Math.abs(cam.position.x - S.defaultPos.x) > 1
     || Math.abs(cam.position.y - S.defaultPos.y) > 1)
-  const b = computeBounds(p.skeleton)
+  const b = computeStageBounds()      // 有背层时是两层并集（R19）
   if (!b) return
   S.bounds = b
   p.config.viewport = {
@@ -49629,6 +51139,14 @@ function setCanvasSizeForCapture(targetW, targetH) {
   p.sceneRenderer.resize(1)          // 重设 canvas 像素尺寸 + gl.viewport + 相机 viewport
   state.realW = canvas.width
   state.realH = canvas.height
+  // 背层（Lost Sword 两层角色，R19）也用同一分辨率重画一次，免得导出时被拉伸
+  const bp = S.backPlayer
+  if (bp && bp.canvas) {
+    state.back = { sw: bp.canvas.style.width, sh: bp.canvas.style.height }
+    bp.canvas.style.width = `${targetW / dpr}px`
+    bp.canvas.style.height = `${targetH / dpr}px`
+    bp.sceneRenderer.resize(1)
+  }
   // 同步我自己的相机视口
   S.camera.viewportWidth = p.sceneRenderer.camera.viewportWidth
   S.camera.viewportHeight = p.sceneRenderer.camera.viewportHeight
@@ -49641,11 +51159,24 @@ function restoreCanvasSize(state) {
   canvas.style.width = state.sw
   canvas.style.height = state.sh
   p.sceneRenderer.resize(1)
+  if (state.back && S.backPlayer) {
+    S.backPlayer.canvas.style.width = state.back.sw
+    S.backPlayer.canvas.style.height = state.back.sh
+    S.backPlayer.sceneRenderer.resize(1)
+  }
   S.camera.position.x = state.pos.x
   S.camera.position.y = state.pos.y
   S.camera.zoom = state.zoom
   S.camera.update()
   p.drawFrame(false)
+  drawBackLayer()
+}
+
+/** 把背层的画面画到它自己的 canvas 上（背层被 pause，时间轴由本体驱动）。 */
+function drawBackLayer() {
+  const bp = S.backPlayer
+  if (!bp || !bp.skeleton) return
+  try { bp.drawFrame(false) } catch { /* 背层失败不该影响本体 */ }
 }
 
 /** 为指定分辨率设置取景：keepCurrent 时保持当前可见世界范围，否则回到默认取景 */
@@ -49686,10 +51217,25 @@ function paintBgAndSource(ctx, source, transparent, targetW, targetH) {
     }
   }
   ctx.drawImage(source, 0, 0, targetW, targetH)
+  paintBackLayer(ctx, targetW, targetH)
+}
+
+/** Lost Sword 两层角色（R19）：背层画在背景之上、本体之下。
+ *  离屏产出（截图 / 帧序列 / WebM）走的是同一条合成路径，所以两层都不会丢。 */
+function backLayerCanvas() {
+  const bp = S.backPlayer
+  const cv = bp && bp.canvas
+  return cv && cv.width ? cv : null
+}
+
+function paintBackLayer(ctx, targetW, targetH) {
+  const cv = backLayerCanvas()
+  if (!cv) return
+  try { ctx.drawImage(cv, 0, 0, targetW, targetH) } catch { /* 尺寸不合法时跳过背层 */ }
 }
 
 function composeToCanvas(source, transparent, targetW, targetH) {
-  if (transparent && !S.bgImageUrl) return source
+  if (transparent && !S.bgImageUrl && !S.backPlayer) return source
   const off = document.createElement('canvas')
   off.width = targetW
   off.height = targetH
@@ -50124,6 +51670,7 @@ function bindUI() {
     $('emptyState').hidden = false
     $('currentName').textContent = t('未载入')
     $('currentSub').textContent = t('在右侧列表里选一个资产')
+    syncRemoveRootBtn()
     scan(false)
   }
   $('btnRescan').onclick = () => scan(true)
@@ -50202,6 +51749,9 @@ function bindUI() {
   if (stageBack) stageBack.onclick = () => setView('grid')
   applySortUI()
   applySelectUI()
+    const btnRemoveRoot = $('btnRemoveRoot')
+  if (btnRemoveRoot) btnRemoveRoot.onclick = () => runRemoveRoot()
+  syncRemoveRootBtn()
   $('btnAddRoot').onclick = async () => {
     if (NATIVE) {
       // 不进系统文件夹选择器（部分机型上会把进程带崩），改拉起文件选择器拷进 App 目录
@@ -50221,6 +51771,7 @@ function bindUI() {
       await loadConfig()
       S.rootId = data.root.id
       $('rootSelect').value = S.rootId
+      syncRemoveRootBtn()
       await scan(true)
     } catch (err) {
       showError(t('添加目录失败：') + err.message)
@@ -50347,7 +51898,7 @@ function bindUI() {
   // 设置
   $('chkPremultiplied').onchange = e => {
     S.premultiplied = e.target.checked
-    applyGLTexturePatch(S.premultiplied)
+    syncPremultiplyGl()
     const cur = S.current
     if (cur) { S.current = null; selectItem(cur) }
   }
@@ -50593,6 +52144,14 @@ window.__bd2viewer = {
   },
   /** 读骨架头判定 minor 版本（'4.0' / '4.1' / null）。测试与排障用。 */
   spineMinorOf: item => spineMinorFor(item),
+  /** 3.x JSON → 4.x JSON 的兼容转换（纯函数，测试直接喂字符串就能验）。
+   *  不是 3.x 返回 null；转换结果用 JSON.parse 校验。 */
+  spineJson38to41,
+  /** 关掉「缩略图写回资产目录」（需求 5）。自动化测试必须关：它会写用户磁盘，
+   *  而且写完之后卡片走「自带 thumb.png」捷径、不再进离屏队列，
+   *  让「坏文件不堵队列」这类断言失去前提。 */
+  setThumbPersist(on) { thumbPersist = !!on; return thumbPersist },
+  get thumbPersist() { return thumbPersist },
   setLayerHidden,
   pickLayerAt,
   screenshot,
@@ -50630,6 +52189,23 @@ window.__bd2viewer = {
   get pose() { return S.currentPose || 'normal' },
   switchPose,
   renderPoseBar,
+  // Lost Sword 两层角色（R19）：测试用它确认背层真的起来了、且跟着本体同步
+  get layers() {
+    const bp = S.backPlayer
+    const be = bp && bp.animationState && bp.animationState.getCurrent(0)
+    return {
+      hasBack: !!bp,
+      backBase: S.backItem?.base || null,
+      backAnim: be && be.animation ? be.animation.name : null,
+      backTrackTime: be ? be.trackTime : null,
+      backCanvases: document.querySelectorAll('#playerBackHost canvas').length,
+    }
+  },
+  /** 当前视图（grid=资产页 / player=播放页）—— 测试用它确认「轮询守卫」的语义：
+   *  在播放页里解包轮询不许触发重扫（否则全屏「扫描中…」盖住正在看的动画） */
+  get viewMode() { return viewMode },
+  /** 解包期间在播放页攒下的「回列表再扫」标记（回到平铺页时被消费 → 置回 false） */
+  get unpackPending() { return unpackRescanNeeded },
   /** 当前实际生效的播放顺序（键序列，已应用过滤 + 排序） */
   get visibleKeys() { return filteredItems().map(itemKey) },
   get allKeys() { return allItems().map(itemKey) },
@@ -50672,6 +52248,10 @@ window.__bd2viewer = {
   },
   runDelete,
   confirmDelete,
+  runRemoveRoot,
+  confirmRemoveRoot,
+  canRemoveRoot,
+  relDirOfItem,
   openCardMenu,
   // 导航：切上一个/下一个资产、返回键的分层消化
   switchItem,

@@ -1,6 +1,6 @@
 # Kakiko Viewer — 项目进度与说明
 
-> 快照日期：**2026-10-01** · 当前代码版本 **v1.05**（`versionCode 8`；箱内 `/workspace/kakiko-BD2Viewer`；Android JCZX 一键解包）
+> 快照日期：**2026-10-01** · 当前代码版本 **v1.07**（`versionCode 10`；显示名 Kakiko Viewer）
 > 本文只讲「现在是什么状态、为什么这么做、下一步做什么」。
 > 面向使用者的说明在 [`README.md`](README.md)；技术细节在 [`docs/`](docs) 与
 > [`bd2-local-viewer/ARCHITECTURE.md`](bd2-local-viewer/ARCHITECTURE.md)。
@@ -11,11 +11,17 @@
 
 一个**完全本地**的 Spine（俗称 L2D）动画查看器，同一份前端代码出两种形态
 （桌面版：本机 Node 服务 + 浏览器；Android APK：手写 WebView 壳）。
-已经支持 **BD2 / Lost Sword / NIKKE** 三种资产来源，跨 **Spine 4.0 与 4.1** 两代骨架，
-7 个测试套件 **308 项断言全绿**，v1.04 的 APK 已构建并通过校验。
+已经支持 **BD2 / Lost Sword / NIKKE / JCZX** 四种资产来源，跨 **Spine 4.0 / 4.1 / 4.2** 三代骨架；
+NIKKE 的整包 mod 文件（UnityFS）在两个平台都能自动解包。7 个测试套件 **341 项断言全绿**，
+v1.07 的 APK 已构建并通过校验（1,499,122 B）。
 
-**唯一悬着的事：v1.02 / v1.03 / v1.04 三个版本都还没 commit / push / 发 release** ——
-远端 `origin/main` 仍停在 v1.01（见 §8）。
+**悬着的事**：v1.06 还没 commit / push / 发 release ——
+远端 `origin/main` 现在停在 v1.05（v1.02–v1.05 已提交，见 §8）。
+
+**箱内未发版改动（仍标 1.07 / versionCode 10，需求 7 冻结）**：
+需求 1+2（解包并发≤10 + 优先级 / 四类进度条）+ **需求 6**（NIKKE 解包按包分文件夹）+
+**需求 3+4+5**（PC 点击=播放/拖仅⠿；预乘默认随 mode；thumb.png 持久化）。
+未同步 PC、未出 APK。
 
 ---
 
@@ -48,14 +54,16 @@
 | **v1.02** | 3 | 605,337 B | `a48c0129…` | **第二种命名约定：Lost Sword**（`.atlas.bytes` / `.skel.bytes` / 裸 `.bytes` / 自带 `thumb.png`）+ 资产类型开关 + PC 右键复制绝对路径 + 播放页「← 返回列表」 |
 | **v1.03** | 4 | 845,945 B | `83f1ca20…` | **NIKKE 可渲染**：内置第二套 Spine 4.0 运行时、按骨架头自动选世代；顺带修掉「重叠扫描谁后回来谁生效」（R17） |
 | **v1.04** | 5 | 855,457 B | `1e98f629…` | **NIKKE 独立成第三档模式**：一个角色一张卡 + 姿势切换；**多皮肤骨架合成**（Lost Sword 的「只显示一部分」）；测试工装两处修复 |
-| **v1.05** | 6（Phase A）→ **7（Android JCZX）** | （待本机构建） | — | **Spine 4.2 + JCZX 全平台**：桌面 UnityPy 提取、Android 纯 Java UnityFS strip+LZMA/LZ4+启发式导出；`BD2Viewer/jczx/` |
+| **v1.05** | 6（Phase A）→ 7（Android JCZX）→ 8（Host/cache fix） | 1,432,382 B（含 1.06 的前端改动；1.05 本身未单独出包） | `8088b72a…` | **Spine 4.2 + JCZX 全平台**：桌面 UnityPy 提取、Android 纯 Java UnityFS strip+LZMA/LZ4+启发式导出；`BD2Viewer/jczx/`；界面名改为 **Kakiko Viewer** |
+| **v1.06** | 9 | 1,432,382 B（同上一行，本次只改前端） | `8088b72a…` | **Lost Sword 两层角色修复**：`_B` 背层 + `_F` 前层归成一套资产并**叠层渲染**（修「Lobby 角色只看得到半个」）；卡面缩略图也叠两层；顺带修 1.05 遗留的两条过期断言（标题 / 缩放上限） |
+| **v1.07** | **10** | 1,499,122 B | `42a20270…` | **NIKKE 整包 mod 文件自动解包**（UnityFS → 标准三件套）：桌面 UnityPy / 安卓纯 Java，分批 + 后台续解 + 进度提示；解包缓存只在 NIKKE 档可见。**同版本内追加两条用户反馈的修复**：①播放页不再被「扫描中…」全屏遮罩反复打断（R22）；②JCZX 解包后播不了 —— 提取器漏导二进制 `.skel`（497 个目录只有图集没骨架，两侧同源 bug）+ Spine 3.8 的 JSON 被 4.x 运行时读成 NaN（载入前就地转换，R21）。**按用户要求未升版本号**，改动全部计入 1.07 |
 
-> 当前仓库根目录的 `BD2Viewer-debug.apk` 就是 **v1.04**。
+> 当前仓库根目录的 `BD2Viewer-debug.apk` 就是 **v1.07**（`versionCode 10`，1,499,122 B）。
 > `kakiko-BD2Viewer 1.0.1.apk` / `kakiko-BD2Viewer 1.0.1 .apk` 是 v1.01 时期的产物，留在本地做对照。
-> 体积从 v1.02 跳到 v1.03 的 +234 KB 是**第二套 Spine 运行时**（骨架跨代不兼容，只能两套都带），
-> v1.04 只涨 9.5 KB（纯前端逻辑，没引新库）。
+> 体积从 v1.02 跳到 v1.03 的 +234 KB 是**第二套 Spine 运行时**；1.04 → 1.05 再涨约 577 KB 是
+> **第三套运行时（4.2.120）**；1.06 本身只加前端逻辑，没有再引入依赖。
 
-每个版本的发布说明：`RELEASE-NOTES-v1.01.md` … `RELEASE-NOTES-v1.05.md`。
+每个版本的发布说明：`RELEASE-NOTES-v1.01.md` … `RELEASE-NOTES-v1.06.md`。
 
 ---
 
@@ -65,7 +73,7 @@
 |---|---|---|---|---|---|
 | **BD2**（标准导出） | `x.atlas` | `x.json` / `x.skel` | 无（现场渲一帧） | 4.1.x | 一套文件一张卡 |
 | **Lost Sword**（Unity TextAsset 导出） | `x.atlas.bytes` | `x.skel.bytes` / 裸 `x.bytes`(JSON) | 目录里的 `thumb.png` | 4.1.x | 一套文件一张卡 |
-| **NIKKE**（标准导出） | `x.atlas` | `x.skel` | 无 | **4.0.x** | **一个角色一张卡**：只显 NIKKE 形（`<id>_00` + aim/cover）；纯 BD2 名单件不进本档 |
+| **NIKKE**（标准导出） | `x.atlas` | `x.skel` | 无 | **4.0.x** | **一个角色一张卡**：只显 NIKKE 形（`<id>_00` + aim/cover）；纯 BD2 名单件不进本档；mod 包解包缓存为 `bd2viewer-nikke/<pack>/`（需求 6） |
 
 三件容易搞混的事：
 
@@ -83,7 +91,7 @@
 ## 4. 架构与关键技术决策
 
 一份前端、两个宿主，最大的风险是「同一件事的真相存在两处以上」。
-`ARCHITECTURE.md` §6 把这类规则写成 **R1–R18 不变量**，review 与测试都引用编号。摘要：
+`ARCHITECTURE.md` §6 把这类规则写成 **R1–R22 不变量**，review 与测试都引用编号。摘要：
 
 | 编号 | 一句话 |
 |---|---|
@@ -96,6 +104,7 @@
 | R16 | Spine 运行时按骨架世代挑、整个会话同源、**载入过程中绝不改全局** |
 | R17 | 异步取回的整包状态要有**代次**（`scanSeq`），过期结果整包丢弃 |
 | R18 | NIKKE 同角色归组（`*_NN` / aim / cover → 一张卡 + 姿势条）；归组只发生在可见口径；**不**再按命名形 / 骨架世代挡其它条目 |
+| R19 | **Lost Sword 两层角色**（`<X>_B` 背层 + `<X>_F` 前层）归成一套资产并**叠层渲染**；时间轴由主循环驱动、取景按两层并集、离屏产出走同一条合成路径 |
 
 几个值得记住的决策（都是被 bug 逼出来的）：
 
@@ -107,7 +116,7 @@
 - **`app.js` 不拆**：它被内联进单个 `<script>` 走全局脚本语义，拆文件要同时改打包器、
   资源同步、APK 加载与全部测试的加载方式 —— 收益只是「好看」，风险面是全绿测试（见 KNOWN-ISSUES §2）。
 
-实测规模（2026-09-30）：`app.js` **5323 行 / 199 个顶层函数**、`server.mjs` 786 行、
+实测规模（2026-10-01）：`app.js` **5995 行 / 216 个顶层函数**、`server.mjs` 786 行、
 `ScanEngine.java` 1213 行、`MainActivity.java` 566 行、`styles.css` 1668 行、`index.html` 551 行。
 
 ---
@@ -145,19 +154,19 @@ python tools/verify_apk.py
 ## 6. 测试
 
 ```bash
-node bd2-local-viewer/_test/run_all.mjs                    # 全量，约 6-7 分钟，308 项
+node bd2-local-viewer/_test/run_all.mjs                    # 全量，约 6-7 分钟，341 项
 node bd2-local-viewer/_test/run_all.mjs manifest_check delete_api format_check   # 自包含组，秒级
 ```
 
 | 套件 | 项数 | 跑什么 | 需要真实素材 |
 |---|---|---|---|
 | `manifest_check` | 6 | 旋转锁 `fullUser`、`configChanges`、`minSdk` | 否 |
-| `bundle_check` | 25 | 单文件产物：id 一致性、内联、无外链、两套 Spine 运行时都在且不同源 | 否（产物级） |
+| `bundle_check` | 34 | 单文件产物：id 一致性、内联、无外链、三套 Spine 运行时（4.0 / 4.2）都在且不同源 | 否（产物级） |
 | `bundle_firstpaint` | 7 | 产物级首屏：第一帧就是资产页、深链仍进播放页 | 否（产物级） |
 | `delete_api` | 12 | 真删磁盘（自带临时根目录，绝不碰用户 mods） | 否 |
-| `format_check` | 31 | 三种命名约定互不串味、骨架三级级联、`thumb.png`、MIME、缓存按 `(root,mode)` 分离、nikke 模式 | 否 |
-| `e2e` | 45 | 端到端：相机 / 图层 / 截图 / 导出 / PC 侧入口 / 重叠扫描 / 真实素材专项 | 是 |
-| `native_mode` | 182 | 假桥下的整条原生通路：拖动 / 长按 / 批删 / 箭头 / 返回键 / 首屏 / 语言 / 搜索 / 资产类型 / NIKKE 归组与姿势 | 是 |
+| `format_check` | 37 | 四种命名约定互不串味、骨架三级级联、`thumb.png`、MIME、缓存按 `(root,mode)` 分离、nikke 模式、两层角色在服务端仍是两个条目、**NIKKE 解包缓存的档位可见性** | 否 |
+| `e2e` | 53 | 端到端：相机 / 图层 / 截图 / 导出 / PC 侧入口 / 重叠扫描 / 真实素材专项（多皮肤合成、NIKKE 姿势、**Lost Sword 两层叠层与时间轴同步**） | 是 |
+| `native_mode` | 192 | 假桥下的整条原生通路：拖动 / 长按 / 批删 / 箭头 / 返回键 / 首屏 / 语言 / 搜索 / 资产类型 / NIKKE 归组与姿势 / 两层角色归组 / **NIKKE 解包进度提示** | 是 |
 
 - 端口：`8137`（源码与产物套件）、`8143`（native_mode）。`run_all` 自己 spawn 两个服务，
   跑之前先杀掉占端口的旧进程；**跑测试时不要并行起第二个 Chrome**（调试端口固定 9333，会互杀）。
@@ -178,7 +187,7 @@ node bd2-local-viewer/_test/run_all.mjs manifest_check delete_api format_check  
 | 自己从源码构建 | [`docs/BUILD.md`](docs/BUILD.md) |
 | 开发约定、目录结构、测试怎么加 | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) |
 | 已知问题（8 条，含取舍理由） | [`docs/KNOWN-ISSUES.md`](docs/KNOWN-ISSUES.md) |
-| 不变量 R1–R18、验证矩阵、断言纪律 | [`bd2-local-viewer/ARCHITECTURE.md`](bd2-local-viewer/ARCHITECTURE.md) |
+| 不变量 R1–R22、验证矩阵、断言纪律 | [`bd2-local-viewer/ARCHITECTURE.md`](bd2-local-viewer/ARCHITECTURE.md) |
 | 测试套件与自检脚本 | [`bd2-local-viewer/_test/README.md`](bd2-local-viewer/_test/README.md) |
 | 2026-09-25 的代码审计快照 | [`docs/AUDIT-REPORT.md`](docs/AUDIT-REPORT.md)（**故意不更新**：那是历史快照） |
 | 第三方许可与署名 | [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) / [`LICENSE`](LICENSE) |
@@ -188,14 +197,21 @@ node bd2-local-viewer/_test/run_all.mjs manifest_check delete_api format_check  
 ## 8. 仓库与开源状态
 
 - 远端：<https://github.com/kakiko123/BD2Viewer>（MIT，版权人 kakiko123）。
-- **`origin/main` 停在 v1.01 的提交 `2b18cdf`**，之后三个版本的改动都还在本地工作区：
+- **`origin/main` 现在停在 v1.05**（提交 `c6214c1`）。v1.06 / v1.07 两轮改动都在本地工作区没提交：
 
   | 未提交内容 | 说明 |
   |---|---|
-  | v1.02 改动 | Lost Sword 命名约定、资产类型开关、PC 右键复制路径与返回键、`format_check.mjs` 新套件 |
-  | v1.03 改动 | 双 Spine 运行时（`lib/spine-player-4.0.js`）、NIKKE 渲染、R17 代次守卫、`RELEASE-NOTES-v1.03.md` |
-  | v1.04 改动 | NIKKE 独立模式（归组 + 姿势）、多皮肤合成、`RELEASE-NOTES-v1.04.md`、测试工装修复 |
-  | 必须带上的一项删除 | 根目录误生成的 `would`（已从工作区移走，但仍在 v1.01 的提交里，下次提交要一起提交它的删除） |
+  | v1.06 前端改动 | `public/app.js`（R19 两层角色归组 + 叠层渲染 + 缩略图叠层）、`styles.css`（`#playerBackHost`）、`index.html`（若有） |
+  | v1.06 测试 | `format_check`（+2）、`e2e`（+5）、`native_mode`（+4 ㉙）、`bundle_check` / `e2e` 两条过期断言修正 |
+  | v1.06 文档 | `RELEASE-NOTES-v1.06.md`、ARCHITECTURE（R19 + 矩阵 323）、`docs/TECHNICAL.md` §4.8.4、README、本文件 |
+  | 版本号 | `app/build.gradle` versionCode 8→9 / versionName 1.05→1.06、`package.json` |
+  | v1.07 改动 | NIKKE 整包自动解包（`_tools/nikke_extract.py` + `nikke_ab_support.mjs` + `jczx/NikkeAbExtractor.java`）、解包进度提示、`RELEASE-NOTES-v1.07.md`、版本号 1.07/vc10 |
+  | 产物 | `BD2Viewer-debug.apk`（1,446,278 B）、`assets/web/*` 已同步 |
+
+- **根目录还躺着上一轮同步留下的临时文件**（未跟踪，别误加进提交）：
+  `_PHASE_A_BOX_NOTES.md`、`_SYNC_BACKUP_NOTE.txt`、`_sync_sha256.txt`、
+  `_kakiko-BD2Viewer-sync-20261001.{zip,tar.gz}`、`_sync_from_box.zip`、
+  `_sync_preserve_live/`、`_sync_preserve_backup/`。要么删掉、要么挪进 `_scratch/`。
 
 - 不进仓库：`local.properties`、`gradle.local.properties`、`viewer.config.json`、keystore、
   `/toolchain/`、`/_scratch/`、`/.workbuddy/`、`build/`、`.gradle/`、APK、测试截图。
@@ -227,9 +243,12 @@ node bd2-local-viewer/_test/run_all.mjs manifest_check delete_api format_check  
 
 **待办（需要你点头才能做的对外动作）**
 
-1. 把 v1.02 / v1.03 / v1.04 分三次提交（各自带发布说明与 APK），带上 `would` 的删除；
+1. 提交 v1.06 这一轮（前端 R19 + 测试 + 文档 + 版本号 + APK），**显式列出要提交的文件**，
+   别 `git add -A`（根目录有一批上一轮同步留下的临时文件，见 §8）；
 2. 推送 `main`，按版本建 GitHub Release（附 APK 与 SHA-1）；
 3. 之后每个版本的常规闭环：改前端 → bundle → sync → 全量测试 → clean 构建 → `verify_apk.py` → 提交发版。
+
+**顺手清一下（可选）**：根目录那批 `_sync*` / `_PHASE_A_BOX_NOTES.md` 临时文件挪进 `_scratch/` 或删掉。
 
 **路线图（README §4 里已写明方向）**
 
@@ -242,3 +261,23 @@ node bd2-local-viewer/_test/run_all.mjs manifest_check delete_api format_check  
 ---
 
 *本文是 2026-09-30 的状态快照。改完一个版本后，§2 的版本表与 §6 的测试项数需要跟着更新。*
+
+## 9. 需求 1+2（2026-10-01 箱内）
+
+- **基线**：PC `C:\Users\KAKIKO\WorkBuddy\2026-09-21-22-05-24` → 箱 `/workspace/kakiko-BD2Viewer`（保留原 `viewer.config.json`）。
+- **需求 1**：NIKKE 解包包级并发 ≤ 10 + 优先级队列（桌面/安卓）；点开未解包卡抬队首。
+- **需求 2**：解包/扫描/缩略图/打开单资产均有真实进度 UI（无假进度）。
+- **需求 7**：未改 version（仍 1.07 / 10）。未回同步 PC、未打 APK。
+
+## 10. 需求 3+4+5（2026-10-01 箱内）
+
+- **需求 3**：卡片主体 click → 播放；拖拽排序只从 ⠿；两端同一状态机；700ms click 抑制保留。
+- **需求 4**：预乘默认 bd 开 / lostsword·nikke·jczx 关；切模式套默认；变更重建播放器。
+- **需求 5**：离屏后写 atlas 同目录 `thumb.png`；扫描 mtime 新鲜则跳过队列；安卓删除补 relThumb。
+- **需求 7**：未改 version（仍 1.07 / 10）。已 `bundle` + `sync_assets`；未回同步 PC、未打 APK。
+
+## 11. 加载 UX + stage null 崩溃（2026-10-01 箱内）
+
+- **打开崩溃**：`setLoadProgress(null)` 解构 null → stage 报错 → BD2/NIKKE 等任意打开失败；已改为无参/`opts||{}`。
+- **就绪即显**：去掉 prepareRoot 首波 ~12s 同步等待；进度条非阻塞 overlay；占位卡不挡就绪卡。
+- **需求 7**：仍 1.07 / vc 10。未回同步 PC、未打 APK。

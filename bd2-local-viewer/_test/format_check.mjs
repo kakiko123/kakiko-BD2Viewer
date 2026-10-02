@@ -281,6 +281,56 @@ try {
         rels(bdNoJ).join(', '))
     }
   }
+
+  /* ------------------------------------------------ Lost Sword 两层角色（R19）
+   * 服务端**不做**归组：`<X>_B` 与 `<X>_F` 照旧是两个独立资产（各配各的骨架）。
+   * 「同一目录 + 同名 + _B/_F → 一套资产、叠着渲染」是前端可见口径的事（R19）。
+   * 这一条守住「扫描层里不含分组语义」—— 别哪天有人把分组挪进服务端。 */
+  writeLs('layer', 'Hero_B', 'Hero_B.skel.bytes', false)
+  writeLs('layer', 'Hero_F', 'Hero_F.skel.bytes', false)
+  const ly = await scan('lostsword', true)
+  const lyItems = (ly.items || []).filter(i => i.relAtlas.indexOf('layer/') === 0)
+  check('两层角色：服务端照旧返回两个独立条目（归组是前端的事）',
+    lyItems.length === 2 &&
+    lyItems.map(i => i.relAtlas).sort().join(',') === 'layer/Hero_B.atlas.bytes,layer/Hero_F.atlas.bytes',
+    lyItems.map(i => i.relAtlas).join(', '))
+  check('两层角色：两层的骨架都各自配上了（前端才叠得起来）',
+    lyItems.every(i => i.ok && !!i.relSkeleton && i.relSkeleton.indexOf('layer/') === 0),
+    lyItems.map(i => i.base + '→' + String(i.relSkeleton || '无').split('/').pop()).join(' , '))
+
+  /* ------------------------------------------------ NIKKE 解包缓存（bd2viewer-nikke/）
+   * NIKKE 的 mod 包（UnityFS）在扫描前会被解到根目录下的 `bd2viewer-nikke/`。
+   * 这张缓存**只在 nikke 档可见**：否则 BD2 档会把抽出来的资产再摆一遍。
+   * 这里造一份「解包产物」，验两边的可见性（解包本身要 UnityPy + 真包，
+   * 由 _tools/nikke_extract.py 与 e2e 的真实素材用例覆盖）。 */
+  writeBd('bd2viewer-nikke/mods', 'char_00')
+  // 解包产物实为二进制 4.1（RELEASE 1.07）；用带毒 hash 的头验证「按布局读版本」不被误导成 4.0
+  {
+    const pack = path.join(dataRoot, 'bd2viewer-nikke', 'c010_00_pack')
+    fs.mkdirSync(pack, { recursive: true })
+    fs.writeFileSync(path.join(pack, 'c010_00.atlas'), ATLAS_BODY('c010_00'), 'utf-8')
+    const body = Buffer.from('4.1.24\0', 'ascii')
+    const skel = Buffer.alloc(8 + 1 + body.length + 8, 0)
+    Buffer.from('4.0.99').copy(skel, 0)  // 毒 hash：旧全头正则会判 4.0
+    skel[8] = body.length
+    body.copy(skel, 9)
+    fs.writeFileSync(path.join(pack, 'c010_00.skel'), skel)
+    fs.writeFileSync(path.join(pack, 'c010_00.png'), PNG)
+  }
+  const nkCacheBd = await scan('bd', true)
+  check('NIKKE 解包缓存在 BD2 档里不出现（不串味）',
+    !(nkCacheBd.items || []).some(i => String(i.relAtlas || '').indexOf('bd2viewer-nikke/') >= 0),
+    rels(nkCacheBd).join(', '))
+  const nkCacheNk = await scan('nikke', true)
+  check('NIKKE 解包缓存在 nikke 档里正常可见（能直接播）',
+    nkCacheNk.playableCount > 0 &&
+    (nkCacheNk.items || []).some(i => i.relAtlas === 'bd2viewer-nikke/mods/char_00.atlas' && i.ok),
+    (nkCacheNk.items || []).filter(i => i.relAtlas.indexOf('bd2viewer-nikke/') >= 0)
+      .map(i => i.relAtlas).join(', '))
+  const nkSkel41 = (nkCacheNk.items || []).find(i => i.relAtlas === 'bd2viewer-nikke/c010_00_pack/c010_00.atlas')
+  check('NIKKE 解包 .skel（毒 hash）仍标 spineMinor=4.1（不误判 4.0）',
+    !!(nkSkel41 && nkSkel41.skeletonKind === 'skel' && nkSkel41.spineMinor === '4.1'),
+    nkSkel41 && `${nkSkel41.skeletonKind}/${nkSkel41.spineMinor}`)
 } catch (e) {
   check('测试执行', false, e.stack || e.message)
 } finally {

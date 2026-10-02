@@ -23,6 +23,9 @@ const cdp = await Cdp.launch({ size: '1680,950' })
 try {
   await cdp.goto(`${BASE}/?item=${encodeURIComponent(ITEM)}`)
   await cdp.waitFor(`document.getElementById('stageInner').dataset.debug`, 40000, '资产载入')
+  // 关掉「缩略图写回资产目录」（需求 5）：它会把 thumb.png 写进**用户的**资产目录，
+  // 测试不该改用户的磁盘（2026-10-02 实测本机被写了 124 个）。
+  await cdp.evaluate(`__bd2viewer.setThumbPersist(false); return __bd2viewer.thumbPersist`)
   await new Promise(r => setTimeout(r, 1500))
 
   const d0 = JSON.parse(await cdp.evaluate(`return document.getElementById('stageInner').dataset.debug`))
@@ -141,13 +144,18 @@ try {
   check('重置视图回到默认 zoom', Math.abs(zoom2 - zoom0) < 1e-6, `zoom=${zoom2.toFixed(3)}`)
 
   // ---- 缩放范围限制
+  // 上限跟着 app.js 的 ZOOM_BTN_RATIO_MAX 走（1.05 起按钮挡位是 8×fit ≈ 0.125× 缩小；
+  // 早先是 4×fit —— 改常量时记得同步这一行的注释）。断言的是「一次 zoomOut 会夹回上限」，
+  // 所以这里必须用**当前**上限，不能写死旧值。
+  const ZOOM_BTN_RATIO_MAX = 8
   const clampTest = await cdp.evaluate(`
     __bd2viewer.state.camera.zoom = __bd2viewer.state.defaultZoom * 1000
     __bd2viewer.zoomOut()
-    return __bd2viewer.state.camera.zoom
+    return { zoom: __bd2viewer.state.camera.zoom, fit: __bd2viewer.state.defaultZoom }
   `)
-  check('zoom 有上限保护', clampTest <= (await cdp.evaluate(`return __bd2viewer.state.defaultZoom * 4`)) + 1e-6,
-    `zoom=${clampTest.toFixed(3)}`)
+  check('zoom 有上限保护（缩小夹到按钮挡位上限）',
+    clampTest.zoom <= clampTest.fit * ZOOM_BTN_RATIO_MAX + 1e-6,
+    `zoom=${clampTest.zoom.toFixed(3)} 上限=${(clampTest.fit * ZOOM_BTN_RATIO_MAX).toFixed(3)}`)
   await cdp.evaluate(`__bd2viewer.resetCamera(); return true`)
 
   // ---- 截图管线（拦截下载。screenshot 是异步的，要等锚点真的被点）
@@ -371,7 +379,8 @@ try {
   // ---- 真实素材专项（素材不在就自动跳过，不装 fail）：
   //      ① 多皮肤骨架的「default 垫底合成 + 初始挑覆盖最全的皮肤」
   //      ② NIKKE 模式（R18）的角色归组 + 姿势切换（真实渲染，落到 aim_idle / cover_idle）
-  // 这两条需要真骨架，仓库不放素材 —— 所以用「扫全部根目录找特征文件」来守门。
+  //      ③ Lost Sword 两层角色（R19）的叠层渲染 + 时间轴同步
+  // 这些都需要真骨架，仓库不放素材 —— 所以用「扫全部根目录找特征文件」来守门。
   let realAssets = null
   try {
     const cfg2 = await (await fetch(`${BASE}/api/config`)).json()
@@ -388,6 +397,15 @@ try {
           if (rel === 'c022/c022_00.atlas') {
             realAssets = realAssets || {}
             realAssets.c022 = { rootId: r.id }
+          }
+          // 两层角色：<X>_F 与 <X>_B 同目录成对（Lost Sword 的 LobbyUnit）
+          if (mode === 'lostsword' && /_F\.atlas\.bytes$/.test(rel)) {
+            const dir = rel.slice(0, rel.lastIndexOf('/'))
+            const bRel = rel.replace(/_F\.atlas\.bytes$/, '_B.atlas.bytes')
+            if ((s.items || []).some(x => x.relAtlas === bRel)) {
+              realAssets = realAssets || {}
+              if (!realAssets.layered) realAssets.layered = { rootId: r.id, mode, fRel: rel, bRel }
+            }
           }
         }
       }
@@ -483,6 +501,167 @@ try {
       check('NIKKE 姿势切换全程无报错（骨架世代判定对每个成员都成立）',
         nk.errorBox === null, nk.errorBox || '无报错')
       await cdp.screenshot(path.join(HERE, 'e2e_nikke_pose.png'))
+    }
+
+    if (!realAssets || !realAssets.layered) {
+      check('Lost Sword 两层角色：本机没有 `_B`/`_F` 成对素材，跳过', true, '跳过')
+    } else {
+      const ly = await cdp.evaluate(`
+        const v = __bd2viewer
+        v.setAssetMode('lostsword')
+        v.state.rootId = ${JSON.stringify(realAssets.layered.rootId)}
+        await v.scan(true)
+        const keys = v.allKeys
+        const it = v.state.items.find(i => i.relAtlas === ${JSON.stringify(realAssets.layered.fRel)})
+        const out = { visible: keys, backHidden: keys.indexOf(${JSON.stringify(realAssets.layered.bRel)}) < 0 }
+        if (!it) { out.missing = true; return out }
+        out.backLayer = it.backLayer ? it.backLayer.base : null
+        v.openItem(it)
+        await new Promise(r => setTimeout(r, 9000))
+        out.layers = v.layers
+        out.sub = document.getElementById('currentSub').textContent
+        const bp = v.state.backPlayer
+        const m1 = v.player.animationState.getCurrent(0)
+        const b1 = bp && bp.animationState.getCurrent(0)
+        out.syncA = { main: m1 && m1.trackTime, back: b1 && b1.trackTime }
+        await new Promise(r => setTimeout(r, 400))
+        const m2 = v.player.animationState.getCurrent(0)
+        const b2 = bp && bp.animationState.getCurrent(0)
+        out.syncB = { main: m2 && m2.trackTime, back: b2 && b2.trackTime }
+        // 切一条不是默认的动画，两层必须跟到同一个
+        const other = (v.animations || []).find(n => n !== v.animation)
+        if (other) {
+          v.playAnimation(other)
+          await new Promise(r => setTimeout(r, 900))
+          const m3 = v.player.animationState.getCurrent(0)
+          const b3 = bp && bp.animationState.getCurrent(0)
+          out.switched = { target: other, main: m3 && m3.animation.name, back: b3 && b3.animation.name }
+        }
+        out.errorBox = (() => { const e = document.getElementById('errorBox'); return e && !e.hidden ? e.textContent : null })()
+        return out
+      `, 300000)
+      check('两层角色：`_B` 不单独成卡，本体条目挂着 backLayer',
+        ly.missing !== true && ly.backHidden === true && !!ly.backLayer,
+        `背层=${ly.backLayer} 可见=${JSON.stringify(ly.visible || []).slice(0, 200)}`)
+      check('两层角色：背层播放器真的起来了（独立 canvas + 副标题标注）',
+        ly.layers && ly.layers.hasBack === true && ly.layers.backCanvases === 1 &&
+        String(ly.sub).indexOf('含背层') >= 0,
+        `背层=${JSON.stringify(ly.layers)} 副标题="${ly.sub}"`)
+      check('两层角色：时间轴与本体逐帧同步（同一动画同一时刻）',
+        ly.syncA && ly.syncB && Math.abs((ly.syncA.main || 0) - (ly.syncA.back || 0)) < 0.001 &&
+        Math.abs((ly.syncB.main || 0) - (ly.syncB.back || 0)) < 0.001,
+        `A: main=${ly.syncA && ly.syncA.main} back=${ly.syncA && ly.syncA.back} · ` +
+        `B: main=${ly.syncB && ly.syncB.main} back=${ly.syncB && ly.syncB.back}`)
+      check('两层角色：切动画两层一起跟（背层没有同名动画时保持自己的，不空转）',
+        !ly.switched || ly.switched.main === ly.switched.target,
+        ly.switched ? `目标=${ly.switched.target} 本体=${ly.switched.main} 背层=${ly.switched.back}` : '只有一个动画')
+      check('两层角色：全程无报错', ly.errorBox === null, ly.errorBox || '无报错')
+      await cdp.screenshot(path.join(HERE, 'e2e_lostsword_layered.png'))
+    }
+
+    /* ---- 解包轮询不许打断播放页（2026-10-01 用户反馈：播放页反复弹「扫描中…」）
+     *
+     * 病根：轮询每轮都可能 `scan(true)`，而 scan 会挂全屏「扫描中…」遮罩 —— 用户正看着
+     * 动画时被反复盖住。修法是「播放页里只记个标记，等回平铺页再扫」。
+     *
+     * 要真验就得有「正在解包」的状态，否则轮询几轮就停了。做法：临时把某个已解包条目的
+     * `.stamp.json` 挪开 —— 服务端下次扫描就会认为它需要重解（pending≥1），轮询随之启动。
+     * 结束后还原（若服务端已经写了新的 stamp，就把旧的那份删掉）。
+     * 需要本机有 JCZX 缓存目录；没有就判 PASS 并标注跳过。 */
+    {
+      let jzRoot = null
+      const cfgJ = await cdp.evaluate(`return (await (await fetch('/api/config')).json()).roots.map(r => r.id)`, 60000)
+      for (const id of (cfgJ || [])) {
+        const s = await cdp.evaluate(`
+          const r = await fetch('/api/scan?root=' + encodeURIComponent(${JSON.stringify(id)}) + '&mode=jczx')
+          const j = await r.json()
+          return { id: ${JSON.stringify(id)}, found: (j.jczx && j.jczx.found) || 0 }
+        `, 300000).catch(() => null)
+        if (s && s.found > 0) { jzRoot = s.id; break }
+      }
+      // 找一个真实存在的缓存条目（含 .stamp.json）
+      let target = null
+      if (jzRoot) {
+        target = await cdp.evaluate(`
+          const cfg = await (await fetch('/api/config')).json()
+          const r = cfg.roots.find(x => x.id === ${JSON.stringify(jzRoot)})
+          return { rootPath: r && r.path }
+        `, 60000).catch(() => null)
+      }
+      let pendingMade = false
+      if (target && target.rootPath) {
+        const cacheRoot = path.join(target.rootPath, 'bd2viewer-jczx')
+        try {
+          const dirs = fs.readdirSync(cacheRoot).filter(d => {
+            try { return fs.statSync(path.join(cacheRoot, d)).isDirectory() &&
+              fs.existsSync(path.join(cacheRoot, d, '.stamp.json')) } catch { return false }
+          }).sort()
+          if (dirs.length) {
+            const stamp = path.join(cacheRoot, dirs[0], '.stamp.json')
+            fs.renameSync(stamp, stamp + '.bak')
+            pendingMade = { stamp, bak: stamp + '.bak' }
+          }
+        } catch { /* 拿不到就跳过 */ }
+      }
+
+      if (!jzRoot || !pendingMade) {
+        check('JCZX 有 pending 时会真启动解包轮询', true, '跳过（本机没有可用的 JCZX 缓存或没有可挪的 stamp）')
+      } else {
+        const r = await cdp.evaluate(`
+          const v = __bd2viewer
+          v.setAssetMode('jczx')
+          v.state.rootId = ${JSON.stringify(jzRoot)}
+          await v.scan(true)
+          const it = v.state.items.find(i => i.ok && !i.pendingUnpack)
+          if (!it) return { noItem: true }
+          await v.openItem(it)
+          const t0 = Date.now()
+          while (Date.now() - t0 < 40000) {
+            if (v.state.player && v.state.player.skeleton) break
+            await new Promise(r => setTimeout(r, 200))
+          }
+          // 覆盖 12 个轮询周期（400ms × 12 > RESCAN_EVERY=8 的兜底边界）
+          const sp = () => document.getElementById('spinner')
+          let saw = false, texts = []
+          const t1 = Date.now()
+          while (Date.now() - t1 < 5200) {
+            const s = sp()
+            if (s && !s.hidden) {
+              saw = true
+              const lab = s.querySelector('.spinner-text') || s.querySelector('span:not(.dot)')
+              if (lab && !texts.includes(lab.textContent)) texts.push(lab.textContent)
+            }
+            await new Promise(r => setTimeout(r, 50))
+          }
+          return { saw, texts, view: v.viewMode, pending: v.unpackPending, player: !!(v.state.player && v.state.player.skeleton) }
+        `, 300000)
+        check('JCZX 解包轮询不在播放页挂「扫描中…」遮罩（重扫推迟到回列表）',
+          r && r.noItem !== true && r.saw === false && r.view === 'player' && r.pending === true,
+          `遮罩=${r && r.saw} 文案=${JSON.stringify((r && r.texts) || [])} 视图=${r && r.view} 待补扫=${r && r.pending}`)
+        check('JCZX 解包轮询在播放页不打断播放（骨架仍在、无遮罩）',
+          r && r.noItem !== true && r.player === true, `播放器就绪=${r && r.player}`)
+
+        // 还原：服务端若已重解并写了新 stamp，就把旧的那份删掉
+        try {
+          if (fs.existsSync(pendingMade.stamp)) fs.rmSync(pendingMade.bak, { force: true })
+          else fs.renameSync(pendingMade.bak, pendingMade.stamp)
+        } catch { /* 沙箱可能拦删除：留着 .bak 也不影响服务端（它只认 .stamp.json） */ }
+      }
+
+      // 回到平铺页：攒下的补扫要被消费掉，别留个永久脏标记
+      const back = await cdp.evaluate(`
+        const v = __bd2viewer
+        v.setView('grid')
+        const t0 = Date.now()
+        while (Date.now() - t0 < 40000) {
+          if (!v.state.busy && !v.unpackPending) break
+          await new Promise(r => setTimeout(r, 200))
+        }
+        return { pending: v.unpackPending, view: v.viewMode }
+      `, 120000)
+      check('回平铺页后「待补扫」标记被消费（不留永久脏标记）',
+        back && back.pending === false && back.view === 'grid',
+        `pending=${back && back.pending} view=${back && back.view}`)
     }
   } finally {
     // 还原模式与根目录，别把后面的检查留在 NIKKE / lostsword 态里

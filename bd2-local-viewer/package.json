@@ -1,6 +1,6 @@
 {
   "name": "kakiko-viewer",
-  "version": "1.05",
+  "version": "1.07",
   "private": true,
   "type": "module",
   "description": "Kakiko Viewer — local multi-game Spine (L2D) viewer (BD2 / Lost Sword / NIKKE / JCZX). Based on Jelosus2/BD2-L2D-Viewer (MIT, (c) 2025 Jelosus2); source is an independent rewrite.",

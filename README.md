@@ -10,8 +10,8 @@
 |---|---|---|
 | **BD2**（标准 Spine 导出） | `xxx.atlas` + `xxx.json` / `xxx.skel` + 贴图 | Spine 4.1.x |
 | **Lost Sword**（Unity TextAsset 导出） | `xxx.atlas.bytes` + `xxx.skel.bytes`（或裸 `xxx.bytes` 的 JSON 骨架）+ 贴图，目录里常带一张 `thumb.png` 直接当缩略图 | Spine 4.1.x |
-| **NIKKE**（标准 Spine 导出） | 与 BD2 同一套命名：`xxx.atlas` + `xxx.skel` + 贴图；一个角色常分几个子目录（本体 / `aim/` / `cover/`） | Spine 4.0.x |
-| **JCZX**（交错战线，桌面） | `prefabs_spine_*` / `.ab` 等双 UnityFS AssetBundle；扫描时自动抽成标准 `.atlas`+`.json`+`.png` | Spine 4.2.x |
+| **NIKKE**（标准 Spine 导出） | 与 BD2 同一套命名：`xxx.atlas` + `xxx.skel` + 贴图；一个角色常分几个子目录（本体 / `aim/` / `cover/`）。**游戏提取的整包 mod 文件（无扩展名的 UnityFS 包）也能直接读**：扫描时自动解包成标准三件套 | Spine 4.0.x（解包出的是 4.1.x） |
+| **JCZX**（交错战线，桌面） | `prefabs_spine_*` / `.ab` 等双 UnityFS AssetBundle；扫描时自动抽成标准 `.atlas`+`.json`/`.skel`+`.png` | Spine 4.2.x，**也含大量 3.8.x（JSON 骨架，载入前自动转换，见下）** |
 
 > **NIKKE 是独立的第三档模式**（资产页的三段开关）。它的文件命名与 BD2 一样，
 > 但组织方式不同：`c022_00` 是本体，`c022_aim_00` / `c022_cover_00` 是**同一个角色**
@@ -19,6 +19,22 @@
 > 默认动画分别落到 `idle` / `aim_idle` / `cover_idle`。两代骨架的渲染差别
 > （Spine 要求骨架与运行时 major.minor 相同）由内置的 **4.0 与 4.1 两套运行时**处理，
 > 载入时读骨架头自动选（详见 [§6.2](#62-关于-spine-运行时授权请务必了解)）。
+>
+> **Spine 3.x 的 JSON 骨架也能播**：JCZX 那批资产里有很多是 Spine 3.8 导出的 JSON，
+> 而 3.8 与 4.x 的 JSON 格式有几处不同（`angle`/`value`、曲线系数写法、颜色时间轴名）。
+> 查看器会在**载入前把它们就地转成 4.x 能读的形状**（只改内存里的副本，不动你磁盘上的
+> 原始文件）。代价是「网格顶点变形」那类细微摆动没有（头发/布料），骨骼驱动的部分照常。
+>
+> **Lost Sword 的两层角色**（`Prefabs/LobbyUnit/` 里的 11 个角色）也是同一个思路：
+> `Lobby_X_B`（背层）与 `Lobby_X_F`（前层）是**两套骨架**，游戏里叠着画 ——
+> 查看器把它们归成**一张卡**并叠层渲染（背层在下、时间轴同步），卡面缩略图同样叠。
+>
+> **NIKKE 的整包 mod 文件**（无扩展名的 UnityFS 包）在 NIKKE 档下**扫描时自动解包**：
+> PC 端用 Python + UnityPy，手机端是内置的纯 Java 解包器（无需 Python、无需联网）。
+> 解包产物放在根目录的 `bd2viewer-nikke/` 缓存里，之后与普通资产一样浏览播放；
+> 解包分批进行（几百个包首次约几分钟），界面上会显示进度，看完已就绪的部分不受影响。
+> 少数贴图被压成 ASTC 的包手机端解不了（会明确提示），请在 PC 端解包后把产物拷过去。
+> 两层缺任一半都是残缺的（实测 `Lobby_Kei` 的背层只有 1 个 region）。
 
 同一份前端代码，两种运行方式：
 
@@ -224,6 +240,10 @@ JCZX（桌面；UnityFS → UnityPy 提取）一键切换，扫描规则随之�
 它的骨架是 Spine 4.0.x 导出，查看器会自己认出版本并换上 4.0 运行时，
 所以同一个目录里 BD2（4.1）和 NIKKE（4.0）的资产可以混着放、挨个点开。
 
+**Lost Sword 的两层角色**（`_B` 背层 + `_F` 前层）也归成一张卡，**叠着渲染**：
+背层在本体之下、时间轴逐帧同步、取景按两层并集，卡面缩略图也叠两层 ——
+所以 `Lobby_Kei` 这种「背层只有一根头发丝」的角色打开也是完整的。
+
 **播放** — 动画列表 / 皮肤 / 图层（可显隐、可点选）/ 播放暂停与速度 / 相机缩放平移 /
 重置视图 / 背景色 / 每帧步进。多皮肤骨架会自动挑覆盖最全的一套皮肤，
 并把通用的 `default` 皮肤垫在下面合成（有些骨架的 `default` 只有零头，不合成就是残缺的）。
@@ -349,6 +369,6 @@ NIKKE 的姿势变体文件也随本体一起删），删完顺手清空目录�
 | [`docs/TECHNICAL.md`](docs/TECHNICAL.md) | 技术栈、项目结构、环境要求、主要实现思路、桌面版配置 |
 | [`docs/BUILD.md`](docs/BUILD.md) | 编译 APK、签名、「clone 后跑不起来」的排查清单 |
 | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | 改代码与写测试的注意事项 |
-| [`bd2-local-viewer/ARCHITECTURE.md`](bd2-local-viewer/ARCHITECTURE.md) | ★ 分层调用链 + 18 条不变量，**改代码前先看** |
+| [`bd2-local-viewer/ARCHITECTURE.md`](bd2-local-viewer/ARCHITECTURE.md) | ★ 分层调用链 + 22 条不变量，**改代码前先看** |
 | [`docs/KNOWN-ISSUES.md`](docs/KNOWN-ISSUES.md) | 已知而未处理的问题 |
 | [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) | 第三方许可（Spine 许可要求它随分发走） |

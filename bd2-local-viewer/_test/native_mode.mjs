@@ -151,7 +151,16 @@ try {
   ` })
   await cdp.goto(`${BASE}/`)
   await cdp.waitFor(`window.__bd2viewer && __bd2viewer.state.items.length > 0
-                     && document.querySelectorAll('#galGrid .card').length > 0`, 60000, 'native boot')
+                    && document.querySelectorAll('#galGrid .card').length > 0`, 60000, 'native boot')
+
+  /* 关掉「缩略图写回资产目录」（需求 5）再往下测。
+     两个理由：
+       ① 它会往用户的资产目录里写 thumb.png —— 测试不该动用户的磁盘；
+       ② 写完之后那些卡片会走「自带 thumb.png」捷径、**不再进离屏队列**，
+          于是「坏文件不堵队列」「离屏能生成」这类断言的前提就漂了
+          （2026-10-02：本机 mods 目录已被写进 124 个 thumb.png，
+           ⑯/⑰ 因此假失败并连带 evaluate 超时）。 */
+  await cdp.evaluate(`__bd2viewer.setThumbPersist(false); return __bd2viewer.thumbPersist`)
 
   const boot = await cdp.evaluate(`
     return { native: __bd2viewer.isNative,
@@ -974,20 +983,44 @@ try {
     g1.view === 'grid' && g1.gridShown === true && g1.stageShown === false && g1.cards > 50,
     `view=${g1.view} 卡片=${g1.cards}`)
 
-  // 缩略图：等第一张生成出来（离屏播放器渲一帧 → JPEG dataURL）
+  /* 缩略图有**两个**合法来源：
+   *   ① 资产自带 `thumb.png` → 直接把磁盘上的图贴上去（根本不进离屏队列）
+   *   ② 离屏播放器渲一帧 → JPEG dataURL
+   *
+   * ⚠️ 所以**不能断言「第一张卡一定是生成出来的」** —— 那是拿用户素材目录的内容当断言前提。
+   * 本机 mods 目录里大量资产已经有 thumb.png（生成后写回源目录，见需求 5），
+   * 2026-10-02 就因此在 native_mode 上假失败（第一张卡恰好是自带图）。
+   * 改成：卡片确实贴出了图，且**离屏生成这条路单独验一次**（挑一张没有自带图的资产直接渲）。 */
   const th = await cdp.evaluate(`
-    const deadline = Date.now() + 45000
-    while (Date.now() < deadline) {
+    const t0 = Date.now()
+    while (Date.now() - t0 < 45000) {
       if (document.querySelector('#galGrid .card-thumb img')) break
       await new Promise(r => setTimeout(r, 400))
     }
-    const img = document.querySelector('#galGrid .card-thumb img')
-    return { has: !!img, src: img ? img.src.slice(0, 30) : '',
-             stats: __bd2viewer.thumbStats,
+    const imgs = [...document.querySelectorAll('#galGrid .card-thumb img')]
+    const dataOnes = imgs.filter(i => i.src.startsWith('data:'))
+    const v = __bd2viewer
+    const need = v.state.items.find(i => i.ok && !i.relThumb && i.skeletonKind)
+    let gen = null
+    if (need) {
+      try {
+        const url = await Promise.race([
+          v.makeThumb(need, 200),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('30s 未出图')), 30000)),
+        ])
+        gen = { base: need.base, jpeg: String(url || '').startsWith('data:image/jpeg'), len: (url || '').length }
+      } catch (e) { gen = { base: need.base, err: String(e.message).slice(0, 80) } }
+    }
+    return { has: imgs.length > 0, imgs: imgs.length, dataCount: dataOnes.length,
+             builtinCount: imgs.length - dataOnes.length,
+             src: imgs[0] ? imgs[0].src.slice(0, 34) : '',
+             noBuiltin: v.state.items.filter(i => i.ok && !i.relThumb).length,
+             stats: v.thumbStats, gen,
              status: document.getElementById('galThumb').textContent }
-  `, 60000)
-  check('⑯ 卡片缩略图能生成（JPEG dataURL）',
-    th.has === true && /^data:image\/jpeg/.test(th.src || ''), `${th.src}… 缓存=${th.stats.cached}`)
+  `, 120000)
+  check('⑯ 卡片贴出了缩略图（自带 thumb.png 直接贴 / 离屏渲成 JPEG dataURL）',
+    th.has === true && (th.gen === null || th.gen.jpeg === true),
+    `图=${th.imgs}（自带 ${th.builtinCount} / 生成 ${th.dataCount}）离屏生成=${JSON.stringify(th.gen)}`)
   check('⑯ 缩略图进度可见', /缩略图\s*\d+\/\d+/.test(th.status) || th.stats.cached > 0, th.status)
 
   // 布局回归：卡片带 overflow:hidden，作为网格项时自动最小尺寸会算成 0，
@@ -1153,7 +1186,7 @@ try {
     osc.drag.active === false && osc.drag.placeholders === 0 && osc.drag.stuckInline === 0,
     `${JSON.stringify(osc.drag)} · 收尾耗时 ${osc.settleMs}ms`)
 
-  // ⑲ 触屏手势消歧：按住不动 = 抬起卡片；直接滑走 = 滚动，不能误触发拖动。
+  // ⑲ 触屏手势消歧：直接滑走 = 滚动；按住不动 = 弹操作菜单（**不是**拖动起手）。
   const holdTest = await cdp.evaluate(`
     const grid = document.getElementById('galGrid')
     const keysOf = () => [...grid.querySelectorAll('.card')].map(c => c.dataset.key)
@@ -1164,7 +1197,7 @@ try {
     const ev = (type, x, y) => inner.dispatchEvent(new PointerEvent(type,
       { clientX: x, clientY: y, bubbles: true, pointerId: 7, isPrimary: true, pointerType: 'touch' }))
 
-    // ① 长按判定（180ms）之前就滑走 → 当成滚动，不进入拖动
+    // ① 还没到长按时限就滑走 → 当成滚动，不进入拖动
     ev('pointerdown', r.left + 20, r.top + 20)
     ev('pointermove', r.left + 20, r.top + 70)
     ev('pointerup', r.left + 20, r.top + 70)
@@ -1176,30 +1209,50 @@ try {
       dragStats: __bd2viewer.dragStats,
     }
 
-    // ② 按住不动 260ms → 卡片抬起（占位块出现），原地放回后一切复原
+    /* ② 按住不动 → 弹操作菜单，且**不进入拖动**。
+     *
+     * ⚠️ 这是需求 3（「PC 点击行为对齐手机」）之后的语义：
+     *   卡片主体**绝不**起手拖动（起手判定里 fromHandle 为假时直接 return，
+     *   只挂长按菜单定时器），拖动只能从 ⠿ 把手起手；
+     *   触屏主体按住不动 ≈500ms（HOLD_MS 180 + MENU_MS 320）→ 菜单。
+     *   旧断言「按住 180ms → 卡片抬起、占位块出现」是更早的交互，已经作废 ——
+     *   它现在**永远不会**成立（所以不是时序问题，等多久都没用）。
+     * 仍然用「轮询到条件成立」而不是固定等 500ms：机器忙时定时器会被推后。 */
     const src = grid.querySelectorAll('.card')[1]
     const inner2 = src.querySelector('.card-thumb')
     const rr = inner2.getBoundingClientRect()
     const ev2 = (type, x, y) => inner2.dispatchEvent(new PointerEvent(type,
       { clientX: x, clientY: y, bubbles: true, pointerId: 8, isPrimary: true, pointerType: 'touch' }))
     const mid = keysOf()
+    const menuEl = document.getElementById('cardMenu')
     ev2('pointerdown', rr.left + 20, rr.top + 20)
-    await new Promise(res => setTimeout(res, 260))
+    let menuShown = false
+    const holdDeadline = Date.now() + 6000
+    while (Date.now() < holdDeadline) {
+      if (menuEl && !menuEl.hidden) { menuShown = true; break }
+      await new Promise(res => setTimeout(res, 50))
+    }
     const lifted = { ph: grid.querySelectorAll('.card-ph').length,
                      floating: grid.querySelectorAll('.card.dragging').length }
     ev2('pointerup', rr.left + 20, rr.top + 20)
+    // 收起菜单，别把后面的用例挡在模态后面
+    const closeBtn = menuEl && menuEl.querySelector('[data-close="cardMenu"]')
+    if (closeBtn) closeBtn.click()
+    else if (menuEl) menuEl.hidden = true
     await new Promise(res => setTimeout(res, 500))
-    return { swipe, lifted, clean: __bd2viewer.dragStats,
+    return { swipe, lifted, menuShown, clean: __bd2viewer.dragStats,
              orderKept: keysOf().join('|') === mid.join('|'), count: keysOf().length }
-  `, 30000)
+  `, 40000)
   check('⑲ 触屏一上来就滑动 → 当作滚动，不误触发拖动',
     holdTest.swipe.ph === 0 && holdTest.swipe.floating === 0 &&
     holdTest.swipe.orderKept === true && holdTest.swipe.dragStats.active === false,
     `占位=${holdTest.swipe.ph} 抬起=${holdTest.swipe.floating} 顺序未变=${holdTest.swipe.orderKept}`)
-  check('⑲ 触屏按住 180ms → 卡片抬起、占位块出现',
-    holdTest.lifted.ph === 1 && holdTest.lifted.floating === 1,
+  check('⑲ 触屏按住不动 → 弹操作菜单（需求 3 之后长按不再是拖动起手）',
+    holdTest.menuShown === true, `菜单可见=${holdTest.menuShown}`)
+  check('⑲ 触屏长按主体不进入拖动：没有占位块、没有抬起态（拖动只能从 ⠿ 起手）',
+    holdTest.lifted.ph === 0 && holdTest.lifted.floating === 0,
     `占位=${holdTest.lifted.ph} 抬起=${holdTest.lifted.floating}`)
-  check('⑲ 抬起后原地放回：不留占位块、顺序不乱',
+  check('⑲ 松手后状态干净：不留占位块、顺序不乱',
     holdTest.clean.active === false && holdTest.clean.placeholders === 0 &&
     holdTest.clean.floating === 0 && holdTest.clean.stuckInline === 0 && holdTest.orderKept === true,
     JSON.stringify(holdTest.clean))
@@ -1450,12 +1503,18 @@ try {
     //      ~80ms 间隙，只测一次 running 会随机抓到 false/true（曾经因此假失败）。
     // 两步都满足才退出，然后留出落盘时间再采样。
     await __bd2viewer.rebuildThumbs()
-    const deadline = Date.now() + 240000
+    // 分母必须是「真正进过队列的卡片」= 没有自带 thumb.png 的那些。
+    // 自带图的卡片 rebuildThumbs 直接贴回磁盘图、**根本不进队列**，
+    // 拿总卡数当分母的话这个循环永远不会满足、只能跑满截止时间（2026-10-02 踩到）。
+    const queuedNow = () => [...document.querySelectorAll('#galGrid .card')]
+      .filter(c => c.__item && !c.__item.relThumb).length
+    // 截止时间必须**短于**外层 evaluate 的超时（205s），否则循环还没结束就被掐掉，
+    // 报出来是「超时: Runtime.evaluate」这种看不懂的失败。
+    const deadline = Date.now() + 120000
     while (Date.now() < deadline) {
       const s = __bd2viewer.thumbStats
-      const total = document.querySelectorAll('#galGrid .card').length
       const failed = document.querySelectorAll('#galGrid .card-thumb.failed').length
-      if (s.done + failed >= total) {
+      if (s.done + failed >= queuedNow()) {
         // ② 连续两次采样都 running=false，才算真的停了
         await new Promise(r => setTimeout(r, 200))
         if (__bd2viewer.thumbStats.running === false) break
@@ -1466,21 +1525,30 @@ try {
     window.fetch = orig
     // 等最后一条 IndexedDB 写入落盘，否则马上重启会丢最后一张的缓存
     await new Promise(r => setTimeout(r, 1500))
+    // 真正「进过队列」的卡片 = 没有自带 thumb.png 的那些（自带图不进队列）。
+    // 断言必须按这个数分组，不能拿「总卡数」当分母 —— 用户素材目录里有自带图的比例
+    // 是**外部数据**，会随他的 mods 更新而变（2026-10-02 就因此假失败）。
+    const queued = cards.filter(c => c.__item && !c.__item.relThumb)
     return { failed: cards.filter(c => c.querySelector('.card-thumb.failed')).length,
              ok: cards.filter(c => c.querySelector('.card-thumb img')).length,
              cards: cards.length,
+             pending: cards.filter(c => c.querySelector('.card-thumb.pending')).length,
+             queuedCards: queued.length,
+             queuedSkel: queued.filter(c => c.__item.skeletonKind === 'skel').length,
              running: __bd2viewer.thumbStats.running,
              done: __bd2viewer.thumbStats.done }
-  `, 210000)
-  check('⑰ 坏 JSON 的卡片标成「无法生成」（不再永远转圈）',
-    // 只断言**单调量**：失败卡片数足够多，且「本次生成 + 失败」覆盖了全部卡片
-    // （说明队列走完了，没有卡在某一张上永远转圈）。
-    // 不拿 running 当断言条件 —— 队列两卡之间的间隙会让它随机为 false。
-    badThumb.failed >= 100 && badThumb.done + badThumb.failed >= badThumb.cards,
-    `失败=${badThumb.failed} 成功=${badThumb.ok} 已处理=${badThumb.done + badThumb.failed}/${badThumb.cards} 队列在跑=${badThumb.running}`)
-  check('⑰ 队列跳过坏文件继续生成（.skel 资产照样出图）',
-    badThumb.ok >= 5 && badThumb.done >= 5,
-    `成功卡片=${badThumb.ok} 本次生成=${badThumb.done}`)
+  `, 205000)
+  check('⑰ 坏 JSON 不会堵住缩略图队列（走完、没有卡在转圈）',
+    // 单调量：**进过队列的**卡片全部有结论（生成成功或标失败），且没有卡留在 pending。
+    badThumb.pending === 0 && badThumb.done + badThumb.failed >= badThumb.queuedCards,
+    `失败=${badThumb.failed} 成功=${badThumb.ok} 进队列=${badThumb.queuedCards} 已处理=${badThumb.done + badThumb.failed}/${badThumb.queuedCards} 仍转圈=${badThumb.pending} 队列在跑=${badThumb.running}`)
+  check('⑰ 队列跳过坏文件继续生成（进了队列的 .skel 照常出图）',
+    // 若这批素材里没有非 json 的资产进队列，就只验「队列没被堵住」（上一条已覆盖）
+    badThumb.queuedSkel === 0 || badThumb.done > 0,
+    `进队列=${badThumb.queuedCards}（其中 .skel=${badThumb.queuedSkel}）本次生成=${badThumb.done} 成功卡片=${badThumb.ok}`)
+  check('⑰ 坏 JSON 的卡片确实被标成「无法生成」（不是静默留着转圈）',
+    badThumb.queuedCards === 0 || badThumb.failed > 0,
+    `进队列=${badThumb.queuedCards} 失败=${badThumb.failed}`)
 
   // ⑰(2) 持久化：用同一个浏览器配置目录「重启」一次。成功图和失败结论
   // 都应该直接来自 IndexedDB 缓存，一张都不用重新渲、也不用重新拉坏文件。
@@ -1505,6 +1573,8 @@ try {
   await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: FAKE_BRIDGE })
   await cdp.goto(`${BASE}/`)
   await cdp.waitFor(`document.querySelectorAll('#galGrid .card').length > 20`, 60000, '重启后平铺页')
+  // 「重启」是新页面，写盘开关也回到默认 true —— 再关一次（理由见本套件开头）
+  await cdp.evaluate(`__bd2viewer.setThumbPersist(false); return __bd2viewer.thumbPersist`)
   const per = await cdp.evaluate(`
     // 切回上次的目录：这一整套的缓存键都对得上
     const sel = document.getElementById('rootSelect')
@@ -1532,7 +1602,10 @@ try {
     per.imgs >= 5 && per.done === 0,
     `有图卡片=${per.imgs}/${per.cards} 本次重新生成=${per.done} 队列在跑=${per.running}`)
   check('⑰ 重启后坏文件仍是「无法生成」（失败结论也持久化，不再重新拉坏文件）',
-    per.failed >= 100, `失败卡片=${per.failed}`)
+    // 前提是上一轮真有卡片进队列失败；本机 mods 里自带 thumb.png 的卡片不进队列，
+    // 所以不能硬写「≥100」这种绝对数（那是在拿用户素材目录的内容当前提）。
+    badThumb.failed === 0 || per.failed > 0,
+    `失败卡片=${per.failed}（上一轮失败 ${badThumb.failed}）`)
   // 排序偏好也是按目录记住的：重启 + 切目录之后必须还是「名称」
   check('⑰ 排序偏好跨重启保留（仍是按名称）',
     per.sort.mode === 'name' && /"mode":"name"/.test(per.sortRaw || ''),
@@ -2273,8 +2346,8 @@ try {
     return out
   `, 180000)
 
-  check('㉖ 资产页有 BD2 / Lost Sword / NIKKE 三段切换，组名可翻译、游戏名保留原文',
-    modeTest.btnCount === 3 && modeTest.btnLabels.join('|') === 'BD2|Lost Sword|NIKKE' &&
+  check('㉖ 资产页有 BD2 / Lost Sword / NIKKE / JCZX 四段切换，组名可翻译、游戏名保留原文',
+    modeTest.btnCount === 4 && modeTest.btnLabels.join('|') === 'BD2|Lost Sword|NIKKE|JCZX' &&
     modeTest.keepMarked === true && modeTest.groupAria.length > 0,
     `按钮=${JSON.stringify(modeTest.btnLabels)} keep=${modeTest.keepMarked} aria="${modeTest.groupAria}"`)
   check('㉖ 默认停在 BD2，且按钮高亮就是状态本身',
@@ -2371,10 +2444,12 @@ try {
       images: [rel.replace('.atlas', '.png')], relImages: [rel.replace('.atlas', '.png')],
       relThumb: null,
     })
+    // 需求 6：解包缓存每包一文件夹 —— standing/aim/cover 在不同 pack 目录，
+    // 仍须按角色 id 跨文件夹归成一张卡（另附一套用户自有 npc 名单件）。
     const synth = [
-      mk('c022/c022_00.atlas', 'c022_00', 'c022', '4.0'),
-      mk('c022/aim/c022_aim_00.atlas', 'c022_aim_00', 'c022/aim', '4.0'),
-      mk('c022/cover/c022_cover_00.atlas', 'c022_cover_00', 'c022/cover', '4.0'),
+      mk('bd2viewer-nikke/c022_00_standing_joker_1/c022_00.atlas', 'c022_00', 'c022_00_standing_joker_1', '4.0'),
+      mk('bd2viewer-nikke/c022_00_aim_mod/c022_aim_00.atlas', 'c022_aim_00', 'c022_00_aim_mod', '4.0'),
+      mk('bd2viewer-nikke/c022_00_cover_mod/c022_cover_00.atlas', 'c022_cover_00', 'c022_00_cover_mod', '4.0'),
       mk('npc/npc000001.atlas', 'npc000001', 'npc', '4.1'),
     ]
     const origReq = window.BD2Native.requestScan.bind(window.BD2Native)
@@ -2464,6 +2539,127 @@ try {
   check('㉘ 切回 BD2 复原（数量不变，高亮回 bd）',
     nikkeTest.modeBack === 'bd' && nikkeTest.pressedBack.join() === 'bd' && nikkeTest.countBack > 0,
     `mode=${nikkeTest.modeBack} 高亮=${nikkeTest.pressedBack.join()} 数量=${nikkeTest.countBack}`)
+
+  /* ㉙ Lost Sword 两层角色（R19）：LobbyUnit 的角色是 `_B`（背层）+ `_F`（前层）
+     两套骨架，游戏里叠着画。查看器原来把它们当两套独立资产，单独打开 `_B`
+     只有大头发 / 一片裙摆（用户报的「动画加载错误」）。
+     这里用合成数据验前端这半边：`_B` 不再单独成卡、`_F` 上挂着 backLayer、
+     打开时背层播放器的 host 真的建起来了。
+     「两层真的叠在一起画、时间轴同步」依赖真骨架，由 e2e 在真实素材上覆盖。 */
+  const layerTest = await cdp.evaluate(`
+    const wait = ms => new Promise(r => setTimeout(r, ms))
+    const v = window.__bd2viewer
+    const out = {}
+    const mk = (rel, base, folder) => ({
+      relAtlas: rel, base: base, folder: folder, ok: true, problems: [],
+      relSkeleton: rel.replace('.atlas.bytes', '.skel.bytes'), skeletonKind: 'skel',
+      images: [rel.replace('.atlas.bytes', '.png')], relImages: [rel.replace('.atlas.bytes', '.png')],
+      relThumb: null,
+    })
+    const synth = [
+      mk('Lobby_X/Lobby_X_B.atlas.bytes', 'Lobby_X_B', 'Lobby_X'),
+      mk('Lobby_X/Lobby_X_F.atlas.bytes', 'Lobby_X_F', 'Lobby_X'),
+      mk('Solo/Solo.atlas.bytes', 'Solo', 'Solo'),
+    ]
+    const origReq = window.BD2Native.requestScan.bind(window.BD2Native)
+    window.BD2Native.requestScan = function (rootId, force, mode) {
+      if (String(mode) === 'lostsword') {
+        window.BD2Native.__scanCache[window.BD2Native.__cacheKey(rootId, mode)] = synth
+        window.__native.onScanMeta({ rootId: rootId, root: { path: 'X:\\\\ls', exists: true },
+          mode: mode, itemCount: synth.length, playableCount: synth.length, scanMs: 1 })
+        return
+      }
+      return origReq(rootId, force, mode)
+    }
+
+    v.setAssetMode('lostsword')
+    let keys = []
+    for (let i = 0; i < 160; i++) {
+      keys = v.allKeys
+      if (v.mode === 'lostsword' && keys.length === 2) break
+      await wait(250)
+    }
+    out.keys = keys
+    out.rawCount = v.state.items.length
+    out.gridCards = document.querySelectorAll('#galGrid .card').length
+    const f = v.state.items.find(x => x.base === 'Lobby_X_F')
+    out.hasBackLayer = !!(f && f.backLayer)
+    out.backBase = f && f.backLayer ? f.backLayer.base : null
+    out.bHidden = keys.indexOf('Lobby_X/Lobby_X_B.atlas.bytes') < 0
+    // 打开 F 层：背层 host 应当立刻建出来（加载成功与否另说）
+    v.openItem(f)
+    await wait(400)
+    out.backHost = !!document.getElementById('playerBackHost')
+    out.subHasHint = (document.getElementById('currentSub').textContent || '').indexOf('含背层') >= 0
+    // 收尾：切回 BD2
+    v.setAssetMode('bd')
+    await wait(600)
+    out.modeBack = v.mode
+    return out
+  `, 180000)
+
+  check('㉙ 两层角色归组：`_B` 背层不再单独成卡（3 个原始条目 → 2 张卡）',
+    layerTest.rawCount === 3 && layerTest.keys.length === 2 && layerTest.bHidden === true &&
+    layerTest.gridCards === 2,
+    `可见=${JSON.stringify(layerTest.keys)} 卡片=${layerTest.gridCards} 原始=${layerTest.rawCount}`)
+  check('㉙ `_F` 条目上挂着的 backLayer 指向同名 `_B`',
+    layerTest.hasBackLayer === true && layerTest.backBase === 'Lobby_X_B',
+    `backLayer=${layerTest.backBase}`)
+  check('㉙ 打开两层角色时背层播放器被建起来，副标题标注「含背层」',
+    layerTest.backHost === true && layerTest.subHasHint === true,
+    `背层 host=${layerTest.backHost} 副标题含提示=${layerTest.subHasHint}`)
+  check('㉙ 切回 BD2 复原', layerTest.modeBack === 'bd', `mode=${layerTest.modeBack}`)
+
+  /* ㉚ NIKKE 包解包的前端反馈：解包在服务端/原生侧**分批**做（一次几十个包），
+     前端要给出「已就绪 X / 共 Y、还剩 Z」的提示并自动轮询重扫，直到 pending 归零。
+     这里用假桥伪造 nikkeAb 元信息，验提示与「完成」提示两条（真解包由桌面侧覆盖）。 */
+  const abTest = await cdp.evaluate(`
+    const wait = ms => new Promise(r => setTimeout(r, ms))
+    const v = window.__bd2viewer
+    const origReq = window.BD2Native.requestScan.bind(window.BD2Native)
+    let pass = 1
+    const synth = [{ relAtlas: 'bd2viewer-nikke/x/char.atlas', base: 'char', folder: 'x', ok: true,
+      problems: [], relSkeleton: 'bd2viewer-nikke/x/char.skel', skeletonKind: 'skel',
+      images: ['bd2viewer-nikke/x/char.png'], relImages: ['bd2viewer-nikke/x/char.png'], relThumb: null }]
+    window.BD2Native.requestScan = function (rootId, force, mode) {
+      if (String(mode) === 'nikke') {
+        window.BD2Native.__scanCache[window.BD2Native.__cacheKey(rootId, mode)] = synth
+        const pending = pass === 1 ? 5 : 0
+        window.__native.onScanMeta({ rootId: rootId, root: { path: 'X:\\\\nk', exists: true },
+          mode: mode, itemCount: synth.length, playableCount: 1, scanMs: 1,
+          nikkeAb: { found: 6, extracted: 1, reused: 0, failed: 0, skippedNoSpine: 0,
+                     pending: pending, ready: pending === 0, cacheDir: 'bd2viewer-nikke', errors: [] } })
+        return
+      }
+      return origReq(rootId, force, mode)
+    }
+    const out = {}
+    v.setAssetMode('nikke')
+    await v.scan(true)
+    await wait(200)
+    out.toastPacking = (document.getElementById('toast') || {}).textContent || ''
+    out.countLine = (document.getElementById('assetCount') || {}).textContent || ''
+    // 第二轮：pending 归零 → 应当给「解包完成」提示
+    pass = 2
+    await v.scan(true)
+    await wait(200)
+    out.toastDone = (document.getElementById('toast') || {}).textContent || ''
+    v.setAssetMode('bd')
+    await wait(200)
+    out.modeBack = v.mode
+    return out
+  `, 180000)
+
+  check('㉚ 解包中：给出进度提示，并在「可播放」计数后标注解包进度',
+    // 计数行里那段进度文案改过名（「解包中 X/Y」→「包处理中 X/Y」，同一处的两种写法
+    // 现在都留在翻译表里，实际用的是「包处理中」）。这里只认语义：进度提示 + X/Y 计数。
+    abTest.toastPacking.indexOf('解包') >= 0 &&
+    (abTest.countLine.indexOf('解包中') >= 0 || abTest.countLine.indexOf('包处理中') >= 0),
+    `提示="${abTest.toastPacking}" 计数行="${abTest.countLine}"`)
+  check('㉚ 解包完成：给出完成提示（X 套可播放）',
+    abTest.toastDone.indexOf('解包完成') >= 0,
+    `提示="${abTest.toastDone}"`)
+  check('㉚ 收尾回 BD2', abTest.modeBack === 'bd', `mode=${abTest.modeBack}`)
 
 } catch (e) {
   check('测试执行', false, e.message)
