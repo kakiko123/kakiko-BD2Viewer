@@ -85,9 +85,37 @@ public final class JczxExtractor {
                 || l.endsWith(".md") || l.endsWith(".stamp.json") || l.equals(".extract_report.json")) {
             return false;
         }
-        // JCZX：prefabs_spine（可带 hash 前缀）；勿把 NIKKE 无扩展名包再入队
+        // 名字只是提示。无扩展名的 NIKKE 包不能因为没有后缀就入队。
+        // 真正入队看 looksLikeJczxPack：prefabs_spine（可带 hash 前缀）或双头 UnityFS。
         if (l.contains("prefabs_spine")) return true;
         if (l.endsWith(".ab") || l.endsWith(".unity3d") || l.endsWith(".bundle") || l.endsWith(".assets")) return true;
+        return false;
+    }
+
+    /**
+     * JCZX 包：名字含 prefabs_spine，或文件头 4KB 内有第二段 UnityFS。
+     * 单头 UnityFS（NIKKE 的无扩展名 mod）返回 false，避免两个模式互相扫到。
+     */
+    public static boolean looksLikeJczxPack(File f) {
+        if (f == null || !f.isFile() || f.length() < 16) return false;
+        String name = f.getName();
+        if (name.toLowerCase(Locale.ROOT).contains("prefabs_spine")) return fileLooksLikeUnityFs(f);
+        byte[] head = new byte[4096];
+        int nread;
+        try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
+            nread = in.read(head);
+        } catch (Exception e) {
+            return false;
+        }
+        if (nread < 8 || !UnityFs.looksLikeUnityFs(head)) return false;
+        byte[] magic = UnityFs.MAGIC;
+        for (int i = 1; i + magic.length <= nread; i++) {
+            boolean ok = true;
+            for (int k = 0; k < magic.length; k++) {
+                if (head[i + k] != magic[k]) { ok = false; break; }
+            }
+            if (ok) return true;
+        }
         return false;
     }
 
@@ -655,7 +683,11 @@ public final class JczxExtractor {
             if ("json".equals(k) || "skel".equals(k)) jsonOk = true;
             if ("png".equals(k)) pngOk = true;
         }
-        summary.put("ok", atlasOk && jsonOk && pngOk);
+        boolean cgName = src.getName().toLowerCase(java.util.Locale.ROOT).contains("_draw");
+        boolean imageOnly = pngOk && !atlasOk && !jsonOk && cgName;
+        summary.put("imageOnly", imageOnly);
+        // 立绘三件套，或静态 CG（包名带 _draw）。动画贴图包同样没有骨架，不当 CG。
+        summary.put("ok", (atlasOk && jsonOk && pngOk) || imageOnly);
         return summary;
     }
 
@@ -676,7 +708,12 @@ public final class JczxExtractor {
             if (n.endsWith(".atlas")) atlas = k;
             else if (n.endsWith(".json")) json = k;
             else if (n.endsWith(".skel") || n.endsWith(".skel.bytes")) skel = k;
-            else if (n.endsWith(".png")) png = k;
+            else if (n.endsWith(".png") && !"thumb.png".equals(n)) png = k;
+        }
+        if (atlas == null && json == null && skel == null) {
+            // 纯 CG：目录里只有一张像样的 png，且缓存名带来源包的 _draw
+            String dirName = cacheDir.getName().toLowerCase(Locale.ROOT);
+            return png != null && png.length() > 1024 && dirName.contains("_draw");
         }
         if (atlas == null || png == null) return false;
         // 骨架：JSON（JCZX 4.2）或二进制 .skel（NIKKE / 大部分 mod 包）都算数，
@@ -1036,7 +1073,7 @@ public final class JczxExtractor {
                     continue;
                 }
                 findBundles(f, depth + 1, maxDepth, out);
-            } else if (f.isFile() && isLikelyBundleName(n) && fileLooksLikeUnityFs(f)) {
+            } else if (f.isFile() && looksLikeJczxPack(f)) {
                 out.add(f);
             }
         }

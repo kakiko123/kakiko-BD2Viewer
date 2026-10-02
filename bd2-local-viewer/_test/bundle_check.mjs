@@ -167,7 +167,10 @@ try {
           },
           slots: { s: { color: [{ color: 'ffffff00' }] } },
           transform: { t: [{ time: 0, rotateMix: 0 }] },
-          deform: { default: { s: [{ time: 0, vertices: [] }] } },
+          deform: { default: { s: { mesh: [
+            { time: 0, vertices: [1, 2], curve: 0.25, c3: 0.75 },
+            { time: 1, vertices: [3, 4] },
+          ] } } },
         },
       },
     }
@@ -182,13 +185,19 @@ try {
       rotAngleGone: rot[0].angle === undefined,
       rotCurve: rot[0].curve,
       rotSecondNoCurve: rot[1].curve === undefined,
+      trCurve: tr[0].curve,
       trCurveLen: Array.isArray(tr[0].curve) ? tr[0].curve.length : -1,
       trCurveHalvesSame: Array.isArray(tr[0].curve) && tr[0].curve.length === 8 &&
         JSON.stringify(tr[0].curve.slice(0, 4)) === JSON.stringify(tr[0].curve.slice(4)),
       rgbaExists: !!a.slots.s.rgba, colorGone: a.slots.s.color === undefined,
       rgbaValue: a.slots.s.rgba ? a.slots.s.rgba[0].color : null,
       transformGone: a.transform === undefined,
+      mixRotate: a.transform && a.transform.t && a.transform.t[0] ? a.transform.t[0].mixRotate : null,
+      rotateMixGone: !(a.transform && a.transform.t && a.transform.t[0] && 'rotateMix' in a.transform.t[0]),
       deformGone: a.deform === undefined,
+      deformCurve: a.attachments && a.attachments.default && a.attachments.default.s
+        && a.attachments.default.s.mesh && a.attachments.default.s.mesh.deform
+        ? a.attachments.default.s.mesh.deform[0].curve : null,
       compactLeft: 'c2' in rot[0] || 'c3' in rot[0] || 'c4' in rot[0],
       not38: f(JSON.stringify({ skeleton: { spine: '4.1.20' }, animations: {} })),
       junk: f('{ not json'),
@@ -196,15 +205,20 @@ try {
   `)
   check('3.8 JSON 转换：旋转时间轴 angle → value，且不再残留 angle',
     cv.rotValue === 10 && cv.rotAngleGone === true, JSON.stringify(cv.rotCurve))
-  check('3.8 JSON 转换：1 分量时间轴的紧凑曲线 → [cx1,cy1,cx2,cy2]（ease-in-out 缺省规则）',
-    JSON.stringify(cv.rotCurve) === JSON.stringify([0.25, 0.25, 0.75, 0.75]),
+  check('3.8 JSON 转换：百分比曲线换成 4.x 绝对控制点（c2 缺省 0，c4 缺省 1）',
+    JSON.stringify(cv.rotCurve) === JSON.stringify([0.25, 10, 0.75, 20]),
     JSON.stringify(cv.rotCurve))
-  check('3.8 JSON 转换：2 分量时间轴要 8 个数（4.x 的 curve 按分量分槽）',
-    cv.trCurveLen === 8 && cv.trCurveHalvesSame === true, `len=${cv.trCurveLen}`)
+  check('3.8 JSON 转换：2 分量时间轴要 8 个绝对数，且两分量的值手柄不同',
+    cv.trCurveLen === 8 && cv.trCurveHalvesSame === false &&
+      JSON.stringify(cv.trCurve) === JSON.stringify([0.3, 1.8, 1, 3, 0.3, 2.8, 1, 4]),
+    JSON.stringify(cv.trCurve))
   check('3.8 JSON 转换：插槽颜色时间轴 color → rgba（值原样搬）',
     cv.rgbaExists === true && cv.colorGone === true && cv.rgbaValue === 'ffffff00')
-  check('3.8 JSON 转换：transform / deform 整段删掉（4.x 读法不同，硬搬更歪）',
-    cv.transformGone === true && cv.deformGone === true)
+  check('3.8 JSON 转换：transform 的 mix 改成 4.x 字段名，deform 挪到附件上',
+    cv.transformGone === false && cv.mixRotate === 0 && cv.rotateMixGone === true
+      && cv.deformGone === true
+      && JSON.stringify(cv.deformCurve) === JSON.stringify([0.25, 0, 0.75, 1]),
+    JSON.stringify({mix: cv.mixRotate, gone: cv.rotateMixGone, deform: cv.deformGone, curve: cv.deformCurve}))
   check('3.8 JSON 转换：不残留紧凑系数键（c2/c3/c4）', cv.compactLeft === false)
   check('3.8 JSON 转换：非 3.x 骨架与坏 JSON 都返回 null（调用方保持原样）',
     cv.not38 === null && cv.junk === null)

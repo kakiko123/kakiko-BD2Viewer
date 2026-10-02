@@ -1,8 +1,28 @@
 # Kakiko Viewer
 
-一个**本地**的多游戏 Spine（俗称 L2D）动画查看器（BD2 / Lost Sword / NIKKE / JCZX）。它扫描你硬盘 / 手机上的 Spine 资产目录，
+一个**本地**的多游戏 Spine（俗称 L2D）动画查看器（BD2 / Lost Sword / NIKKE / JCZX）。**对 JCZX 与 NIKKE 具备原生 UnityFS 解码**：游戏抽出的 AssetBundle / 整包 mod 可直接扫描解包（PC 用 UnityPy，安卓为纯 Java），无需外部工具。它扫描你硬盘 / 手机上的 Spine 资产目录，
 把 `.atlas` + `.json/.skel` + 贴图识别成一套套可播放的资产，然后播放、切动画、切皮肤、
 显隐图层、截图和导出。
+
+## 原生解码能力（JCZX / NIKKE）
+
+**不用先找外部解包工具 —— 游戏里抽出来的 UnityFS / AssetBundle，本查看器自己就能解。**
+
+| 游戏 | 喂什么进去 | 解出来什么 | PC（桌面版） | 安卓（APK） |
+|---|---|---|---|---|
+| **JCZX（交错战线）** | `prefabs_spine_*` / `.ab` 等**双 UnityFS AssetBundle** | 标准 Spine 三件套：`.atlas` + `.json`/`.skel` + `.png` | **Python + UnityPy**（首次扫描自动建 `.venv-jczx`） | **纯 Java** UnityFS 读取（strip + LZMA/LZ4 + 启发式导出），**不需要 Python、不需要联网** |
+| **NIKKE** | 无扩展名的**整包 mod 文件**（未加密 UnityFS） | 标准三件套，缓存到根目录旁 `bd2viewer-nikke/<pack>/` | **同一套 Python + UnityPy** | **纯 Java**（复用 JCZX 的 UnityFS / PNG 路径），同样免 Python |
+
+要点：
+
+- **两端都能原生解**：PC 走 UnityPy；手机端是内置 Java 解包器，装上 APK 就能扫。
+- **扫描时自动做**：切到对应资产档点「扫描」即可，界面有解包进度；已就绪的部分可以先看，不用等全部解完。
+- **产物落在你自己的目录里**，之后与普通 Spine 资产一样浏览、播放、切姿势（NIKKE）/ 播 CG（JCZX）。
+- 已知限制：少数 NIKKE 包贴图被压成 ASTC/ETC 时，**手机端解不出贴图**（会明确提示）——请在 PC 解包后把 `bd2viewer-nikke/` 拷过去。
+
+> 这是本项目相对「只认已经解好的 `.atlas`+骨架+贴图」类查看器的核心差异：
+> **JCZX 与 NIKKE 的 Unity 包可以直接丢进来。**
+
 
 支持多种资产命名约定，资产页右上角一键切换（详见 [§2.1](#21-桌面版)）：
 
@@ -58,6 +78,7 @@
 
 ## 目录
 
+0. [原生解码能力（JCZX / NIKKE）](#原生解码能力jczx--nikke)
 1. [快速开始](#1-快速开始)
 2. [怎么用](#2-怎么用)
 3. [下载 APK](#3-下载-apk)

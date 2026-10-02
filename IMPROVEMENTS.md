@@ -361,3 +361,21 @@ mods 目录被改动，可以：
 ### 改动面
 - `public/app.js` + `assets/web/app.js`（同源）
 - `nikke_ab_support.mjs`、`NikkeAbExtractor.java`
+
+## 2026-10-02 补丁：pc-viewer-playback（PC 播放页修复）
+
+叠在 `jczx-mode-cg` + `jczx-cg-draw-only` + `jczx-playback-thumbs` 之上，基线 commit `5ef1163`（v1.07/vc10）。
+`git apply --check` 空跑通过后应用，5 个文件：
+
+| 文件 | 作用 |
+|---|---|
+| `public/app.js` | JCZX 的 3.8.99 JSON 固定走 4.1（不再标 4.2，避开 `boneData cannot be null`）；二进制头按 Spine 长度前缀读版本（不再在 hash 字节里搜 `4.0.xx`）；NIKKE 解包缓存 `bd2viewer-nikke` 若被标 4.0 改用 4.1；错误日志缓冲 + 导出；拖卡片占位块消失的异常接住 |
+| `public/index.html` | 设置里新增「导出错误日志」按钮 |
+| `public/lib/spine-player.js`（4.1） | DataView 按字节偏移读；报错不外抛（只留在播放器错误层） |
+| `public/lib/spine-player-4.0.js` | 同上 |
+| `public/lib/spine-player-4.2.js` | JSON / blob 不再当二进制读 |
+
+冒烟：183 张卡、控制台零错误、导出按钮生成 `bd2viewer-error-log.txt`（blob 下载）。
+**未重编 APK** —— 用户提供的 `BD2Viewer-1.07-debug.apk`（2,430,914 B，vc10/v1.07）已含全部四份补丁 + 安卓侧修复
+（dex 内 `_draw`/`bd2viewer-nikke`/`NikkeAbExtractor` 均命中），体积比我上次那份 1,512,642 B 大是因为带 4 个 dex。
+注意该 APK 的 `index.html` 里有一行把默认模式写成 `jczx`（补丁说明明确「不要打进去」），那是 APK 侧有意为之，仓库里没有。

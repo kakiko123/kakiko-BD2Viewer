@@ -31,6 +31,8 @@ import {
   ensureJczxPython,   // 同一套「找 python / 装 venv」逻辑，NIKKE 复用
   looksLikeUnityFS,
   isJczxCacheDirName,
+  classifyBundleFile,
+  nameHintsJczx,
 } from './jczx_support.mjs'
 import {
   packFingerprint,
@@ -112,13 +114,13 @@ export async function findNikkeBundles(rootPath, maxDepth = 5) {
         continue
       }
       if (!e.isFile()) continue
-      // JCZX 包（prefabs_spine_*）留给 JCZX 档，避免 NIKKE 档列出解不开的 JCZX 资产
-      if (/^prefabs_spine_/i.test(e.name)) continue
+      // 交错战线包（双头 UnityFS / 名字含 prefabs_spine，含 hash 前缀）留给 JCZX 档。
+      // 只挡「以 prefabs_spine_ 开头」会把 `hash_prefabs_spine_*` 和双头 .ab 误收进 NIKKE。
+      if (nameHintsJczx(e.name)) continue
       if (!isNikkeBundleName(e.name)) continue
-      // 体积太小的多半不是资产包（NIKKE 的单套立绘包都在 MB 级）
       const st = await fsp.stat(abs).catch(() => null)
       if (!st || st.size < 16 * 1024) continue
-      if (!(await looksLikeUnityFS(abs))) continue
+      if ((await classifyBundleFile(abs)) !== 'nikke') continue
       out.push({ abs, rel: r, size: st.size, mtimeMs: st.mtimeMs })
     }
   }
@@ -176,8 +178,7 @@ export async function clearNikkeCacheForDeletedDir(rootPath, relDir) {
         continue
       }
       if (!e.isFile()) continue
-      if (!isNikkeBundleName(e.name)) continue
-      if (/^prefabs_spine_/i.test(e.name)) continue
+      if (!isNikkeBundleName(e.name) || nameHintsJczx(e.name)) continue
       packs.add(packFolderOf(rr))
       sourceRels.push(rr)
     }
@@ -187,7 +188,7 @@ export async function clearNikkeCacheForDeletedDir(rootPath, relDir) {
     const st = await fsp.stat(srcAbs)
     if (st.isFile()) {
       const name = path.basename(srcAbs)
-      if (isNikkeBundleName(name) && !/^prefabs_spine_/i.test(name)) {
+      if (isNikkeBundleName(name) && !nameHintsJczx(name)) {
         packs.add(packFolderOf(rel || name))
         sourceRels.push(rel || name)
       }

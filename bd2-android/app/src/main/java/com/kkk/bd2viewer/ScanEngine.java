@@ -1121,6 +1121,67 @@ public final class ScanEngine {
                 Log.w(TAG, "json: " + e.getMessage());
             }
         }
+        if (atlases.isEmpty() && MODE_JCZX.equals(mode)) emitCgStill(root, dirRel, byExt, out);
+    }
+
+    /** JCZX 纯 CG：缓存目录里只有 png、没有 atlas。 */
+    private static void emitCgStill(Root root, String dirRel,
+                                    Map<String, List<Entry>> byExt, JSONArray out) {
+        if (out.length() >= MAX_ITEMS) return;
+        if (dirRel == null) dirRel = "";
+        String rel = dirRel.replace('\\', '/');
+        boolean inCache = rel.equals("bd2viewer-jczx") || rel.startsWith("bd2viewer-jczx/")
+                || rel.contains("/bd2viewer-jczx/")
+                || rel.equals(".bd2viewer-jczx") || rel.startsWith(".bd2viewer-jczx/")
+                || rel.contains("/.bd2viewer-jczx/");
+        if (!inCache) return;
+        // 只要包名带 _draw 的静态 CG。动画贴图包没有骨架，不能进这里。
+        if (!rel.toLowerCase(Locale.ROOT).contains("_draw")) return;
+        List<Entry> pngs = new ArrayList<>();
+        for (String ext : IMG_EXT) {
+            for (Entry f : byExt.getOrDefault(ext, new ArrayList<>())) {
+                if (f == null || f.name == null) continue;
+                if (f.name.equalsIgnoreCase("thumb.png")) continue;
+                if (f.name.toLowerCase(Locale.ROOT).endsWith(".png")) pngs.add(f);
+            }
+        }
+        if (pngs.isEmpty()) return;
+        Entry first = pngs.get(0);
+        String relFirst = relOf(dirRel, first.name);
+        String rawFolder = folderOf(dirRel.isEmpty() ? root.path : dirRel, "根目录");
+        String pretty = rawFolder.replaceFirst("^[0-9a-fA-F]{10}_", "");
+        try {
+            JSONObject o = new JSONObject();
+            o.put("id", relFirst);
+            o.put("dir", dirRel.isEmpty() ? (root.path == null ? "/" : root.path) : dirRel);
+            o.put("group", relFirst.contains("/") ? relFirst.split("/")[0] : "（根目录）");
+            o.put("folder", pretty.isEmpty() ? rawFolder : pretty);
+            o.put("base", baseName(first.name));
+            o.put("atlas", JSONObject.NULL);
+            o.put("relAtlas", relFirst);
+            o.put("relSkeleton", JSONObject.NULL);
+            o.put("skeleton", JSONObject.NULL);
+            o.put("skeletonKind", JSONObject.NULL);
+            o.put("spineMinor", JSONObject.NULL);
+            o.put("imageOnly", true);
+            o.put("relThumb", JSONObject.NULL);
+            JSONArray im = new JSONArray();
+            JSONArray rim = new JSONArray();
+            for (Entry f : pngs) {
+                im.put(f.name);
+                rim.put(relOf(dirRel, f.name));
+                indexEntry(root, f, relOf(dirRel, f.name));
+            }
+            o.put("images", im);
+            o.put("relImages", rim);
+            o.put("missingImages", new JSONArray());
+            o.put("ok", true);
+            o.put("problems", new JSONArray());
+            o.put("mtime", mtimeOf(first));
+            out.put(o);
+        } catch (Exception e) {
+            Log.w(TAG, "cg json: " + e.getMessage());
+        }
     }
 
     private static void indexEntry(Root root, Entry e, String rel) {

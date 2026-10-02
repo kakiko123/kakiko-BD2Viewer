@@ -5869,7 +5869,7 @@ var spine42 = (() => {
       let parent = index >= 0 ? path.substring(0, index + 1) : "";
       path = this.start(path);
       if (this.reuseAssets(path, success, error)) return;
-      this.cache.assetsLoaded[path] = new Promise((resolve, reject) => {
+      const pendingAtlas = new Promise((resolve, reject) => {
         this.downloader.downloadText(path, (atlasText) => {
           try {
             const atlas = this.createTextureAtlas(path, atlasText);
@@ -5912,6 +5912,9 @@ var spine42 = (() => {
           reject(errorMsg);
         });
       });
+      // 没人 await 这份 promise。贴图失败时 reject 会变成关不掉的「脚本错误」红条。
+      pendingAtlas.catch(() => {});
+      this.cache.assetsLoaded[path] = pendingAtlas;
     }
     loadTextureAtlasButNoTextures(path, success = () => {
     }, error = () => {
@@ -6118,7 +6121,7 @@ var spine42 = (() => {
     downloadText(url, success, error) {
       if (this.start(url, success, error)) return;
       const rawDataUri = this.rawDataUris[url];
-      if (rawDataUri && !rawDataUri.includes(".")) {
+      if (rawDataUri && (rawDataUri.startsWith("data:") || !rawDataUri.includes("."))) {
         try {
           this.finish(url, 200, this.dataUriToString(rawDataUri));
         } catch (e) {
@@ -6144,7 +6147,7 @@ var spine42 = (() => {
     downloadBinary(url, success, error) {
       if (this.start(url, success, error)) return;
       const rawDataUri = this.rawDataUris[url];
-      if (rawDataUri && !rawDataUri.includes(".")) {
+      if (rawDataUri && (rawDataUri.startsWith("data:") || !rawDataUri.includes("."))) {
         try {
           this.finish(url, 200, this.dataUriToUint8Array(rawDataUri));
         } catch (e) {
@@ -9512,7 +9515,7 @@ var spine42 = (() => {
     }
   };
   var BinaryInput = class {
-    constructor(data, strings = new Array(), index = 0, buffer = new DataView(data instanceof ArrayBuffer ? data : data.buffer)) {
+    constructor(data, strings = new Array(), index = 0, buffer = new DataView(data instanceof ArrayBuffer ? data : data.buffer, data instanceof ArrayBuffer ? 0 : (data.byteOffset || 0), data instanceof ArrayBuffer ? data.byteLength : data.byteLength)) {
       this.strings = strings;
       this.index = index;
       this.buffer = buffer;
@@ -14340,7 +14343,8 @@ void main () {
         for (let path in config.rawDataURIs)
           this.assetManager.setRawDataURI(path, config.rawDataURIs[path]);
       }
-      if (config.skeleton.endsWith(".json"))
+      // blob: 地址不以 .json 结尾。只看后缀会把 JSON 当二进制读，SlotData 抛 boneData cannot be null。
+      if ((config.jsonUrl && !config.binaryUrl) || String(config.skeleton || "").split(/[?#]/)[0].endsWith(".json"))
         this.assetManager.loadJson(config.skeleton);
       else
         this.assetManager.loadBinary(config.skeleton);
@@ -14443,7 +14447,8 @@ void main () {
       let skeletonData;
       try {
         let loader, data, attachmentLoader = new AtlasAttachmentLoader(atlas);
-        if (config.skeleton.endsWith(".json")) {
+        // blob: 地址不以 .json 结尾。只看后缀会把 JSON 当二进制读，SlotData 抛 boneData cannot be null。
+        if ((config.jsonUrl && !config.binaryUrl) || String(config.skeleton || "").split(/[?#]/)[0].endsWith(".json")) {
           data = this.assetManager.remove(config.skeleton);
           if (!data) throw new Error("Empty JSON data.");
           if (config.jsonField) {
@@ -14979,18 +14984,13 @@ ${e.message}`, e);
       popup.show();
     }
     showError(message, error) {
-      if (this.error) {
-        if (error) throw error;
-      } else {
-        this.error = true;
-        this.dom.appendChild(createElement(
-          /*html*/
-          `<div class="spine-player-error" style="background:#000;color:#fff;position:absolute;top:0;width:100%;height:100%;display:flex;justify-content:center;align-items:center;overflow:auto;z-index:999">` + message.replace("\n", "<br><br>") + `</div>`
-        ));
-        if (this.config.error) this.config.error(this, message);
-        throw error ? error : new Error(message);
-        console.log(error);
-      }
+      if (this.error) return;
+      this.error = true;
+      this.dom.appendChild(createElement(
+        /*html*/
+        `<div class="spine-player-error" style="background:#000;color:#fff;position:absolute;top:0;width:100%;height:100%;display:flex;justify-content:center;align-items:center;overflow:auto;z-index:999">` + message.replace("\n", "<br><br>") + `</div>`
+      ));
+      if (this.config.error) this.config.error(this, message);
     }
   };
   var Popup = class {

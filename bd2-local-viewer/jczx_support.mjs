@@ -59,6 +59,8 @@ export function migrateLegacyJczxCache(rootPath) {
 const EXTRACT_PY = path.join(__dirname, '_tools', 'jczx_extract.py')
 const REQUIREMENTS = path.join(__dirname, '_tools', 'requirements-jczx.txt')
 const UNITYFS = Buffer.from('UnityFS\0')
+/** 双头 JCZX 包的第二段 UnityFS 落在文件头附近（实测 offset 83）。多读一点以免假头变长。 */
+const BUNDLE_SNIFF_BYTES = 4096
 const IS_WIN = process.platform === 'win32'
 
 /** bd2-local-viewer 目录；其父目录通常是仓库根 */
@@ -361,10 +363,51 @@ export function isJczxName(name) {
   if (!l || l.startsWith('.')) return false
   // 已是标准 Spine 件，不当 AB
   if (/\.(atlas|json|skel|png|jpg|jpeg|webp|bytes|txt|md)$/i.test(l)) return false
-  // JCZX 包名特征：prefabs_spine（可带 hash 前缀）；勿把 NIKKE 无扩展名包再入队
+  // 名字只是提示。真正入队还要看文件头（见 classifyBundleHead）：
+  // 无扩展名的 NIKKE 包不能因为「没有后缀」就被当成 JCZX。
   if (/prefabs_spine/i.test(name)) return true
   if (/\.(ab|unity3d|bundle|assets)$/i.test(l)) return true
   return false
+}
+
+/** 名字里带 prefabs_spine（可在中间，带 hash 前缀也算）就是交错战线包。 */
+export function nameHintsJczx(name) {
+  return /prefabs_spine/i.test(String(name || ''))
+}
+
+/**
+ * 读包头判断游戏。
+ * · JCZX：文件名含 prefabs_spine，或开头 4KB 里有第二段 UnityFS（双头 MIT 包）
+ * · NIKKE：只有一段 UnityFS，且名字不像 JCZX
+ * · 其它：null
+ * @param {Buffer} head
+ * @returns {'jczx'|'nikke'|null}
+ */
+export function classifyBundleHead(name, head) {
+  if (!head || head.length < 8 || !head.subarray(0, 8).equals(UNITYFS)) return null
+  if (nameHintsJczx(name)) return 'jczx'
+  if (head.indexOf(UNITYFS, 1) > 0) return 'jczx'
+  return 'nikke'
+}
+
+export async function readBundleHead(absPath, n = BUNDLE_SNIFF_BYTES) {
+  let fh
+  try {
+    fh = await fsp.open(absPath, 'r')
+    const buf = Buffer.alloc(n)
+    const { bytesRead } = await fh.read(buf, 0, n, 0)
+    return buf.subarray(0, bytesRead)
+  } catch {
+    return Buffer.alloc(0)
+  } finally {
+    if (fh) await fh.close().catch(() => {})
+  }
+}
+
+/** @returns {Promise<'jczx'|'nikke'|null>} */
+export async function classifyBundleFile(absPath) {
+  const head = await readBundleHead(absPath)
+  return classifyBundleHead(path.basename(absPath), head)
 }
 
 export async function looksLikeUnityFS(absPath) {
@@ -427,7 +470,7 @@ export async function clearJczxCacheForDeletedDir(rootPath, relDir) {
         continue
       }
       if (!e.isFile()) continue
-      if (!isJczxName(e.name)) continue
+      if ((await classifyBundleFile(abs)) !== 'jczx') continue
       consider(rr)
     }
   }
@@ -435,7 +478,7 @@ export async function clearJczxCacheForDeletedDir(rootPath, relDir) {
   try {
     const st = await fsp.stat(srcAbs)
     if (st.isFile()) {
-      if (isJczxName(path.basename(srcAbs))) consider(rel)
+      if ((await classifyBundleFile(srcAbs)) === 'jczx') consider(rel)
     } else if (st.isDirectory()) {
       await walk(srcAbs, rel)
     }
@@ -500,7 +543,7 @@ export async function ensureJczxExtracted(abAbs, rootPath, { python, autoSetup =
     try {
       const stamp = JSON.parse(await fsp.readFile(stampPath, 'utf8'))
       if (stamp.ok && stamp.size === st.size && stamp.mtimeMs === st.mtimeMs
-          && (await cacheHasSkeleton(cacheDir))) {
+          && (await cacheHasViewable(cacheDir, stamp))) {
         return { cacheDir, report: stamp.report || null, reused: true, setup: setupMeta }
       }
     } catch { /* re-extract */ }
@@ -558,8 +601,9 @@ export async function findJczxBundles(rootPath, maxDepth = 5) {
         continue
       }
       if (!ent.isFile()) continue
-      if (!isJczxName(ent.name)) continue
-      if (await looksLikeUnityFS(abs)) out.push(abs)
+      const kind = await classifyBundleFile(abs)
+      if (kind !== 'jczx') continue
+      out.push(abs)
     }
   }
   await walk(rootPath, 0)
@@ -819,8 +863,22 @@ async function stampLooksReusable(abAbs, rootPath) {
     // 光 stamp 说 ok 不够：早期版本只认 JSON 骨架，二进制 `.skel` 被当「其它 TextAsset」
     // 丢掉了 —— 那些缓存 stamp.ok=true 但目录里根本没有骨架，必须重解。
     // （与安卓侧 JczxExtractor.outputsComplete 同一条判据。）
-    return await cacheHasSkeleton(cacheDir)
+    return await cacheHasViewable(cacheDir, stamp)
   } catch { return false }
+}
+
+/** 缓存里有骨架，或是已标记的纯 CG（只有 png）。 */
+export async function cacheHasViewable(cacheDir, stamp) {
+  if (await cacheHasSkeleton(cacheDir)) return true
+  const imageOnly = !!(stamp && stamp.report && stamp.report.imageOnly)
+  if (!imageOnly) return false
+  try {
+    for (const name of await fsp.readdir(cacheDir)) {
+      if (name.startsWith('.')) continue
+      if (name.toLowerCase().endsWith('.png') && name.toLowerCase() !== 'thumb.png') return true
+    }
+  } catch { /* ignore */ }
+  return false
 }
 
 /** 缓存目录里是不是真有骨架文件（.skel 或 .json，排除点开头的 meta）。 */

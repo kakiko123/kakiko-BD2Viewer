@@ -439,6 +439,10 @@
         <span class="lbl" data-i18n="导出帧率">导出帧率</span>
         <input type="number" id="setFps" class="text-input tiny-input" value="60" min="1" max="120" step="1">
       </div>
+      <div class="row">
+        <button type="button" class="btn" id="btnExportLog" data-i18n="导出错误日志">导出错误日志</button>
+      </div>
+      <div class="muted small" data-i18n="把这次打开期间的载入和解包错误存成 bd2viewer-error-log.txt。">把这次打开期间的载入和解包错误存成 bd2viewer-error-log.txt。</div>
       <div class="muted small" id="envInfo"></div>
     </div>
     <div class="modal-foot">
@@ -548,6 +552,7 @@
       <div class="menu-path" id="cardMenuPath" hidden></div>
       <button type="button" class="btn block" id="cardMenuCopyDir" data-i18n="复制文件夹路径">复制文件夹路径</button>
       <button type="button" class="btn block" id="cardMenuCopyFile" data-i18n="复制图集文件路径">复制图集文件路径</button>
+      <button type="button" class="btn block" id="cardMenuRebuildThumb" data-i18n="重建这张缩略图">重建这张缩略图</button>
       <button type="button" class="btn block danger" id="cardMenuDelete" data-i18n="删除这个资产">删除这个资产</button>
       <!-- 已移除「删除这个文件夹」整夹删盘 UX；移除根路径请用顶栏「删除这个文件路径」 -->
       <button type="button" class="btn block" id="cardMenuSelect" data-i18n="批量选择…">批量选择…</button>

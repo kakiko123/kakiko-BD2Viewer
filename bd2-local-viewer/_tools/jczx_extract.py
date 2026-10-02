@@ -198,7 +198,14 @@ def extract(src: Path, out_dir: Path) -> dict:
     json_ok = any(x["kind"] == "json" for x in summary["exported"])
     skel_ok = any(x["kind"] == "skel" for x in summary["exported"])
     png_ok = any(x["kind"] == "png" for x in summary["exported"])
-    summary["ok"] = bool(atlas_ok and (json_ok or skel_ok) and png_ok)
+    # 立绘三件套；或静态 CG。动画图集也常常是「只有 Texture2D」的包
+    # （骨架在 prefabs_spine_* 里），不能一律当 CG。静态立绘包名带 _draw
+    # （textures_bigs_*_draw / *_draw_face）。
+    cg_name = "_draw" in src.name.lower()
+    spine_ok = atlas_ok and (json_ok or skel_ok) and png_ok
+    image_only = png_ok and not atlas_ok and not json_ok and not skel_ok and cg_name
+    summary["imageOnly"] = image_only
+    summary["ok"] = bool(spine_ok or image_only)
     return summary
 
 

@@ -1007,8 +1007,8 @@ public final class NikkeAbExtractor {
                 findBundles(f, depth + 1, out);
                 continue;
             }
-            // JCZX 包名（prefabs_spine_*）交给 JCZX 档，不在 NIKKE 队列里解
-            if (n.regionMatches(true, 0, "prefabs_spine_", 0, "prefabs_spine_".length())) continue;
+            // 交错战线（双头 / prefabs_spine，含 hash 前缀）留给 JCZX 档
+            if (JczxExtractor.looksLikeJczxPack(f)) continue;
             if (!isLikelyBundleName(n)) continue;
             if (!fileLooksLikeUnityFs(f)) continue;
             out.add(f);
@@ -1144,7 +1144,7 @@ public final class NikkeAbExtractor {
         if (node == null || !node.exists()) return;
         if (node.isFile()) {
             String name = node.getName();
-            if (isLikelyBundleName(name) && !name.toLowerCase(Locale.ROOT).startsWith("prefabs_spine_")) {
+            if (isLikelyBundleName(name) && !name.toLowerCase(Locale.ROOT).contains("prefabs_spine")) {
                 packs.add(packFolderOf(rel.isEmpty() ? name : rel));
                 sourceRels.add(rel.isEmpty() ? name : rel);
             }

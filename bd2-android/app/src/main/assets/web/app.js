@@ -153,6 +153,9 @@ const I18N_EN = {
   '全屏观看（音量键切动画）': 'Fullscreen (volume keys switch animation)',
   '快捷键': 'Shortcuts',
   '设置': 'Settings',
+  '导出错误日志': 'Export error log',
+  '把这次打开期间的载入和解包错误存成 bd2viewer-error-log.txt。': 'Saves load and unpack errors from this session as bd2viewer-error-log.txt.',
+  '已保存：': 'Saved: ',
 
   /* ---- 左栏：控制 ---- */
   '控制': 'Controls',
@@ -219,6 +222,9 @@ const I18N_EN = {
   '当前降序，点一下改升序': 'Currently descending — click for ascending',
   '重建缩略图': 'Rebuild Thumbnails',
   '删掉缓存，重新生成缩略图': 'Clear cache and regenerate thumbnails',
+  '重建这张缩略图': 'Rebuild this thumbnail',
+  '正在重建这张缩略图…': 'Rebuilding this thumbnail…',
+  '这张没有可重建的缩略图': 'This card has no thumbnail to rebuild',
   '选择': 'Select',
   '进入批量选择，可一次删除多个资产': 'Enter multi-select to delete several assets at once',
   '全选': 'Select All',
@@ -469,6 +475,13 @@ const I18N_EN = {
   '有 {n} 个文件没导入成功：{list}': '{n} file(s) failed to import: {list}',
   '已导入 {n} 个文件': '{n} file(s) imported',
   '正在提取 JCZX 资产…': 'Extracting JCZX assets…',
+  '正在提取资产…': 'Extracting assets…',
+  'CG · {n} 张': 'CG · {n}',
+  'CG {i}/{n}': 'CG {i}/{n}',
+  '提取完成，正在刷新列表…': 'Extract done, refreshing…',
+  '提取失败：{msg}': 'Extract failed: {msg}',
+  '两种包已分开：JCZX {j} 个，NIKKE {n} 个。用顶栏切换查看。':
+    'Split apart: {j} JCZX, {n} NIKKE. Switch modes in the top bar to view each.',
   'JCZX 提取完成，正在刷新列表…': 'JCZX extract done, refreshing…',
   'JCZX 提取失败：{msg}': 'JCZX extract failed: {msg}',
   '正在准备 JCZX 环境（首次需联网安装 UnityPy）…': 'Preparing JCZX env (first time needs network for UnityPy)…',
@@ -751,7 +764,42 @@ function dropTextDefault() {
 
 /* ------------------------------------------------------------------ 小工具 */
 
+const errorLog = []
+function logError(msg) {
+  const line = new Date().toISOString() + ' ' + String(msg == null ? '' : msg).replace(/\s+/g, ' ').slice(0, 2000)
+  errorLog.push(line)
+  if (errorLog.length > 300) errorLog.shift()
+}
+window.__bd2PushLog = logError
+
+function exportErrorLog() {
+  const lines = [
+    'BD2Viewer ' + (typeof APP_VERSION !== 'undefined' ? APP_VERSION : ''),
+    'mode=' + ((typeof S !== 'undefined' && S.mode) || ''),
+    'root=' + ((typeof S !== 'undefined' && S.rootId) || ''),
+    'ua=' + (navigator.userAgent || ''),
+    '',
+  ]
+  if (!errorLog.length) lines.push('(no errors recorded this session)')
+  else lines.push(...errorLog)
+  const text = lines.join('\n')
+  const name = 'bd2viewer-error-log.txt'
+  try {
+    if (NATIVE && window.BD2Native && window.BD2Native.saveErrorLog) {
+      const path = window.BD2Native.saveErrorLog(S.rootId || '', text)
+      if (path) return
+    }
+  } catch (e) {
+    logError('export native ' + e.message)
+  }
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }))
+  a.download = name
+  a.click()
+}
+
 function showError(msg) {
+  try { logError(msg) } catch { /* 日志本身不能再炸 */ }
   const box = $('errorBox')
   box.textContent = msg
   box.hidden = false
@@ -1348,6 +1396,10 @@ function updateVolumeKeyHints() {
 /** dir: +1 下一个动画，-1 上一个；到头循环。
  *  调用方：播放页画面两侧箭头、全屏底部 ◀▶、键盘 ↑↓ 与 [ ]、真机音量键。 */
 function switchAnimation(dir) {
+  if (S.current && S.current.imageOnly) {
+    cycleStillImage(dir)
+    return
+  }
   if (!S.animations.length) return
   const cur = currentAnimation()?.name
   let i = S.animations.indexOf(cur)
@@ -1944,6 +1996,11 @@ function handleJczxMeta(meta) {
     if (meta.setup.ok) toast(meta.setup.message)
     else toast(t('JCZX 环境未就绪：{msg}', { msg: meta.setup.message }))
   }
+  if (meta.errors && meta.errors.length) {
+    for (const e of meta.errors) {
+      logError('jczx ' + (e.rel || e.name || '') + ' ' + (e.error || e.err || JSON.stringify(e)))
+    }
+  }
   if (meta.errors && meta.errors.length && !jczxErrShown && !(meta.setup && meta.setup.message)) {
     jczxErrShown = true
     toast(t('JCZX 提取失败：{msg}', { msg: meta.errors[0].error || String(meta.errors.length) }))
@@ -2146,6 +2203,8 @@ function matchesAssetMode(item) {
     || rel.includes('/.bd2viewer-nikke/')
   if (S.mode === 'jczx') return isJczx || !!item.pendingUnpack
   if (isJczx) return false
+  // 名字里带 prefabs_spine 的是交错战线包（含 hash 前缀），其它档不展示
+  if (/prefabs_spine/i.test(rel)) return false
   if (S.mode !== 'nikke' && isNikkeCache) return false
   return true
 }
@@ -2281,8 +2340,9 @@ function nikkeViewFor() {
 
 /** 解包缓存里的条目（目录名与服务端 /ScanEngine 的常量保持一致）。 */
 function isNikkeCacheItem(it) {
-  const r = String(it.relAtlas || '')
+  const r = String(it && it.relAtlas || '')
   return r.startsWith('bd2viewer-nikke/') || r.includes('/bd2viewer-nikke/')
+    || r.startsWith('.bd2viewer-nikke/') || r.includes('/.bd2viewer-nikke/')
 }
 function isJczxCacheItem(it) {
   const r = String(it.relAtlas || '')
@@ -2665,8 +2725,29 @@ let thumbDone = 0
 // 生成后是否把缩略图写回资产目录（需求 5：源文件夹里放一个 thumb.png，重开不用重灌）。
 // 自动化测试必须关掉 —— 它会改用户磁盘，也会让「有多少资产需要生成」这个前提漂移。
 let thumbPersist = true
+// 用户点了「重建」的资产：即使测试关掉了自动落盘，也要覆盖目录里的 thumb.png。
+const thumbForceWrite = new Set()
 
-/** 缩略图缓存 key：同一套资产文件换了（mtime 变）就换 key，等于自动失效 */
+/** 丢掉一套资产在内存 / IndexedDB 里的缩略图，并忽略磁盘上已有的 thumb.png。 */
+function forgetThumb(item) {
+  if (!item) return
+  const prefix = thumbKeyPrefix(item)
+  for (const k of [...thumbCache.keys()]) {
+    if (typeof k === 'string' && k.startsWith(prefix)) {
+      thumbCache.delete(k)
+      idbDel(k)
+    }
+  }
+  for (const k of [...thumbFailed]) {
+    if (typeof k === 'string' && k.startsWith(prefix)) {
+      thumbFailed.delete(k)
+      idbDel(k)
+    }
+  }
+  thumbAsked.delete(thumbKey(item))
+  item.relThumb = null
+  thumbForceWrite.add(thumbKey(item))
+}
 function thumbKey(item) {
   return `${S.rootId || ''}|${itemKey(item)}|${item.mtime || 0}|${(item.images || []).length}`
 }
@@ -3477,7 +3558,9 @@ function galleryCard(item) {
   el.querySelector('.card-name').textContent = item.folder
   el.querySelector('.card-sub').textContent = item.pendingUnpack
     ? t('尚未解包')
-    : (item.base + (item.skeletonKind ? `.${item.skeletonKind}` : '') +
+    : item.imageOnly
+      ? t('CG · {n} 张', { n: (item.images || []).length })
+      : (item.base + (item.skeletonKind ? `.${item.skeletonKind}` : '') +
        t(' · {n} 图', { n: (item.images || []).length }))
 
   // 搜索命中的是**内部资源文件**（不是目录名 / 文件名）时，卡片上要说明一句，
@@ -3495,9 +3578,11 @@ function galleryCard(item) {
   // 有现成的就绝不进队列（以前缓存命中仍 observe，偶发会重渲）。
   const lookup = thumbCacheLookup(item)
   const builtin = builtinThumbUrl(item)
+  const stillUrl = item.imageOnly && item.relImages && item.relImages[0] ? assetUrl(item.relImages[0]) : null
   if (lookup && lookup.url) setCardThumb(thumb, lookup.url)
   else if (lookup && lookup.failed) setCardThumbFailed(thumb)
   else if (builtin) setCardThumb(thumb, builtin)
+  else if (stillUrl) setCardThumb(thumb, stillUrl)
 
   el.addEventListener('click', e => {
     // 拖动结束时浏览器补的那一下 click：只吃掉「被拖那张卡」在 700ms 内的这一下，
@@ -3530,7 +3615,7 @@ function galleryCard(item) {
   })
 
   // 已有缓存 / 失败标记 / 磁盘 thumb.png / 尚未解包占位：都不进离屏渲染队列
-  if (!item.pendingUnpack && !(lookup && (lookup.url || lookup.failed)) && !builtin) {
+  if (!item.pendingUnpack && !item.imageOnly && !(lookup && (lookup.url || lookup.failed)) && !builtin) {
     if (thumbObserver) thumbObserver.observe(el)
     else el.__wantThumb = true
   }
@@ -3643,6 +3728,8 @@ async function makeThumb(item, size = 220) {
   // 离屏播放器用到的 blob（3.x→4.x 转换产物）在本函数结束时回收 —— 缩略图队列
   // 和主播放器可能同时在跑，所以用局部数组，不碰主播放器那份。
   const thumbBlobs = []
+  attachNativeSkeleton(item, urls)
+  if (urls.__nativeBlob) thumbBlobs.push(urls.__nativeBlob)
   // ① 骨架 JSON 预校验（.skel 二进制骨架没有这一步，跳过）。
   //    3.x 的顺手转成 4.x 能读的形状，直接用转换结果建 blob URL（省一次下载）。
   const rawJsonUrl = urls.jsonUrl ||
@@ -3675,8 +3762,8 @@ async function makeThumb(item, size = 220) {
 
   const host = document.createElement('div')
   host.style.cssText =
-    `position:fixed;left:-10000px;top:0;width:${size}px;height:${Math.round(size * 0.72)}px;` +
-    'pointer-events:none;visibility:hidden'
+    `position:fixed;left:0;top:0;width:${size}px;height:${Math.round(size * 0.72)}px;` +
+    'pointer-events:none;opacity:0;z-index:-1'
   document.body.appendChild(host)
   let player = null
   let done = false
@@ -3814,7 +3901,8 @@ async function makeThumb(item, size = 220) {
     // 自动化测试必须关掉它（__bd2viewer.setThumbPersist(false)）—— 否则跑一次测试就在
     // 用户的 mods 目录里多出一堆 thumb.png（2026-10-02 实测：本机被写进 124 个），
     // 而且会改掉「有多少资产需要生成缩略图」这个前提，让测试自己把自己搞脆。
-    if (pngUrl && thumbPersist) {
+    if (pngUrl && (thumbPersist || thumbForceWrite.has(thumbKey(item)))) {
+      thumbForceWrite.delete(thumbKey(item))
       try { await persistThumbPng(item, pngUrl) } catch { /* ignore */ }
     }
     return url
@@ -4226,9 +4314,12 @@ function endCardDrag() {
   const endIndex = [...grid.children].filter(el => el !== card).indexOf(ph)
   const reordered = endIndex !== d.startIndex
 
-  // 复位到占位块那一格，然后按 FLIP 从「松手的位置」滑过去
-  grid.insertBefore(card, ph)
-  ph.remove()
+  // 复位到占位块那一格，然后按 FLIP 从「松手的位置」滑过去。
+  // 解包轮询会整表重画，占位块可能已经不在网格里，这时 insertBefore 会抛
+  // NotFoundError，顶上那条红字就是它。
+  if (ph.parentNode === grid) grid.insertBefore(card, ph)
+  else if (card.parentNode !== grid) grid.appendChild(card)
+  if (ph.parentNode) ph.remove()
   card.classList.remove('dragging')
   card.style.cssText = ''
   const to = card.getBoundingClientRect()
@@ -4285,24 +4376,33 @@ function commitCardOrder() {
   toast(t('播放顺序已保存（{n} 个）', { n: keys.length }))
 }
 
-/** 重建缩略图：清掉缓存，卡片重新排队 */
-async function rebuildThumbs() {
-  await idbClearThumbs()
-  thumbCache.clear()
-  thumbFailed.clear()
-  thumbAsked.clear()
-  thumbDone = 0
-  for (const c of document.querySelectorAll('#galGrid .card')) {
-    const box = c.querySelector('.card-thumb')
-    if (box) { box.innerHTML = ''; box.classList.remove('failed'); box.classList.add('pending') }
-    // 自带 thumb.png 的资产没有「缓存」这回事（图就在磁盘上），重新排队只会白开一次
-    // 离屏渲染器，还会顺带把好图换成渲出来的那张。直接摆回自带图。
-    const builtin = builtinThumbUrl(c.__item)
-    if (builtin) { setCardThumb(box, builtin); c.__wantThumb = false; continue }
-    c.__wantThumb = true
+/** 重建缩略图。不传 item = 当前网格里全部可播放资产，包括目录里已经有 thumb.png 的。
+ *  传 item = 只重建右键选中的那一张，并覆盖它的 thumb.png。 */
+async function rebuildThumbs(onlyItem) {
+  const onlyKey = onlyItem ? itemKey(onlyItem) : null
+  if (!onlyItem) {
+    await idbClearThumbs()
+    thumbCache.clear()
+    thumbFailed.clear()
+    thumbAsked.clear()
+    thumbDone = 0
   }
-  toast(t('正在重新生成缩略图…'))
-  thumbKick()
+  let queued = 0
+  for (const c of document.querySelectorAll('#galGrid .card')) {
+    const item = c.__item
+    if (onlyKey && (!item || itemKey(item) !== onlyKey)) continue
+    const box = c.querySelector('.card-thumb')
+    if (item && (item.imageOnly || item.pendingUnpack || !item.ok)) {
+      c.__wantThumb = false
+      continue
+    }
+    if (item) forgetThumb(item)
+    if (box) { box.innerHTML = ''; box.classList.remove('failed'); box.classList.add('pending') }
+    c.__wantThumb = true
+    queued++
+  }
+  toast(t(onlyItem ? '正在重建这张缩略图…' : '正在重新生成缩略图…'))
+  if (queued) thumbKick()
 }
 
 /* ------------------------------------------------------------------ 载入资产 */
@@ -4409,11 +4509,13 @@ function urlsForItem(item) {
  */
 
 /** 探测失败时按当前 mode / 条目来源选默认骨架世代。
- *  JCZX → 4.2；NIKKE 解包缓存（bd2viewer-nikke，UnityFS 抽出的是 4.1 二进制）→ 4.1；
- *  其余 NIKKE（标准导出）→ 4.0；其它 → 4.1。
- *  探测成功时仍以骨架头 / item.spineMinor 为准（见 spineMinorFor）。 */
+ *  JCZX 实测绝大多数是 3.8.99 JSON，转成 4.1 再播。默认若写成 4.2，
+ *  blob 地址不以 .json 结尾时会被 4.2 当二进制读，报 boneData cannot be null。
+ *  真正的 4.2 JSON 仍以文件里的 spine 字段为准。
+ *  NIKKE 解包缓存（bd2viewer-nikke，UnityFS 抽出的是 4.1 二进制）→ 4.1；
+ *  其余 NIKKE（标准导出）→ 4.0；其它 → 4.1。 */
 function modeDefaultSpineMinor(item) {
-  if (S.mode === 'jczx') return '4.2'
+  if (S.mode === 'jczx') return '4.1'
   if (S.mode === 'nikke') {
     // 解包缓存是 4.1；误用 4.0 运行时读 4.1 .skel → 动画列表空 →「这个骨架里没有任何动画」
     if (item && isNikkeCacheItem(item)) return '4.1'
@@ -4424,30 +4526,23 @@ function modeDefaultSpineMinor(item) {
 
 /* ------------------------------------------------------------------ 3.x JSON 兼容层
  *
- * Spine 的 JSON 格式在 3.8 → 4.0 之间变了几处，而 4.x 运行时读不出来的字段
- * **不会报错，只会变成 undefined → NaN**。表现很迷惑：骨架能载入、骨头/插槽数量都对、
- * 动画列表也正常，但取景算出 NaN，播放器抛 `Animation bounds are invalid: <动画名>`。
+ * Spine 3.8 与 4.x 的 JSON 不是同一套数。4.x 运行时读不到的字段不报错，只变成
+ * undefined → NaN，或者按默认值 1 把约束拉满。JCZX 这批骨架大多是 3.8.99。
  *
- * 实测（交错战线 3.8 CG 资产，455 骨 / 302 槽）：绑定姿势 100% 正常（0 根坏骨），
- * 只有「应用动画」之后 133 根骨头变 NaN —— 就是下面这几处字段差异。
- * JCZX 缓存里 135 个带骨架的目录有 131 个是 3.8 JSON，所以这层很关键。
+ * 骨骼会「运动错乱」的两处：
+ *   ① 贝塞尔。3.8 的 curve/c2/c3/c4 是 0–1 的百分比
+ *      （c2=cy1 缺省 0，c3=cx2 缺省 1，c4=cy2 缺省 1，见 Spine JSON 格式说明）。
+ *      4.x 的 curve 数组是绝对时间/绝对数值，而且按分量分槽
+ *      （readCurve 里 i = value << 2）。把 0.25 这种百分比直接塞进去，
+ *      控制点会落在关键帧时间之外，插值就把骨头甩飞。
+ *   ② 变换约束。3.8 叫 rotateMix/translateMix/scaleMix/shearMix，
+ *      4.x 叫 mixRotate/mixX/mixY/mixScaleX/mixScaleY/mixShearY。
+ *      对不上时 4.x 一律当 1。这份素材里大量约束的 mix 是 -1 或接近 0，
+ *      被当成 1 之后肩膀、头发、挂件会被拽到反方向。
  *
- * 差异清单：
- *   ① 旋转时间轴：3.8 用 "angle"，4.x 用 "value"
- *   ② 曲线写法：3.8 是「紧凑系数」（"curve" 是数字，其余系数散在 "c2"/"c3"/"c4"），
- *      4.x 要 "curve": [cx1,cy1,cx2,cy2]。缺省规则（实测推得：{"curve":0.25,"c3":0.75}
- *      → [.25,.25,.75,.75] 正是最常见的 ease-in-out）：cy1 缺省 = cx1、cy2 缺省 = cx2。
- *   ③ **4.x 的 curve 按分量分槽**（readCurve 里 `i = value << 2`）：2 分量时间轴
- *      （translate/scale/shear）要 8 个数、4 分量（rgba）要 16 个 —— 只给 4 个的话
- *      第 2 个分量读到 undefined，又变 NaN（这个坑踩过一次，表现为「转了一半还是坏」）。
- *   ④ 插槽颜色时间轴：3.8 叫 "color"，4.x 叫 "rgba"（值同为 8 位十六进制，原样搬）
- *
- * 明确不搬（4.x 读法/字段名不同，硬搬更歪，整段删掉让运行时用绑定姿势的取值）：
- *   · `transform`（变换约束）：3.8 字段是 rotateMix/translateMix/…，4.x 是
- *     mixRotate/mixX/…；名字对不上时 4.x 取默认值 1（混合拉满），比没有动画更歪。
- *   · `deform`（网格顶点变形）：3.8 挂在动画级，4.x 只认附件级。要正确搬家得逐帧
- *     解析「该插槽当时挂的是哪个附件」——代价大。表现为头发/布料的细微顶点摆动没有了，
- *     骨骼驱动的部分照常。
+ * 网格变形（deform）3.8 挂在动画根上，4.1 要挂到
+ * attachments[皮肤][插槽][网格].deform，曲线的 Y 是 0–1 的混合而不是顶点坐标。
+ * 丢掉的话眼睛、布料、脸的顶点动画会停在绑定姿势，看起来像动画坏了。
  *
  * 返回转换后的 JSON 文本；不是 3.x 骨架则返回 null（调用方保持原样）。
  */
@@ -4457,42 +4552,157 @@ function spineJson38to41(text) {
   const ver = (j.skeleton && j.skeleton.spine) || ''
   if (!/^3\./.test(ver)) return null
 
-  // 每条时间轴在 4.x 里占几个「曲线分量」（决定 curve 数组要几组 4 个数）
-  const COMP = {
-    bones: {
-      rotate: 1, translate: 2, translatex: 1, translatey: 1,
-      scale: 2, scalex: 1, scaley: 1, shear: 2, shearx: 1, sheary: 1,
-    },
-    slots: { rgba: 4, rgb: 3, rgba2: 7, alpha: 1, attachment: 0 },
-  }
-  // 一串关键帧：① angle→value ② 紧凑曲线 → 按分量展开的数组
-  const fixFrames = (tl, comp) => {
-    if (!Array.isArray(tl)) return
-    for (const kf of tl) {
+  const num = (v, d) => (typeof v === 'number' ? v : d)
+  const field = (key, d) => (kf) => num(kf[key], d)
+
+  // 百分比在删 c2/c3/c4 之前读出，再写成 4.x 的绝对 curve。每个 getter 是一个分量。
+  const convertCurves = (frames, getters) => {
+    if (!Array.isArray(frames)) return
+    for (const kf of frames) {
+      if (kf && kf.angle !== undefined && kf.value === undefined) {
+        kf.value = kf.angle
+        delete kf.angle
+      }
+    }
+    for (let i = 0; i < frames.length; i++) {
+      const kf = frames[i]
       if (!kf || typeof kf !== 'object') continue
       if (kf.angle !== undefined && kf.value === undefined) {
         kf.value = kf.angle
         delete kf.angle
       }
-      let base = null
       const c = kf.curve
-      if (typeof c === 'number') {
-        const cy1 = (kf.c2 !== undefined) ? kf.c2 : c
-        const cx2 = (kf.c3 !== undefined) ? kf.c3 : c
-        const cy2 = (kf.c4 !== undefined) ? kf.c4 : cx2
-        base = [c, cy1, cx2, cy2]
-      } else if (Array.isArray(c) && c.length) {
-        base = c.slice(0, 4)
-        while (base.length < 4) base.push(base[base.length - 1])
-      }
+      const c2 = kf.c2, c3 = kf.c3, c4 = kf.c4
       delete kf.c2; delete kf.c3; delete kf.c4
-      if (!base) continue
-      if (!comp) { delete kf.curve; continue }   // 分量未知 → 退化成线性（安全）
+      if (c == null || c === 'stepped') continue
+      const next = frames[i + 1]
+      if (!next || typeof next !== 'object' || !getters.length) {
+        delete kf.curve
+        continue
+      }
+      let cx1, cy1, cx2, cy2
+      if (typeof c === 'number') {
+        cx1 = c
+        cy1 = c2 !== undefined ? c2 : 0
+        cx2 = c3 !== undefined ? c3 : 1
+        cy2 = c4 !== undefined ? c4 : 1
+      } else if (Array.isArray(c) && c.length) {
+        cx1 = c[0]
+        cy1 = c.length > 1 ? c[1] : 0
+        cx2 = c.length > 2 ? c[2] : 1
+        cy2 = c.length > 3 ? c[3] : 1
+      } else {
+        delete kf.curve
+        continue
+      }
+      const t1 = num(kf.time, 0)
+      const t2 = num(next.time, 0)
+      const dt = t2 - t1
       const out = []
-      for (let i = 0; i < comp; i++) out.push(...base)
+      for (const get of getters) {
+        const v1 = get(kf)
+        const dv = get(next) - v1
+        out.push(t1 + cx1 * dt, v1 + cy1 * dv, t1 + cx2 * dt, v1 + cy2 * dv)
+      }
       kf.curve = out
     }
   }
+
+  // 4.1 的 DeformTimeline 只用一条曲线，Y 是 0–1，不是每个顶点一份。
+  const convertDeformCurves = (frames) => {
+    if (!Array.isArray(frames)) return
+    for (let i = 0; i < frames.length; i++) {
+      const kf = frames[i]
+      if (!kf || typeof kf !== 'object') continue
+      const c = kf.curve
+      const c2 = kf.c2, c3 = kf.c3, c4 = kf.c4
+      delete kf.c2; delete kf.c3; delete kf.c4
+      if (c == null || c === 'stepped') continue
+      const next = frames[i + 1]
+      if (!next || typeof next !== 'object') { delete kf.curve; continue }
+      let cx1, cy1, cx2, cy2
+      if (typeof c === 'number') {
+        cx1 = c
+        cy1 = c2 !== undefined ? c2 : 0
+        cx2 = c3 !== undefined ? c3 : 1
+        cy2 = c4 !== undefined ? c4 : 1
+      } else if (Array.isArray(c) && c.length) {
+        cx1 = c[0]
+        cy1 = c.length > 1 ? c[1] : 0
+        cx2 = c.length > 2 ? c[2] : 1
+        cy2 = c.length > 3 ? c[3] : 1
+      } else {
+        delete kf.curve
+        continue
+      }
+      const t1 = num(kf.time, 0)
+      const dt = num(next.time, 0) - t1
+      kf.curve = [t1 + cx1 * dt, cy1, t1 + cx2 * dt, cy2]
+    }
+  }
+
+  const hoistDeform = (anim) => {
+    const deform = anim.deform
+    if (!deform || typeof deform !== 'object') return
+    if (!anim.attachments || typeof anim.attachments !== 'object') anim.attachments = {}
+    for (const skin in deform) {
+      const slots = deform[skin]
+      if (!slots || typeof slots !== 'object') continue
+      if (!anim.attachments[skin]) anim.attachments[skin] = {}
+      for (const slot in slots) {
+        const meshes = slots[slot]
+        if (!meshes || typeof meshes !== 'object' || Array.isArray(meshes)) continue
+        if (!anim.attachments[skin][slot]) anim.attachments[skin][slot] = {}
+        for (const mesh in meshes) {
+          const frames = meshes[mesh]
+          if (!Array.isArray(frames)) continue
+          convertDeformCurves(frames)
+          const dest = anim.attachments[skin][slot][mesh]
+            || (anim.attachments[skin][slot][mesh] = {})
+          if (!dest.deform) dest.deform = frames
+        }
+      }
+    }
+    delete anim.deform
+  }
+
+  const hex4 = (s) => {
+    if (typeof s !== 'string' || s.length < 6) return [1, 1, 1, 1]
+    const h = s.charAt(0) === '#' ? s.slice(1) : s
+    const ch = (i) => {
+      const n = parseInt(h.substr(i, 2), 16)
+      return (Number.isFinite(n) ? n : 255) / 255
+    }
+    return [ch(0), ch(2), ch(4), h.length < 8 ? 1 : ch(6)]
+  }
+
+  // 3.8 的单个 mix 对应 4.x 拆开的一对。只在 4.x 名字还没写的时候填。
+  const liftMix = (obj) => {
+    if (!obj || typeof obj !== 'object') return
+    if (obj.mixRotate === undefined && obj.rotateMix !== undefined) obj.mixRotate = obj.rotateMix
+    if (obj.mixX === undefined && obj.translateMix !== undefined) obj.mixX = obj.translateMix
+    if (obj.mixY === undefined && obj.translateMix !== undefined) obj.mixY = obj.translateMix
+    if (obj.mixScaleX === undefined && obj.scaleMix !== undefined) obj.mixScaleX = obj.scaleMix
+    if (obj.mixScaleY === undefined && obj.scaleMix !== undefined) obj.mixScaleY = obj.scaleMix
+    if (obj.mixShearY === undefined && obj.shearMix !== undefined) obj.mixShearY = obj.shearMix
+    delete obj.rotateMix
+    delete obj.translateMix
+    delete obj.scaleMix
+    delete obj.shearMix
+  }
+
+  if (Array.isArray(j.transform)) {
+    for (const tc of j.transform) liftMix(tc)
+  }
+
+  const mixGetters = [
+    (kf) => num(kf.mixRotate, 1),
+    (kf) => num(kf.mixX, 1),
+    (kf) => (kf.mixY !== undefined ? kf.mixY : num(kf.mixX, 1)),
+    (kf) => num(kf.mixScaleX, 1),
+    (kf) => (kf.mixScaleY !== undefined ? kf.mixScaleY : num(kf.mixScaleX, 1)),
+    (kf) => num(kf.mixShearY, 1),
+  ]
 
   const anims = j.animations || {}
   for (const name in anims) {
@@ -4502,23 +4712,62 @@ function spineJson38to41(text) {
       for (const s in a.slots) {
         const ent = a.slots[s]
         if (!ent || typeof ent !== 'object') continue
-        if (ent.color && !ent.rgba) { ent.rgba = ent.color; delete ent.color }   // ④
-        for (const tn in ent) fixFrames(ent[tn], COMP.slots[tn] || 0)
+        if (ent.color && !ent.rgba) { ent.rgba = ent.color; delete ent.color }
+        if (ent.twoColor && !ent.rgba2) { ent.rgba2 = ent.twoColor; delete ent.twoColor }
+        for (const tn in ent) {
+          const frames = ent[tn]
+          if (tn === 'rgba') {
+            convertCurves(frames, [0, 1, 2, 3].map(i => (kf) => hex4(kf.color)[i]))
+          } else if (tn === 'rgb') {
+            convertCurves(frames, [0, 1, 2].map(i => (kf) => hex4(kf.color)[i]))
+          } else if (tn === 'alpha') {
+            convertCurves(frames, [field('value', 0)])
+          } else if (tn === 'rgba2') {
+            convertCurves(frames, [0, 1, 2, 3, 4, 5, 6].map(i => (kf) => {
+              const light = hex4(kf.light)
+              const dark = hex4(kf.dark)
+              return i < 4 ? light[i] : dark[i - 4]
+            }))
+          } else if (tn === 'attachment') {
+            if (Array.isArray(frames)) {
+              for (const kf of frames) {
+                if (kf && typeof kf.curve === 'number') delete kf.curve
+                if (kf) { delete kf.c2; delete kf.c3; delete kf.c4 }
+              }
+            }
+          } else {
+            convertCurves(frames, [])
+          }
+        }
       }
     }
     if (a.bones && typeof a.bones === 'object') {
       for (const b in a.bones) {
         const ent = a.bones[b]
         if (!ent || typeof ent !== 'object') continue
-        for (const tn in ent) fixFrames(ent[tn], COMP.bones[tn] || 0)
+        if (ent.rotate) convertCurves(ent.rotate, [field('value', 0)])
+        if (ent.translate) convertCurves(ent.translate, [field('x', 0), field('y', 0)])
+        if (ent.scale) convertCurves(ent.scale, [field('x', 1), field('y', 1)])
+        if (ent.shear) convertCurves(ent.shear, [field('x', 0), field('y', 0)])
+        if (ent.translatex) convertCurves(ent.translatex, [field('value', 0)])
+        if (ent.translatey) convertCurves(ent.translatey, [field('value', 0)])
+        if (ent.scalex) convertCurves(ent.scalex, [field('value', 1)])
+        if (ent.scaley) convertCurves(ent.scaley, [field('value', 1)])
+        if (ent.shearx) convertCurves(ent.shearx, [field('value', 0)])
+        if (ent.sheary) convertCurves(ent.sheary, [field('value', 0)])
       }
     }
-    // ik 是「约束名 → 关键帧数组」的直接形态，字段名（mix/softness/bendPositive）与 4.x 一致
     if (a.ik && typeof a.ik === 'object') {
-      for (const n in a.ik) fixFrames(a.ik[n], 2)
+      for (const n in a.ik) convertCurves(a.ik[n], [field('mix', 1), field('softness', 0)])
     }
-    delete a.transform
-    delete a.deform
+    if (a.transform && typeof a.transform === 'object') {
+      for (const n in a.transform) {
+        const frames = a.transform[n]
+        if (Array.isArray(frames)) for (const kf of frames) liftMix(kf)
+        convertCurves(frames, mixGetters)
+      }
+    }
+    hoistDeform(a)
   }
   return JSON.stringify(j)
 }
@@ -4540,11 +4789,16 @@ function dropSpineJsonBlobs() {
 async function spineJsonUrlFor(item, urls) {
   const orig = (urls && (urls.jsonUrl || (urls.skeletonKind === 'json' ? urls.skeletonUrl : null))) || null
   if (!orig) return null
+  const memory = item && item.__jsonText
   if (!item || !item._spine38) return { url: orig, blob: null }
   try {
-    const res = await fetch(orig)
-    if (!res.ok) return { url: orig, blob: null }
-    const fixed = spineJson38to41(await res.text())
+    let text = memory || ''
+    if (!text) {
+      const res = await fetch(orig)
+      if (!res.ok) return { url: orig, blob: null }
+      text = await res.text()
+    }
+    const fixed = spineJson38to41(text)
     if (!fixed) return { url: orig, blob: null }
     const blob = URL.createObjectURL(new Blob([fixed], { type: 'application/json' }))
     return { url: blob, blob }
@@ -4563,32 +4817,52 @@ function applySkeletonCfg(cfg, urls, compat) {
 }
 
 async function spineMinorFor(item) {
-  if (item._spineMinor !== undefined) return item._spineMinor
-  // 服务端扫描已读过骨架头 / JSON 的 spine 字段（含 JCZX 4.2）
+  const jsonKind = !!(item && item.skeletonKind === 'json')
+  // 解包出来的 NIKKE 是 4.1。头里碰巧的 "4.0" 或扫描缓存不能盖过这一点，
+  // 否则 4.0 运行时把动画读成空列表，页面就报「这个骨架里没有任何动画」。
+  if (isNikkeCacheItem(item) && (item.spineMinor === '4.0' || item._spineMinor === '4.0' || !item.spineMinor)) {
+    item.spineMinor = '4.1'
+    if (item._spineMinor === '4.0') item._spineMinor = '4.1'
+  }
+  // 二进制可以缓存。JSON 不行：扫描经常把 JCZX 标成 4.2，或者第一次探测时
+  // 文件还没读到，缓存下来之后 3.8.99 就会进 4.2 播放器。
+  if (!jsonKind && item && item._spineMinor !== undefined) return item._spineMinor
+  if (jsonKind && item.__spineSniffed && item._spineMinor !== undefined) return item._spineMinor
+  // 手机解包的 NIKKE 是 4.1 二进制。扫描若被 hash 里碰巧的 "4.0.xx" 骗成 4.0，
+  // 4.0 运行时读出来动画列表是空的，页面就报「这个骨架里没有任何动画」。
+  if (isNikkeCacheItem(item) && item.spineMinor === '4.0') item.spineMinor = '4.1'
+  const fallback = () => modeDefaultSpineMinor(item)
+  if (jsonKind) {
+    let text = item.__jsonText || ''
+    if (!text) {
+      const url = (urlsForItem(item) || {}).skeletonUrl
+      if (!url) return fallback()
+      try {
+        const res = await fetch(url)
+        if (!res.ok) return fallback()
+        text = await res.text()
+        item.__jsonText = text
+      } catch {
+        return fallback()
+      }
+    }
+    const m = /"spine"\s*:\s*"(\d+)\.(\d+)/.exec(text.slice(0, 8192))
+    item.__spineSniffed = true
+    if (!m) return (item._spineMinor = fallback())
+    // 3.x 的 JSON：字段格式与 4.x 不同（angle/value、紧凑曲线系数……），但我们能在
+    // 加载前把它转成 4.x 能读的形状（spineJson38to41）→ 用 4.1 运行时正常播。
+    if (m[1] === '3') {
+      item._spine38 = true
+      item.spineMinor = '4.1'
+      return (item._spineMinor = '4.1')
+    }
+    const minor = `4.${m[2]}`
+    item.spineMinor = minor
+    return (item._spineMinor = minor)
+  }
+  // 服务端扫描已读过二进制骨架头
   if (item.spineMinor === '4.0' || item.spineMinor === '4.1' || item.spineMinor === '4.2') {
     return (item._spineMinor = item.spineMinor)
-  }
-  const fallback = () => modeDefaultSpineMinor(item)
-  if (item.skeletonKind === 'json') {
-    const url = (urlsForItem(item) || {}).skeletonUrl
-    if (!url) return (item._spineMinor = fallback())
-    try {
-      const res = await fetch(url)
-      if (!res.ok) return (item._spineMinor = fallback())
-      const text = await res.text()
-      const m = /"spine"\s*:\s*"(\d+)\.(\d+)/.exec(text.slice(0, 4096))
-      if (!m) return (item._spineMinor = fallback())
-      // 3.x 的 JSON：字段格式与 4.x 不同（angle/value、紧凑曲线系数……），但我们能在
-      // 加载前把它转成 4.x 能读的形状（spineJson38to41）→ 用 4.1 运行时正常播。
-      // 标记一下，加载时换成「转换后的 blob URL」。
-      if (m[1] === '3') {
-        item._spine38 = true
-        return (item._spineMinor = '4.1')
-      }
-      return (item._spineMinor = `4.${m[2]}`)
-    } catch {
-      return (item._spineMinor = fallback())
-    }
   }
   if (item.skeletonKind !== 'skel') return (item._spineMinor = fallback())
   // 走 urlsForItem 而不是直接拼 assetUrl：手动上传的条目只有 blob URL，
@@ -4651,12 +4925,8 @@ async function spineMinorFor(item) {
       if (vm) ver = vm[1] === '4' ? `4.${vm[2]}` : `${vm[1]}.x`
     }
   }
-  if (!ver) {
-    let text = ''
-    for (let i = 0; i < head.length; i++) text += String.fromCharCode(head[i])
-    const m = /(\d+)\.(\d+)\.\d+/.exec(text)
-    if (m) ver = m[1] === '4' ? `4.${m[2]}` : `${m[1]}.x`
-  }
+  // 头对不上就用模式默认值。不要在 hash 字节里再搜 "4.x.y"：
+  // 解包出来的 4.1 骨架经常被碰巧的 "4.0.xx" 判成 4.0，动画列表就是空的。
   return (item._spineMinor = ver || fallback())
 }
 
@@ -4675,6 +4945,109 @@ function selectItem(item, pose) {
     history.replaceState(null, '', `${location.pathname}?${q}`)
   }
   loadCurrent()
+}
+
+/** 分段把本地文件读进内存。WebView 对 shouldInterceptRequest 的 XHR arraybuffer
+ *  会截断 .skel，必须绕开网络。单段 192KB，避开 Binder 约 1MB 的上限。 */
+function nativeAssetBytes(rel) {
+  const api = window.BD2Native
+  if (!NATIVE || !api || !rel || String(rel).includes('..')) return null
+  const root = S.rootId || ''
+  try {
+    if (typeof api.readAssetSize === 'function' && typeof api.readAssetB64Range === 'function') {
+      const n = api.readAssetSize(root, rel) | 0
+      if (n <= 0 || n > 32 * 1024 * 1024) return null
+      const chunk = 192 * 1024
+      const out = new Uint8Array(n)
+      let pos = 0
+      for (let off = 0; off < n; off += chunk) {
+        const len = Math.min(chunk, n - off)
+        const b64 = api.readAssetB64Range(root, rel, off, len)
+        if (!b64) return null
+        const bin = atob(b64)
+        if (bin.length !== len) return null
+        for (let i = 0; i < bin.length; i++) out[pos++] = bin.charCodeAt(i)
+      }
+      return out
+    }
+    if (typeof api.readAssetB64 !== 'function') return null
+    const b64 = api.readAssetB64(root, rel)
+    if (!b64) return null
+    const bin = atob(b64)
+    const out = new Uint8Array(bin.length)
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
+    return out
+  } catch {
+    return null
+  }
+}
+
+function bytesToB64(u8) {
+  // 不能把 Uint8Array 直接丢给 apply：部分 Android WebView 会把它展开错，
+  // base64 解出来比原文件短，Spine 读到一半就 DataView 越界。
+  let s = ''
+  const step = 8192
+  for (let i = 0; i < u8.length; i += step) {
+    const n = Math.min(step, u8.length - i)
+    const arr = new Array(n)
+    for (let j = 0; j < n; j++) arr[j] = u8[i + j]
+    s += String.fromCharCode.apply(null, arr)
+  }
+  return btoa(s)
+}
+
+/** Spine 二进制头：[0..7] hash，[8] 是「版本串字符数 + 1」，[9..] "4.x.y"。 */
+function spineMinorFromBytes(bin) {
+  if (!bin || bin.length < 12) return null
+  const n = (bin[8] | 0) - 1
+  if (!(n > 0 && n < 24 && 9 + n <= bin.length)) return null
+  let s = ''
+  for (let i = 9; i < 9 + n; i++) {
+    const c = bin[i]
+    if (!c) break
+    s += String.fromCharCode(c)
+  }
+  const vm = /^(\d+)\.(\d+)\.\d+$/.exec(s)
+  if (!vm) return null
+  return vm[1] === '4' ? `4.${vm[2]}` : `${vm[1]}.x`
+}
+
+/** 二进制骨架放进 rawDataURIs（data URI），播放器不再用 XHR 拉 /spine/。
+ *  JSON 做成 blob，3.8 转换和正片都读这份完整文本。 */
+function attachNativeSkeleton(item, urls) {
+  if (!NATIVE || !item || !urls || !item.relSkeleton) return false
+  const bin = nativeAssetBytes(item.relSkeleton)
+  if (!bin || bin.length < 16) return false
+  const kind = item.skeletonKind || urls.skeletonKind
+  if (kind === 'json') {
+    let text = ''
+    try { text = new TextDecoder('utf-8').decode(bin) } catch { return false }
+    if (!text) return false
+    item.__jsonText = text
+    const u = URL.createObjectURL(new Blob([text], { type: 'application/json' }))
+    urls.skeletonUrl = u
+    urls.jsonUrl = u
+    urls.__nativeBlob = u
+    return true
+  }
+  const ver = spineMinorFromBytes(bin)
+  // 重试别的运行时时不要被文件头版本盖回去，否则会永远停在第一次那个 minor。
+  if (ver && !(item.__spineTried && item.__spineTried.length)) {
+    if (!(isNikkeCacheItem(item) && ver === '4.0')) {
+      item._spineMinor = ver
+      item.spineMinor = ver
+    }
+  }
+  item.__skelBytes = bin.length
+  if (!urls.rawDataURIs) urls.rawDataURIs = {}
+  try {
+    urls.rawDataURIs[urls.skeletonUrl] = 'data:application/octet-stream;base64,' + bytesToB64(bin)
+    return true
+  } catch { /* 落到 blob */ }
+  const u = URL.createObjectURL(new Blob([bin], { type: 'application/octet-stream' }))
+  urls.skeletonUrl = u
+  urls.__nativeBlob = u
+  return true
 }
 
 /** 播放页里切姿势（NIKKE 的 普通/瞄准/掩体）。S.current 不变（还是那张卡），
@@ -4700,6 +5073,16 @@ async function loadCurrent() {
   resetMeta()
 
   $('currentName').textContent = item.folder
+  if (item.imageOnly) {
+    const n = (item.relImages || []).length
+    $('currentSub').textContent = [item.group, t('CG · {n} 张', { n })].filter(Boolean).join(' · ')
+    $('emptyState').hidden = true
+    showStillImage(item, 0)
+    setBusy(false)
+    setLoadProgress(null)
+    renderAnimList()
+    return
+  }
   // NIKKE 姿势变体：副标题里写明当前加载的是哪个成员（c022_aim_00），别让人以为还在本体上
   const member = activeMemberOf(item)
   $('currentSub').textContent = [item.group, member.base, item.skeletonKind ? `.${item.skeletonKind}` : '',
@@ -4710,6 +5093,9 @@ async function loadCurrent() {
   setLoadProgress({ stage: t('阶段：加载骨架'), indeterminate: true })
 
   const urls = urlsForItem(member)
+  // 手机 WebView 的 XHR arraybuffer 会把拦截到的 .skel 截断，4.1 运行时就读出空动画。
+  // 二进制改走 data URI，播放器内部不再发 XHR。
+  if (attachNativeSkeleton(member, urls) && urls.__nativeBlob) spineJsonBlobs.push(urls.__nativeBlob)
 
   // 骨架版本 → 运行时。要 await（读骨架头），所以放在建播放器之前。
   // 除了钉在 S.spine 上，还挂到 player 实例上（__spineRt / __spineMinor）：onLoaded
@@ -4751,6 +5137,20 @@ async function loadCurrent() {
     error: (p, msg) => {
       setBusy(false)
       const m = typeof msg === 'string' ? msg : JSON.stringify(msg)
+      // 4.2 运行时读 4.1（或反过来）会在 DataView 上越界，而不是报「没有动画」。
+      // 换一个 minor 再试，最多两次。
+      if (/DataView|Could not load skeleton/i.test(m) && member.skeletonKind !== 'json') {
+        const tried = member.__spineTried || []
+        const used = (p && p.__spineMinor) || member._spineMinor
+        const next = ['4.1', '4.2', '4.0'].find(v => v !== used && !tried.includes(v))
+        if (next && tried.length < 2) {
+          member.__spineTried = tried.concat(used || '')
+          member._spineMinor = next
+          member.spineMinor = next
+          setTimeout(() => { try { loadCurrent() } catch { /* ignore */ } }, 0)
+          return
+        }
+      }
       // Spine-player: incomplete extract / missing textures → empty getBounds.
       // If unpack toast still running, send user back to wait instead of hard fail.
       if (/Animation bounds are invalid/i.test(m)) {
@@ -4938,6 +5338,38 @@ function computeStageBounds() {
   return unionBounds(main, backLayerBounds())
 }
 
+function showStillImage(item, index) {
+  const imgs = item.relImages || []
+  if (!imgs.length) {
+    showError(t('缺少贴图 .png'))
+    return
+  }
+  const i = ((index % imgs.length) + imgs.length) % imgs.length
+  item._stillIndex = i
+  const host = $('playerHost')
+  host.innerHTML = ''
+  const img = document.createElement('img')
+  img.id = 'stillImage'
+  img.alt = ''
+  img.draggable = false
+  img.src = assetUrl(imgs[i])
+  img.style.cssText = 'position:absolute;inset:0;margin:auto;max-width:100%;max-height:100%;object-fit:contain;'
+  host.appendChild(img)
+  const n = imgs.length
+  $('currentSub').textContent = [item.group, n > 1 ? t('CG {i}/{n}', { i: i + 1, n }) : t('CG · {n} 张', { n })]
+    .filter(Boolean).join(' · ')
+}
+
+function cycleStillImage(dir) {
+  const item = S.current
+  if (!item || !item.imageOnly) return
+  const n = (item.relImages || []).length
+  if (n < 2) return
+  const i = (item._stillIndex || 0) + dir
+  showStillImage(item, i)
+  if (!cleanUI) toast(t('CG {i}/{n}', { i: ((i % n) + n) % n + 1, n }))
+}
+
 function disposePlayer() {
   // 本轮加载用过的「3.x→4.x 转换后」blob 在这里回收（必须在下面的 early return 之前，
   // 否则「主体还没建起来就切走」的情况会把 blob 漏掉）
@@ -4950,6 +5382,8 @@ function disposePlayer() {
   S.backItem = null
   const bh = document.getElementById('playerBackHost')
   if (bh) bh.remove()
+  const host = $('playerHost')
+  if (host && !S.player) host.innerHTML = ''
   if (!S.player) return
   try { S.player.dispose() } catch { /* ignore */ }
   S.player = null
@@ -5010,6 +5444,23 @@ function onLoaded(player) {
   const animSrc = player.animationState?.data?.skeletonData?.animations
   const animFallback = skeleton.data?.animations
   const animList = (animSrc && animSrc.length ? animSrc : (animFallback || []))
+  // 4.0 运行时读 4.1 骨架时，版本串有时也读不出来，上面的对照不会触发，动画直接是空的。
+  // 解包缓存只可能是 4.1，空列表就换 4.1 再载一次。
+  if (!animList.length && !player.__spineVerRetry) {
+    const member = S.current ? activeMemberOf(S.current) : null
+    if (member && (S.mode === 'nikke' || isNikkeCacheItem(member))) {
+      const tried = member.__spineTried || []
+      const next = ['4.1', '4.2', '4.0'].find(v => v !== player.__spineMinor && !tried.includes(v))
+      if (next) {
+        member.__spineTried = tried.concat(player.__spineMinor || '')
+        member._spineMinor = next
+        member.spineMinor = next
+        member.__spineVerRetry = true
+        setTimeout(() => { try { loadCurrent() } catch { /* ignore */ } }, 0)
+        return
+      }
+    }
+  }
   S.animations = animList.map(a => a.name)
   S.skins = (skeleton.data?.skins || []).map(s => s.name)
   S.slots = (skeleton.data?.slots || []).map(s => s.name)
@@ -5033,7 +5484,10 @@ function onLoaded(player) {
     const e = player.animationState.getCurrent(0)
     if (e) e.trackTime = 0
   } else {
-    showError(t('这个骨架里没有任何动画'))
+    const reported = String((player.skeleton && player.skeleton.data && player.skeleton.data.version) || '')
+    const memberNow = S.current ? activeMemberOf(S.current) : null
+    showError(t('这个骨架里没有任何动画')
+      + `\nruntime ${player.__spineMinor || '?'} / skeleton ${reported || '?'} / bytes ${memberNow && memberNow.__skelBytes || '?'}`)
   }
 
   // 取景框（沿当前动画采样实测内容范围；有背层时按两层并集，R19）
@@ -6486,6 +6940,16 @@ function bindUI() {
   if (cardMenuCopyDir) cardMenuCopyDir.onclick = () => copyFromMenu('dir')
   const cardMenuCopyFile = $('cardMenuCopyFile')
   if (cardMenuCopyFile) cardMenuCopyFile.onclick = () => copyFromMenu('file')
+  const cardMenuRebuildThumb = $('cardMenuRebuildThumb')
+  if (cardMenuRebuildThumb) cardMenuRebuildThumb.onclick = () => {
+    const it = menuItem
+    $('cardMenu').hidden = true
+    if (!it || it.pendingUnpack || it.imageOnly || !it.ok) {
+      toast(t('这张没有可重建的缩略图'))
+      return
+    }
+    rebuildThumbs(it)
+  }
   // PC 播放页左上角的「返回列表」。触屏那套是 ⊞ 悬浮键（见 setupFullscreenUI），
   // 两边都只调 setView('grid') —— 层级判断仍然只有 handleBack() 一份。
   const stageBack = $('stageBack')
@@ -6656,6 +7120,8 @@ function bindUI() {
   }
   $('setMaxSize').onchange = e => { S.maxSize = clamp(Number(e.target.value) || 3000, 256, 8192) }
   $('setFps').onchange = e => { S.fps = clamp(Number(e.target.value) || 60, 1, 120) }
+  const btnExportLog = $('btnExportLog')
+  if (btnExportLog) btnExportLog.onclick = () => exportErrorLog()
 
   // 播放页左右箭头：切当前资产的**上一个 / 下一个动画**。
   // 与全屏底部 ◀▶、键盘 ↑↓/[ ]、真机音量键共用 switchAnimation() 这一个入口。
@@ -6758,6 +7224,23 @@ function bindUI() {
   window.addEventListener('dragleave', e => {
     if (!isOverDropzone(e)) $('dropzone')?.classList.remove('over')
   })
+  /** 拖进来的包属于哪一档。与服务端 classifyBundleHead 同一条规则。 */
+  async function sniffDroppedBundle(file) {
+    const name = file?.name || ''
+    if (/\.(atlas|json|skel|png|jpg|jpeg|webp|bytes|txt|md)$/i.test(name)) return null
+    let buf
+    try { buf = new Uint8Array(await file.slice(0, 4096).arrayBuffer()) } catch { return null }
+    const magic = [0x55, 0x6e, 0x69, 0x74, 0x79, 0x46, 0x53, 0x00]
+    const at = (i) => {
+      if (i < 0 || i + 8 > buf.length) return false
+      for (let k = 0; k < 8; k++) if (buf[i + k] !== magic[k]) return false
+      return true
+    }
+    if (!at(0)) return null
+    if (/prefabs_spine/i.test(name)) return 'jczx'
+    for (let i = 1; i + 8 <= buf.length; i++) if (at(i)) return 'jczx'
+    return 'nikke'
+  }
   window.addEventListener('drop', async e => {
     if (!e.dataTransfer?.files?.length) return
     e.preventDefault()
@@ -6765,38 +7248,47 @@ function bindUI() {
     // 项目页 / 舞台上随便拖：只挡默认行为，不触发导入
     if (!isOverDropzone(e)) return
     const files = [...e.dataTransfer.files]
-    // JCZX 一键：拖入 UnityFS / prefabs_spine_* → POST /api/jczx/ingest → 重扫
-    if (S.mode === 'jczx' && !NATIVE) {
-      const abs = files.filter(f => {
-        const n = f.name || ''
-        if (/\.(atlas|json|skel|png)$/i.test(n)) return false
-        return /^prefabs_spine_/i.test(n) || /\.(ab|unity3d|bundle|assets)$/i.test(n) || !/\.[a-z0-9]+$/i.test(n)
-      })
-      if (abs.length) {
-        try {
-          setDropText(t('正在提取 JCZX 资产…'))
-          for (const f of abs) {
-            const buf = await f.arrayBuffer()
-            const q = new URLSearchParams({
-              root: S.rootId || '',
-              name: f.name || 'bundle',
-            })
-            const res = await fetch(`/api/jczx/ingest?${q}`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': f.name || 'bundle' },
-              body: buf,
-            })
-            const data = await res.json().catch(() => ({}))
-            if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`)
-          }
-          setDropText(t('JCZX 提取完成，正在刷新列表…'))
-          await scan(true)
-          setDropText(t('拖到这里'))
-        } catch (err) {
-          setDropText(t('JCZX 提取失败：{msg}', { msg: err.message || String(err) }))
+    // 同一目录里两种包都有：用文件头分流，不能靠「有没有扩展名」。
+    // JCZX = 名字含 prefabs_spine，或开头 4KB 里有第二段 UnityFS。
+    // NIKKE = 只有一段 UnityFS（无扩展名的 mod 包）。
+    const bundles = []
+    for (const f of files) {
+      const kind = await sniffDroppedBundle(f)
+      if (kind) bundles.push({ f, kind })
+    }
+    if (bundles.length && !NATIVE) {
+      const jczxFiles = bundles.filter(b => b.kind === 'jczx')
+      const nikkeFiles = bundles.filter(b => b.kind === 'nikke')
+      try {
+        setDropText(t('正在提取资产…'))
+        for (const { f, kind } of bundles) {
+          const buf = await f.arrayBuffer()
+          const q = new URLSearchParams({ root: S.rootId || '', name: f.name || 'bundle' })
+          const url = kind === 'jczx' ? '/api/jczx/ingest' : '/api/nikke-ab/ingest'
+          const res = await fetch(`${url}?${q}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': f.name || 'bundle' },
+            body: buf,
+          })
+          const data = await res.json().catch(() => ({}))
+          if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`)
         }
-        return
+        const target = (jczxFiles.length && !nikkeFiles.length) ? 'jczx'
+          : (nikkeFiles.length && !jczxFiles.length) ? 'nikke'
+          : S.mode
+        if (jczxFiles.length && nikkeFiles.length) {
+          setDropText(t('两种包已分开：JCZX {j} 个，NIKKE {n} 个。用顶栏切换查看。', {
+            j: jczxFiles.length, n: nikkeFiles.length,
+          }))
+        } else {
+          setDropText(t('提取完成，正在刷新列表…'))
+        }
+        if (target !== S.mode) await setAssetMode(target)
+        else await scan(true)
+      } catch (err) {
+        setDropText(t('提取失败：{msg}', { msg: err.message || String(err) }))
       }
+      return
     }
     const hasSpine = files.some(f => /\.(atlas|json|skel)$/i.test(f.name))
     if (!hasSpine) return

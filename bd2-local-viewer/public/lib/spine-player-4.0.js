@@ -7164,7 +7164,7 @@ var spine40 = (() => {
     }
   };
   var BinaryInput = class {
-    constructor(data, strings = new Array(), index = 0, buffer = new DataView(data.buffer)) {
+    constructor(data, strings = new Array(), index = 0, buffer = new DataView(data.buffer, data.byteOffset || 0, data.byteLength)) {
       this.strings = strings;
       this.index = index;
       this.buffer = buffer;
@@ -12331,16 +12331,10 @@ ${e.message}`, e);
       popup.show();
     }
     showError(message, error = null) {
-      if (this.error) {
-        if (error)
-          throw error;
-      } else {
-        this.error = true;
-        this.dom.appendChild(createElement(`<div class="spine-player-error" style="background:#000;color:#fff;position:absolute;top:0;width:100%;height:100%;display:flex;justify-content:center;align-items:center;overflow:auto;z-index:999">` + message.replace("\n", "<br><br>") + `</div>`));
-        if (this.config.error)
-          this.config.error(this, message);
-        throw error ? error : new Error(message);
-      }
+      if (this.error) return;
+      this.error = true;
+      this.dom.appendChild(createElement(`<div class="spine-player-error" style="background:#000;color:#fff;position:absolute;top:0;width:100%;height:100%;display:flex;justify-content:center;align-items:center;overflow:auto;z-index:999">` + message.replace("\n", "<br><br>") + `</div>`));
+      if (this.config.error) this.config.error(this, message);
     }
   };
   var Popup = class {

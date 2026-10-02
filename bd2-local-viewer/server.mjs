@@ -23,7 +23,8 @@ import {
   prepareJczxRoot,
   ensureJczxExtracted,
   isJczxName,
-  looksLikeUnityFS,
+  classifyBundleFile,
+  nameHintsJczx,
   getJczxUnpackProgress,
   prioritizeJczxUnpack,
   clearJczxCacheForDeletedDir,
@@ -467,6 +468,42 @@ async function walk(dir, depth, maxDepth, out, rootPath, fmt) {
     })
   }
 
+  // JCZX 静态 CG：包名带 _draw（textures_bigs_*_draw / *_draw_face），解出来只有 png。
+  // 动画用的贴图包同样没有 atlas，不能当成 CG。
+  if (atlases.length === 0 && fmt.id === 'jczx' && /_draw/i.test(path.basename(dir))) {
+    const pngs = images.filter(n => n !== thumb && /\.png$/i.test(n))
+    if (pngs.length) {
+      const relOf = (name) => path.relative(rootPath, path.join(dir, name)).split(path.sep).join('/')
+      const relFirst = relOf(pngs[0])
+      if (isJczxCacheRel(relFirst)) {
+        const base = path.basename(pngs[0], path.extname(pngs[0]))
+        const rawFolder = path.basename(dir)
+        const pretty = rawFolder.replace(/^[0-9a-f]{10}_/, '')
+        out.push({
+          id: relFirst,
+          dir,
+          group: relFirst.includes('/') ? relFirst.split('/')[0] : '（根目录）',
+          folder: pretty || rawFolder,
+          base,
+          atlas: null,
+          relAtlas: relFirst,
+          relSkeleton: null,
+          skeleton: null,
+          skeletonKind: null,
+          spineMinor: null,
+          imageOnly: true,
+          images: pngs,
+          relImages: pngs.map(relOf),
+          relThumb: null,
+          missingImages: [],
+          ok: true,
+          mtime: await mtimeOf(path.join(dir, pngs[0])),
+          problems: [],
+        })
+      }
+    }
+  }
+
   for (const sub of subdirs) {
     await walk(sub, depth + 1, maxDepth, out, rootPath, fmt)
   }
@@ -522,6 +559,13 @@ async function scanRoot(root, force = false, mode = DEFAULT_FORMAT) {
       for (let i = items.length - 1; i >= 0; i--) {
         const rel = String(items[i].relAtlas || '').replace(/\\/g, '/')
         if (!isJczxCacheRel(rel)) items.splice(i, 1)
+      }
+    }
+    // NIKKE 档不展示交错战线的解包结果（哪怕曾经误抽进了 bd2viewer-nikke/<prefabs_spine_*>）
+    if (fmt.id === 'nikke') {
+      for (let i = items.length - 1; i >= 0; i--) {
+        const rel = String(items[i].relAtlas || items[i].folder || '').replace(/\\/g, '/')
+        if (isJczxCacheRel(rel) || nameHintsJczx(rel)) items.splice(i, 1)
       }
     }
   }
@@ -1050,9 +1094,14 @@ async function handle(req, res) {
         return
       }
       await fsp.writeFile(dest, bodyBuf)
-      if (!(await looksLikeUnityFS(dest))) {
+      const kind = await classifyBundleFile(dest)
+      if (kind !== 'nikke') {
         await fsp.unlink(dest).catch(() => {})
-        sendJson(res, 400, { error: '不是 UnityFS / AssetBundle（文件头缺少 UnityFS）' })
+        sendJson(res, 400, {
+          error: kind === 'jczx'
+            ? '这是交错战线（JCZX）资产包，不会在 NIKKE 模式里解包。请切换到 JCZX。'
+            : '不是 NIKKE 的 UnityFS 资产包',
+        })
         return
       }
       const extracted = await ensureNikkeExtracted(dest, root.path, { autoSetup: true })
@@ -1082,8 +1131,8 @@ async function handle(req, res) {
       }
       const filename = String(url.searchParams.get('name') || req.headers['x-filename'] || 'bundle').trim()
       const safeName = path.basename(filename).replace(/[\\/\0]/g, '_') || 'bundle'
-      if (!isJczxName(safeName) && !safeName.toLowerCase().startsWith('prefabs_spine_')) {
-        // 仍允许：魔数在落盘后再验
+      if (!isJczxName(safeName) && !safeName.toLowerCase().includes('prefabs_spine')) {
+        // 名字对不上也先落盘，用文件头区分 JCZX / NIKKE，避免无扩展名的 NIKKE 包被收进来
       }
       const bodyBuf = await new Promise((resolve, reject) => {
         const chunks = []
@@ -1102,9 +1151,14 @@ async function handle(req, res) {
         return
       }
       await fsp.writeFile(dest, bodyBuf)
-      if (!(await looksLikeUnityFS(dest))) {
+      const kind = await classifyBundleFile(dest)
+      if (kind !== 'jczx') {
         await fsp.unlink(dest).catch(() => {})
-        sendJson(res, 400, { error: '不是 UnityFS / AssetBundle（文件头缺少 UnityFS）' })
+        sendJson(res, 400, {
+          error: kind === 'nikke'
+            ? '这是 NIKKE 资产包，不会在 JCZX 模式里解包。请切换到 NIKKE。'
+            : '不是交错战线的双头 UnityFS 包（文件头缺少第二段 UnityFS）',
+        })
         return
       }
       const extracted = await ensureJczxExtracted(dest, root.path, { autoSetup: true })
