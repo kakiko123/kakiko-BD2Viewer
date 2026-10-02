@@ -39,6 +39,9 @@ const SUITES = [
   { name: 'format_check',      file: 'format_check.mjs',      needs: null,        data: false, desc: '命名约定双模式：bd / lostsword 互不串味、thumb、MIME、缓存分离（自带临时根目录）' },
   { name: 'e2e',               file: 'e2e.mjs',               needs: '8137',      data: true,  desc: '端到端：加载/相机/图层/截图/导出' },
   { name: 'native_mode',       file: 'native_mode.mjs',       needs: '8143',      data: true,  desc: '假桥原生通路：拖动/长按/批删/箭头/返回键/首屏' },
+  // 自带服务端（BD2_CONFIG 指临时配置），不占 8137/8143 —— 但要用 Chrome，
+  // 所以**必须排在 native_mode 之后**，别和它抢 cdp 的 9333 端口。
+  { name: 'ark_mode',          file: 'ark_mode.mjs',          needs: null,        data: true,  desc: 'Ark 星陨计划档：中文名/多形态归组/立绘/语音（需 BD2_ARK_ROOT，否则跳过）' },
 ]
 
 /** 服务端口 → 启动参数 */

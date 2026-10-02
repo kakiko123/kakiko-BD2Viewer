@@ -48,8 +48,12 @@ android {
         //             并叠层渲染 —— 修「Lobby 角色单独打开只有半个」；缩略图同样叠层）
         //       1.07 = versionCode 10（NIKKE 的 mod 包（UnityFS）自动解包：桌面 UnityPy /
         //             安卓纯 Java，扫描前解到 bd2viewer-nikke/ 后按标准三件套播）
-        versionCode 10
-        versionName '1.07'
+        //       1.08 = versionCode 11（Ark Re:Code 星陨计划独立资产类型：中文名 + 稀有度、
+        //             多形态骨架归组 + 形态切换、立绘原图浏览、语音列表；
+        //             另修「初始皮肤按槽位数挑会选中最残的 default → 大部分角色只有一个头」，
+        //             改为按「摆好姿势后实际出图数」挑）
+        versionCode 11
+        versionName '1.08'
     }
 
     compileOptions {

@@ -22,9 +22,13 @@ try {
   {
     const js = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8')
     const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8')
+    // 运行时自己建出来的节点（`el.id = 'xxx'`）不在 index.html 里，但 $('xxx') 照样合法。
+    // 2026-10-02踩过：#arkImageLayer 是 openArkImage 现建的原图覆盖层，被这条断言误报。
+    // 与其维护一份手写白名单，不如从 app.js 里把 `.id = '...'` 全捞出来当「已定义」。
+    const runtimeIds = new Set([...js.matchAll(/\.id\s*=\s*'([A-Za-z0-9_-]+)'/g)].map(m => m[1]))
     const ids = [...new Set([...js.matchAll(/\$\('([A-Za-z0-9_-]+)'\)/g)].map(m => m[1]))]
-    const missing = ids.filter(id => !html.includes(`id="${id}"`))
-    check('app.js 引用的元素 id 都存在于 index.html', missing.length === 0, missing.join(', '))
+    const missing = ids.filter(id => !html.includes(`id="${id}"`) && !runtimeIds.has(id))
+    check('app.js 引用的元素 id 都存在于 index.html（或运行时自建）', missing.length === 0, missing.join(', '))
   }
 
   /* spine-player 库的 pinch 修复必须一直在：官方 Input 类有两处

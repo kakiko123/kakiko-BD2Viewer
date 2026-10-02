@@ -331,6 +331,126 @@ try {
   check('NIKKE 解包 .skel（毒 hash）仍标 spineMinor=4.1（不误判 4.0）',
     !!(nkSkel41 && nkSkel41.skeletonKind === 'skel' && nkSkel41.spineMinor === '4.1'),
     nkSkel41 && `${nkSkel41.skeletonKind}/${nkSkel41.spineMinor}`)
+
+  /* ------------------------------------------------ Ark 模式（星陨计划 Ark Re:Code）
+   * 素材布局（实测 596 套骨架）：
+   *   `角色/H001/`            meta.json + runtime/{H001,H001_S,CG_H001_a}.{atlas,skel,png}
+   *                            + runtime/static/*.png（立绘/图标）+ runtime/voice/*.wav
+   *   `画册/A0001/`           同上但 meta.json **没有 character 字段**（381 个全是）
+   *
+   * 服务端只负责「读 meta.json → 挂 ark 元数据 + 标形态」；归组/形态切换在前端（R18 同款）。
+   * 这一段守的是 meta 解析的三条硬规则：
+   *   ① 立绘/语音**只挂一次**（每个角色有多个 bundle，挂到每个上会翻倍 —— 实测踩过 1907 vs 1000）
+   *   ② 占位名「未命名（Bxxx）」当成没有名字（别把占位符显示给用户）
+   *   ③ 形态标记：bundle 名 == charId 才是本体（isDefaultForm）
+   */
+  {
+    const chDir = path.join(dataRoot, '角色', 'H001')
+    const rt = path.join(chDir, 'runtime')
+    fs.mkdirSync(path.join(rt, 'static'), { recursive: true })
+    fs.mkdirSync(path.join(rt, 'voice'), { recursive: true })
+    for (const b of ['H001', 'H001_S', 'CG_H001_a']) {
+      fs.writeFileSync(path.join(rt, `${b}.atlas`), ATLAS_BODY(b), 'utf-8')
+      fs.writeFileSync(path.join(rt, `${b}.png`), PNG)
+      const body = Buffer.from('4.1.24\0', 'ascii')
+      const skel = Buffer.alloc(8 + 1 + body.length + 8, 0)
+      skel[8] = body.length
+      body.copy(skel, 9)
+      fs.writeFileSync(path.join(rt, `${b}.skel`), skel)
+    }
+    fs.writeFileSync(path.join(rt, 'static', 'H001_Sex_LoveTalk.png'), PNG)
+    fs.writeFileSync(path.join(rt, 'static', 'H001_Icon.png'), PNG)
+    fs.writeFileSync(path.join(rt, 'voice', 'H001_Death_x.wav'), Buffer.from('RIFF----WAVEfmt '))
+    fs.writeFileSync(path.join(chDir, 'meta.json'), JSON.stringify({
+      character: {
+        id: 'H001', name: '夏妮', rarity: 5,
+        // ⚠️ 字段都在 character 里面（实测 596 套都这样），file 带 `runtime/` 前缀。
+        staticAssets: [
+          { file: 'runtime/static/H001_Sex_LoveTalk.png', kind: 'full', label: 'H001 Sex LoveTalk', width: 337, height: 169 },
+          { file: 'runtime/static/H001_Icon.png', kind: 'icon' },
+        ],
+        spineAssets: [
+          { bundle: 'H001', skeletonJson: { spineVersion: '4.1.23' }, animations: ['idle'] },
+          { bundle: 'H001_S', skeletonJson: { spineVersion: '4.1.23' }, animations: ['idle'] },
+          { bundle: 'CG_H001_a', skeletonJson: { spineVersion: '4.1.23' }, animations: ['idle', 'talk'] },
+        ],
+      },
+    }), 'utf-8')
+    // 画册：没有 character 字段 —— 必须优雅退化，不能抛
+    const alDir = path.join(dataRoot, '画册', 'A0001')
+    const alRt = path.join(alDir, 'runtime')
+    fs.mkdirSync(alRt, { recursive: true })
+    fs.writeFileSync(path.join(alRt, 'A0001.atlas'), ATLAS_BODY('A0001'), 'utf-8')
+    fs.writeFileSync(path.join(alRt, 'A0001.png'), PNG)
+    fs.writeFileSync(path.join(alDir, 'meta.json'), JSON.stringify({ generatedAt: 'x' }), 'utf-8')
+    // 占位名：name 是「未命名（B001）」这种模板 → 当成没有名字
+    const phDir = path.join(dataRoot, '角色', 'B001')
+    const phRt = path.join(phDir, 'runtime')
+    fs.mkdirSync(phRt, { recursive: true })
+    fs.writeFileSync(path.join(phRt, 'B001.atlas'), ATLAS_BODY('B001'), 'utf-8')
+    fs.writeFileSync(path.join(phRt, 'B001.png'), PNG)
+    fs.writeFileSync(path.join(phDir, 'meta.json'), JSON.stringify({
+      character: { id: 'B001', name: '未命名（B001）', rarity: 3 },
+    }), 'utf-8')
+
+    const ak = await scan('ark', true)
+    check('ark 模式返回 mode=ark', ak.mode === 'ark', String(ak.mode))
+    const akItems = (ak.items || []).filter(i => i.ark)
+    // 这个临时根里同时躺着 bdset/ nk/ 等**别的档**的目录（在 ark 规则下也认，
+    // 因为 ark 复用 bd 的命名规则），它们本来就没有 meta.json → ark 为 null。
+    // 所以只要求「认得出的角色目录都挂了 ark」，别要求全部。
+    const charItems = (ak.items || []).filter(i => /^(角色|画册)\//.test(String(i.relAtlas || '')))
+    check('ark：角色/画册目录下的条目都挂上 ark 元数据（含无 character 的画册）',
+      charItems.length === 5 && charItems.every(i => i.ark),
+      `${charItems.filter(i => i.ark).length}/${charItems.length} · ${charItems.map(i => i.relAtlas).join(', ')}`)
+
+    const h1 = akItems.find(i => i.ark.charId === 'H001' && i.ark.formBundle === 'H001')
+    check('ark：读出中文名 + 稀有度', !!(h1 && h1.ark.charName === '夏妮' && h1.ark.rarity === 5),
+      h1 && `${h1.ark.charName}/${h1.ark.rarity}`)
+    check('ark：本体形态标出来了（bundle 名 == charId）', !!(h1 && h1.ark.isDefaultForm === true),
+      h1 && `isDefaultForm=${h1.ark.isDefaultForm}`)
+    const h1s = akItems.find(i => i.ark.charId === 'H001' && i.ark.formBundle === 'H001_S')
+    check('ark：非本体形态不算 default（战斗形态 / CG 骨骼）',
+      !!(h1s && h1s.ark.isDefaultForm === false && h1s.ark.formLabel && h1s.ark.formLabel !== h1s.ark.formBundle),
+      h1s && `${h1s.ark.formBundle}→${h1s.ark.formLabel}`)
+
+    // ① 立绘/语音只挂一次
+    const carriers = akItems.filter(i => i.ark.isCarrier)
+    const staticsTotal = carriers.reduce((a, i) => a + i.ark.statics.length, 0)
+    const voicesTotal = carriers.reduce((a, i) => a + i.ark.voices.length, 0)
+    check('ark：立绘不按 bundle 重复计数（3 个形态也只有一份）', staticsTotal === 2,
+      `statics=${staticsTotal}（期望 2）`)
+    check('ark：语音不按 bundle 重复计数', voicesTotal === 1,
+      `voices=${voicesTotal}（期望 1）`)
+    check('ark：立绘只挂在「承载条目」上（每个角色目录恰好一个 isCarrier）',
+      carriers.length === 3,
+      carriers.map(i => i.ark.charId).join(','))
+
+    // ② 占位名
+    const ph = akItems.find(i => i.ark.charId === 'B001')
+    check('ark：占位名「未命名（B001）」当成没有名字（前端会退回 id）',
+      !!(ph && ph.ark.charName == null && ph.ark.rarity === 3),
+      ph && `charName=${JSON.stringify(ph.ark.charName)} rarity=${ph.ark.rarity}`)
+    // ③ 画册没有 character
+    const al = akItems.find(i => i.ark.charId === 'A0001')
+    check('ark：画册条目（meta 无 character）不崩、名字退回 null',
+      !!al && al.ark.charName == null && al.ark.statics.length === 0,
+      al && `charName=${JSON.stringify(al.ark.charName)}`)
+
+    // 语音 MIME：不补 .wav 的话 <audio> 拿到 octet-stream 就不播
+    const wavUrl = '/spine/tmp/' +
+      String('角色/H001/runtime/voice/H001_Death_x.wav').split('/').map(encodeURIComponent).join('/')
+    const wavRes = await fetch(`${base}${wavUrl}`)
+    check('ark：.wav 按 audio/wav 发（<audio> 才认）',
+      wavRes.status === 200 && /audio\//.test(wavRes.headers.get('content-type') || ''),
+      `${wavRes.status} ${wavRes.headers.get('content-type')}`)
+
+    // 切档隔离
+    const bdNoArk = await scan('bd', true)
+    check('ark 资产在 bd 档里也认（同名规则），但 ark 元数据不串味',
+      !(bdNoArk.items || []).some(i => i.ark && i.ark.charId === 'H001'),
+      rels(bdNoArk).filter(r => r.indexOf('角色/') === 0).join(', '))
+  }
 } catch (e) {
   check('测试执行', false, e.stack || e.message)
 } finally {

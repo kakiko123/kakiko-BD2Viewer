@@ -302,6 +302,44 @@ input[type="range"] {
 .anim-list { max-height: 30vh; }
 .layer-list { flex: 1; min-height: 120px; }
 
+/* Ark（星陨计划）：立绘/图标缩略网格 + 语音列表。
+   立绘是竖幅大图（实测 264x640 这类），所以缩略图固定 2:3 比例居中，
+   否则一堆横向裁切的小图看不出是什么。 */
+.ark-static-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 6px;
+  max-height: 34vh;
+  overflow-y: auto;
+}
+.ark-static-cell {
+  position: relative;
+  aspect-ratio: 2 / 3;
+  border-radius: var(--radius);
+  overflow: hidden;
+  cursor: pointer;
+  background: rgba(0, 0, 0, .25);
+  border: 1px solid rgba(255, 255, 255, .06);
+}
+.ark-static-cell img {
+  width: 100%; height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.ark-static-cell:hover { border-color: var(--indigo-300); }
+.ark-static-cell .ark-kind {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  font-size: 10px; line-height: 1.4;
+  padding: 1px 3px;
+  background: rgba(0, 0, 0, .62);
+  color: var(--g300);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.voice-list { max-height: 22vh; }
+.voice-list .list-item { display: flex; align-items: center; gap: 8px; }
+.voice-list .voice-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.voice-list button { flex: none; }
+
 .list-item {
   padding: 5px 9px;
   cursor: pointer;

@@ -48,6 +48,12 @@ public final class Host {
         MIME.put("txt", "text/plain; charset=utf-8");
         MIME.put("webm", "video/webm");
         MIME.put("mp4", "video/mp4");
+        // Ark（星陨计划）档的语音。必须给真 MIME：<audio> 拿到 octet-stream 时
+        // 浏览器不知道走哪条解码路径，表现为「点了没反应」而不是报错。
+        MIME.put("wav", "audio/wav");
+        MIME.put("mp3", "audio/mpeg");
+        MIME.put("ogg", "audio/ogg");
+        MIME.put("m4a", "audio/mp4");
     }
 
     static String mimeOf(String path) {

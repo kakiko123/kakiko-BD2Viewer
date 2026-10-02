@@ -1,6 +1,6 @@
 # Kakiko Viewer — 项目进度与说明
 
-> 快照日期：**2026-10-01** · 当前代码版本 **v1.07**（`versionCode 10`；显示名 Kakiko Viewer）
+> 快照日期：**2026-10-02** · 当前代码版本 **v1.08**（`versionCode 11`；显示名 Kakiko Viewer）
 > 本文只讲「现在是什么状态、为什么这么做、下一步做什么」。
 > 面向使用者的说明在 [`README.md`](README.md)；技术细节在 [`docs/`](docs) 与
 > [`bd2-local-viewer/ARCHITECTURE.md`](bd2-local-viewer/ARCHITECTURE.md)。
@@ -11,11 +11,15 @@
 
 一个**完全本地**的 Spine（俗称 L2D）动画查看器，同一份前端代码出两种形态
 （桌面版：本机 Node 服务 + 浏览器；Android APK：手写 WebView 壳）。
-已经支持 **BD2 / Lost Sword / NIKKE / JCZX** 四种资产来源，跨 **Spine 4.0 / 4.1 / 4.2** 三代骨架；
-NIKKE 的整包 mod 文件（UnityFS）在两个平台都能自动解包。7 个测试套件 **341 项断言全绿**，
-v1.07 的 APK 已构建并通过校验（1,499,122 B）。
+已经支持 **BD2 / Lost Sword / NIKKE / JCZX / 星陨计划（Ark Re:Code）** 五种资产来源，
+跨 **Spine 4.0 / 4.1 / 4.2** 三代骨架；NIKKE 的整包 mod 文件（UnityFS）在两个平台都能自动解包。
+8 个测试套件 **367 项断言全绿**，v1.08 的 APK 已构建并通过校验（1,537,354 B）。
 
-**悬着的事**：v1.06 还没 commit / push / 发 release ——
+> **素材包提醒（不是查看器的问题）**：Ark 包里 267 个角色中有 **53 个磁盘上没有任何骨架文件**，
+> 其中 34 个在 `meta.json` 里声明了 `spineAssets`（还带 `spineVersion` / `runtimeReady:true` /
+> `pages:[{2048×2048}]`）但文件没导出到包里。这些角色只有立绘、没有动画。
+
+**悬着的事**：v1.06 / v1.07 / v1.08 三轮改动都还没 commit / push / 发 release ——
 远端 `origin/main` 现在停在 v1.05（v1.02–v1.05 已提交，见 §8）。
 
 **箱内未发版改动（仍标 1.07 / versionCode 10，需求 7 冻结）**：
@@ -57,8 +61,10 @@ v1.07 的 APK 已构建并通过校验（1,499,122 B）。
 | **v1.05** | 6（Phase A）→ 7（Android JCZX）→ 8（Host/cache fix） | 1,432,382 B（含 1.06 的前端改动；1.05 本身未单独出包） | `8088b72a…` | **Spine 4.2 + JCZX 全平台**：桌面 UnityPy 提取、Android 纯 Java UnityFS strip+LZMA/LZ4+启发式导出；`BD2Viewer/jczx/`；界面名改为 **Kakiko Viewer** |
 | **v1.06** | 9 | 1,432,382 B（同上一行，本次只改前端） | `8088b72a…` | **Lost Sword 两层角色修复**：`_B` 背层 + `_F` 前层归成一套资产并**叠层渲染**（修「Lobby 角色只看得到半个」）；卡面缩略图也叠两层；顺带修 1.05 遗留的两条过期断言（标题 / 缩放上限） |
 | **v1.07** | **10** | 1,499,122 B | `42a20270…` | **NIKKE 整包 mod 文件自动解包**（UnityFS → 标准三件套）：桌面 UnityPy / 安卓纯 Java，分批 + 后台续解 + 进度提示；解包缓存只在 NIKKE 档可见。**同版本内追加两条用户反馈的修复**：①播放页不再被「扫描中…」全屏遮罩反复打断（R22）；②JCZX 解包后播不了 —— 提取器漏导二进制 `.skel`（497 个目录只有图集没骨架，两侧同源 bug）+ Spine 3.8 的 JSON 被 4.x 运行时读成 NaN（载入前就地转换，R21）。**按用户要求未升版本号**，改动全部计入 1.07 |
+| **v1.08** | **11** | 1,537,354 B | `e7ff0ed9…` | **Ark Re:Code（星陨计划）第五档资产类型**：中文名 + 稀有度、一角色多形态骨架归组 + 形态切换、立绘原图浏览、语音列表（**PV 视频按用户指示不做**）。**同版本内修一个真 bug**：初始皮肤按「槽位数」挑会选中最残的 `default`（Ark 的衣服在 `LV1/LV2/LV3`）→ **大部分角色只有一个头**；改为按「摆好姿势后实际出图数」挑（R24）。另修 NIKKE 骨架世代「一律钉死 4.1」导致 61/496 个 4.0.47 骨架打不开（HEAD 上就存在的 bug），并修两条 1.07 遗留的过期断言 |
 
-> 当前仓库根目录的 `BD2Viewer-debug.apk` 就是 **v1.07**（`versionCode 10`，1,499,122 B）。
+> 当前仓库根目录的 `BD2Viewer-debug.apk` 就是 **v1.08**（`versionCode 11`，1,537,354 B，
+> 另存一份 `kakiko-BD2Viewer.1.08.apk`）。`kakiko-BD2Viewer.1.07.apk` 是上一版留作对照。
 > `kakiko-BD2Viewer 1.0.1.apk` / `kakiko-BD2Viewer 1.0.1 .apk` 是 v1.01 时期的产物，留在本地做对照。
 > 体积从 v1.02 跳到 v1.03 的 +234 KB 是**第二套 Spine 运行时**；1.04 → 1.05 再涨约 577 KB 是
 > **第三套运行时（4.2.120）**；1.06 本身只加前端逻辑，没有再引入依赖。
@@ -165,8 +171,9 @@ node bd2-local-viewer/_test/run_all.mjs manifest_check delete_api format_check  
 | `bundle_firstpaint` | 7 | 产物级首屏：第一帧就是资产页、深链仍进播放页 | 否（产物级） |
 | `delete_api` | 12 | 真删磁盘（自带临时根目录，绝不碰用户 mods） | 否 |
 | `format_check` | 37 | 四种命名约定互不串味、骨架三级级联、`thumb.png`、MIME、缓存按 `(root,mode)` 分离、nikke 模式、两层角色在服务端仍是两个条目、**NIKKE 解包缓存的档位可见性** | 否 |
-| `e2e` | 53 | 端到端：相机 / 图层 / 截图 / 导出 / PC 侧入口 / 重叠扫描 / 真实素材专项（多皮肤合成、NIKKE 姿势、**Lost Sword 两层叠层与时间轴同步**） | 是 |
-| `native_mode` | 192 | 假桥下的整条原生通路：拖动 / 长按 / 批删 / 箭头 / 返回键 / 首屏 / 语言 / 搜索 / 资产类型 / NIKKE 归组与姿势 / 两层角色归组 / **NIKKE 解包进度提示** | 是 |
+| `e2e` | 54 | 端到端：相机 / 图层 / 截图 / 导出 / PC 侧入口 / 重叠扫描 / 真实素材专项（多皮肤合成、NIKKE 姿势 + **逐成员骨架世代**、**Lost Sword 两层叠层与时间轴同步**） | 是 |
+| `native_mode` | 192 | 假桥下的整条原生通路：拖动 / 长按 / 批删 / 箭头 / 返回键 / 首屏 / 语言 / 搜索 / 资产类型（五段）/ NIKKE 归组与姿势 / 两层角色归组 / **NIKKE 解包进度提示** | 是 |
+| `ark_mode` | 25 | **Ark Re:Code 专项**（需 `BD2_ARK_ROOT` 环境变量，否则判 PASS 并标注跳过）：中文名 / 稀有度 / 形态归组与切换 / 立绘原图解码 / 语音解码 / **初始皮肤挑「出图最多的」而非 default（R24）** / 切回 BD2 不受影响 | 是 |
 
 - 端口：`8137`（源码与产物套件）、`8143`（native_mode）。`run_all` 自己 spawn 两个服务，
   跑之前先杀掉占端口的旧进程；**跑测试时不要并行起第二个 Chrome**（调试端口固定 9333，会互杀）。

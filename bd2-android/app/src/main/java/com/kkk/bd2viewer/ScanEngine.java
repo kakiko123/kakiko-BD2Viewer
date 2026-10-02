@@ -82,6 +82,10 @@ public final class ScanEngine {
     static final String MODE_NIKKE = "nikke";
     /** JCZX：打包 AB 先解到 bd2viewer-jczx/，再按 bd 规则扫抽出的 atlas/json/png（Spine 4.2）。 */
     static final String MODE_JCZX = "jczx";
+    /** Ark（星陨计划 Ark Re:Code）：文件命名与 bd 完全一样（角色目录 + runtime/ 三件套），
+     *  归桶直接复用 bd 那套。差别全在前端：读 meta.json 拿中文名/稀有度、一角色多形态归组、
+     *  立绘与语音（.wav 不进资产桶，只当静态资源按需取）。 */
+    static final String MODE_ARK = "ark";
 
     /** classify() 的结果：这个文件在资产里扮演什么角色 */
     static final class Role {
@@ -107,8 +111,9 @@ public final class ScanEngine {
             if (IMG_EXT.contains(extOf(name))) return new Role(extOf(name), null);
             return null;
         }
-        // bd / nikke / jczx（抽出后）共用同一套归桶规则。
-        // NIKKE 差别在前端归组与骨架世代；JCZX 差别在扫描前先解包 AB。
+        // bd / nikke / jczx（抽出后）/ ark 共用同一套归桶规则。
+        // NIKKE 差别在前端归组与骨架世代；JCZX 差别在扫描前先解包 AB；
+        // Ark 差别在 meta.json 解析 + 一角色多形态归组（全在前端）。
         if (l.endsWith(".atlas")) return new Role(K_ATLAS, baseName(name));
         if (l.endsWith(".skel")) return new Role(K_SKEL, baseName(name));
         if (l.endsWith(".json")) return new Role(K_JSON, baseName(name));
@@ -307,6 +312,7 @@ public final class ScanEngine {
     public static final String SUB_NIKKE = "nikke";
     public static final String SUB_LOSTSWORD = "lostsword";
     public static final String SUB_JCZX = "jczx";
+    public static final String SUB_ARK = "ark";
     /** 最近一次扫描/绑定的 mode，storageStatus / writeImport 用它挑子目录 */
     private static volatile String boundMode = MODE_BD;
 
@@ -314,11 +320,12 @@ public final class ScanEngine {
         if (MODE_NIKKE.equals(mode)) return SUB_NIKKE;
         if (MODE_LOSTSWORD.equals(mode)) return SUB_LOSTSWORD;
         if (MODE_JCZX.equals(mode)) return SUB_JCZX;
+        if (MODE_ARK.equals(mode)) return SUB_ARK;
         return SUB_BD;
     }
 
     public static String[] allModeFolders() {
-        return new String[]{SUB_BD, SUB_NIKKE, SUB_LOSTSWORD, SUB_JCZX};
+        return new String[]{SUB_BD, SUB_NIKKE, SUB_LOSTSWORD, SUB_JCZX, SUB_ARK};
     }
 
     /** MediaStore 里拿到的一个文件条目（没有「全部文件访问」时只能这么读） */
@@ -582,6 +589,7 @@ public final class ScanEngine {
         if (SUB_NIKKE.equals(folder)) return MODE_NIKKE;
         if (SUB_LOSTSWORD.equals(folder)) return MODE_LOSTSWORD;
         if (SUB_JCZX.equals(folder)) return MODE_JCZX;
+        if (SUB_ARK.equals(folder)) return MODE_ARK;
         return MODE_BD;
     }
 

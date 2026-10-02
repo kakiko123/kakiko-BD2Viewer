@@ -460,7 +460,7 @@ try {
     if (!realAssets || !realAssets.c022) {
       check('NIKKE 归组与姿势：本机没有 NIKKE 素材（c022），跳过', true, '跳过')
     } else {
-      const nk = await cdp.evaluate(`
+        const nk = await cdp.evaluate(`
         const v = __bd2viewer
         v.setAssetMode('nikke')
         v.state.rootId = ${JSON.stringify(realAssets.c022.rootId)}
@@ -469,19 +469,37 @@ try {
         const main = v.state.items.find(i => i.base === 'c022_00')
         const out = { keys: keys, members: main && main.members ? main.members.map(m => m.pose + ':' + m.item.base) : null }
         if (!main) { out.missing = true; return out }
+        // 骨架头自报版本（独立于前端判定，算一遍期望值）
+        const headVer = async rel => {
+          const u = '/spine/' + String(v.state.rootId).split('/').map(encodeURIComponent).join('/')
+            + '/' + String(rel).split('/').filter(Boolean).map(encodeURIComponent).join('/')
+          const b = new Uint8Array(await (await fetch(u)).arrayBuffer())
+          const n = (b[8] | 0) - 1
+          if (n <= 0 || n > 24) return null
+          let s = ''
+          for (let i = 9; i < 9 + n; i++) { if (b[i] === 0) break; s += String.fromCharCode(b[i]) }
+          const m = /^4\\.(\\d)\\.\\d+$/.exec(s)
+          return m ? '4.' + m[1] : null
+        }
+        const fileRt = {}
+        for (const mm of main.members) fileRt[mm.pose] = await headVer(mm.item.relSkeleton)
+        out.normalFileRt = fileRt.normal; out.aimFileRt = fileRt.aim; out.coverFileRt = fileRt.cover
         v.openItem(main)
         await new Promise(r => setTimeout(r, 8000))
         out.poseGroupShown = !document.getElementById('poseGroup').hidden
         out.normalAnim = v.animation
+        out.normalRt = v.player && v.player.__spineMinor
         v.switchPose('aim')
         await new Promise(r => setTimeout(r, 8000))
         out.aimPose = v.pose
         out.aimSub = document.getElementById('currentSub').textContent
         out.aimAnim = v.animation
+        out.aimRt = v.player && v.player.__spineMinor
         v.switchPose('cover')
         await new Promise(r => setTimeout(r, 8000))
         out.coverPose = v.pose
         out.coverAnim = v.animation
+        out.coverRt = v.player && v.player.__spineMinor
         out.errorBox = (() => { const e = document.getElementById('errorBox'); return e && !e.hidden ? e.textContent : null })()
         return out
       `, 300000)
@@ -500,6 +518,17 @@ try {
         `姿势=${nk.coverPose} 动画=${nk.coverAnim}`)
       check('NIKKE 姿势切换全程无报错（骨架世代判定对每个成员都成立）',
         nk.errorBox === null, nk.errorBox || '无报错')
+      /* 骨架世代必须**逐文件**判定，不能对 NIKKE 缓存一律钉死 4.1。
+         2026-10-02踩过：c022 的 normal/aim 是 4.1.20/4.1.24，cover 却是 4.0.47
+         （另一个导出器；本机 496 个骨架里 61 个这种情况）。一律钉 4.1 时 cover 被塞进
+         4.1 运行时 → 「Attachment name must not be null」，而且连「换一个 minor 再试」
+         的兜底都救不回来（重试写回 '4.0'，下一轮又被规则改回 '4.1'，永远打转）。
+         这条断言盯的是「每个成员的运行时 = 它自己头里的版本」，不是某一个具体版本号。 */
+      check('NIKKE 每个成员的运行时按各自骨架头判定（不一律钉 4.1）',
+        nk.normalRt === nk.normalFileRt && nk.aimRt === nk.aimFileRt
+        && nk.coverRt === nk.coverFileRt,
+        `播放器 normal/aim/cover=${nk.normalRt}/${nk.aimRt}/${nk.coverRt}` +
+        ` 骨架自报=${nk.normalFileRt}/${nk.aimFileRt}/${nk.coverFileRt}`)
       await cdp.screenshot(path.join(HERE, 'e2e_nikke_pose.png'))
     }
 

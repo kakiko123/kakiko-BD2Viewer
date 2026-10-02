@@ -100,6 +100,12 @@ const MIME = {
   '.gif': 'image/gif',
   '.atlas': 'text/plain; charset=utf-8',
   '.skel': 'application/octet-stream',
+  // Ark（星陨计划）档的语音。必须给真 MIME：<audio> 拿到 octet-stream 时
+  // 浏览器不知道该走哪条解码路径，表现为「点了没反应」而不是报错。
+  '.wav': 'audio/wav',
+  '.mp3': 'audio/mpeg',
+  '.ogg': 'audio/ogg',
+  '.m4a': 'audio/mp4',
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
   '.woff2': 'font/woff2',
@@ -198,6 +204,25 @@ const FORMATS = {
    */
   jczx: {
     id: 'jczx',
+    classify(name) { return FORMATS.bd.classify(name) },
+  },
+
+  /**
+   * 星陨计划 Ark Re:Code。命名与 BD2 完全一样（`<bundle>.atlas` + `<bundle>.skel` + `<bundle>.png`），
+   * 所以归桶规则也是 bd 那一套。差别全在**目录组织与元数据**：
+   *
+   *   runtime/source/角色/<ID>/meta.json          ← 中文名 / 稀有度 / 动画表 / 立绘清单
+   *   runtime/source/角色/<ID>/runtime/<bundle>.*  ← 一个角色目录下有**多个** bundle：
+   *                                               本体、`<ID>_S`（战斗形态）、`<ID>_N`、`<ID>_B`、
+   *                                               `CG_<ID>_a|b`（剧情 CG 骨骼）等。
+   *                                               它们是**同一个角色的不同形态**，不是不同资产。
+   *   runtime/source/画册/<ID>/…                  同结构，但 meta.json 里没有 character 字段。
+   *
+   * 归组（一个角色收成一张卡 + 播放页切形态）在前端实现（与 R18 NIKKE 同一套 members 机制），
+   * 这里负责把 meta.json 里的名字/稀有度/立绘/语音挂到每个条目上。骨架为 Spine 4.1.x 二进制。
+   */
+  ark: {
+    id: 'ark',
     classify(name) { return FORMATS.bd.classify(name) },
   },
 }
@@ -350,6 +375,187 @@ function parseAtlasPages(atlasText) {
   return [...new Set(pages)]
 }
 
+// ------------------------------------------------------------------ Ark 元数据
+
+/**
+ * 读一个 Ark 角色/画册目录的 `meta.json`，取我们用得上的字段。
+ *
+ * 这个文件**不保证完整**（实测 2026-8-14 包）：
+ *   - `画册/*` 的 381 个条目**根本没有 character 字段**
+ *   - 41 个角色的 name 是占位「未命名（B001）」
+ *   - 19 个角色没有 spineAssets
+ * 所以每一项都要能退回 None，让调用方用目录 ID 兜底 —— 缺字段是常态，不是异常。
+ *
+ * 只在 ark 档调用（其它模式的目录里没有这个文件，多读一遍纯属浪费 IO）。
+ * 读失败一律返回 null，不抛 —— 一个坏 meta.json 不该让整次扫描失败。
+ */
+async function readArkMeta(dir) {
+  let raw
+  try {
+    raw = await fsp.readFile(path.join(dir, 'meta.json'), 'utf-8')
+  } catch {
+    return null
+  }
+  let j
+  try { j = JSON.parse(stripBom(raw)) } catch { return null }
+  const c = j && j.character
+  if (!c || typeof c !== 'object') {
+    // 画册条目：没有 character 字段（实测 381 个全是）。名字/稀有度都没有 → 前端退回用目录 id。
+    // 仍要把 statics/voices/carrierBundle 给出完整形状，否则条目层读 undefined 会炸。
+    const id = dirIdOf(dir)
+    return {
+      hasCharacter: false, id, name: null, altName: null, rarity: null, cover: null,
+      statics: [], voices: [], spineAssets: [], carrierBundle: id,
+    }
+  }
+
+  // 占位名（「未命名（B001）」）当作没有名字 —— 前端会退回显示目录 ID。
+  const nm = typeof c.name === 'string' ? c.name.trim() : ''
+  const name = nm && !/^未命名/.test(nm) ? nm : null
+
+  const statics = []
+  for (const s of Array.isArray(c.staticAssets) ? c.staticAssets : []) {
+    if (!s || typeof s.file !== 'string') continue
+    statics.push({
+      file: s.file,                       // 相对角色目录，如 runtime/static/Icon_Head_M_H001.png
+      kind: s.kind || 'other',           // full=立绘 / face=头像 / other=技能图标等
+      label: s.label || path.basename(s.file),
+      width: s.width || 0,
+      height: s.height || 0,
+    })
+  }
+
+  // 语音：meta.json 里没有清单，直接列 voice/ 目录（实测 9 个角色有，共 1000 条）。
+  const voices = []
+  for (const f of await listDir(path.join(dir, 'runtime', 'voice'))) {
+    if (!f.isFile() || !/\.wav$/i.test(f.name)) continue
+    voices.push({ file: `runtime/voice/${f.name}`, name: arkVoiceLabel(f.name) })
+  }
+
+  // 形态表：bundle 名 → 动画列表。让前端能给形态标出「有几个动画」并挑默认动画。
+  const spineAssets = []
+  for (const a of Array.isArray(c.spineAssets) ? c.spineAssets : []) {
+    if (!a || !a.bundle) continue
+    spineAssets.push({
+      bundle: a.bundle,
+      animations: Array.isArray(a.animations) ? a.animations : [],
+      defaultAnimation: a.defaultAnimation || null,
+      spineVersion: (a.skeletonJson && a.skeletonJson.spineVersion) || null,
+    })
+  }
+
+  // 立绘/语音挂在**角色**上而不是某个 bundle 上，所以要挑一个「代表条目」来承载它们，
+  // 否则同一角色的每个 bundle 都会各带一份重复数据（实测语音会从 1000 条虚增到 1907 条）。
+  // 惯例：bundle 名 == 角色 id 的那个是本体。**但只有 189/267 个角色目录真有本体**，
+  // 所以没有本体时退回 spineAssets 的第一条；再没有就退回目录 id 本身。
+  const charId = c.id || dirIdOf(dir)
+  const carrier = spineAssets.find(s => s.bundle === charId)
+    || spineAssets[0]
+    || { bundle: charId }
+
+  return {
+    hasCharacter: true,
+    id: charId,
+    name,
+    altName: c.altName || null,
+    rarity: typeof c.rarity === 'number' ? c.rarity : null,
+    cover: c.cover || null,
+    statics,
+    voices,
+    spineAssets,
+    // 承载角色级数据（立绘/语音）的 bundle 名 —— 前面那个条目才带这些数组
+    carrierBundle: carrier.bundle,
+  }
+}
+
+/** Ark 目录名（`角色` / `画册` 下的那层）就是角色 id。 */
+function dirIdOf(dir) {
+  return path.basename(dir)
+}
+
+// ---------------------------------------------------------------- JCZX mod 层
+//
+// 「交错战线图鉴」发布包的目录组织（2026-10-02 实测，29G）：
+//
+//   source/角色/<ID>/runtime/<bundle>.{atlas,json,png}   ← 原图，骨架 4.2.20 / 4.2.38
+//   source/画册/cg<N>/runtime/<bundle>.{atlas,json,png}     ← CG
+//   mod1/角色/<ID>/mod-<id>/runtime/<bundle>.{atlas,json,png}  ← mod（已解包），骨架多 3.8.99
+//   mod2/…                                                 ← 第二个 mod 根
+//   mods/…                                                 ← 原始未解包包（本档不收）
+//
+// mod 条目的 bundle 名与原图**同名**（如 `prefabs_spine_10010_skin_alps04_spine`），
+// 这就是「mod 和原图切换」的对齐依据：同一个 bundle 名 = 同一个槽位，
+// 原图与各 mod 是同槽位的不同资源层，播页在它们之间循环切换（与图鉴 App 的
+// `getNextModVariantId` 同一套：走完最后一个回到原图）。
+//
+// 图鉴包还带 `data/mod_runtime_index.json`，里面是 modId → 包名/目标 bundle 的清单。
+// **但我们不读它**：路径本身已经足够解析出这三样（层/角色/modId/bundle），
+// 而依赖外部清单会让「把这个目录当普通素材根扫」也必须先认得图鉴的私有格式。
+
+/** 认 mod 层目录名：`source`（原图层）/ `mod1`…（mod 层）。`mods`（未解包包）不算。 */
+const JCZX_LAYER_RE = /^(source|mod\d+)$/i
+/** mod 单个包目录名：`mod-840d7e284b`（10 位 hex）。 */
+const JCZX_MODID_RE = /^mod-([0-9a-z]{6,16})$/i
+
+/**
+ * 从条目所在目录往上回溯，判断它属于哪个 mod 层。
+ * 只认 `<root>/<layer>/<角色|画册>/<...>` 这种「层紧贴根」的布局（图鉴包的实测形状），
+ * 免得在用户普通素材目录里乱认。返回 null = 不属于任何已解包层。
+ *
+ * @param {string} rootPath 根目录绝对路径
+ * @param {string} dir      条目所在目录
+ * @returns {{layer:string, layerKind:'source'|'mod', layerIndex:number,
+ *            modId:string|null, targetId:string|null, groupDir:string}|null}
+ */
+function jczxLayerOf(rootPath, dir) {
+  const rel = path.relative(rootPath, dir).split(path.sep).join('/')
+  const seg = rel.split('/').filter(Boolean)
+  if (seg.length < 2) return null
+  const m = JCZX_LAYER_RE.exec(seg[0])
+  if (!m) return null
+  const layer = seg[0]
+  const layerKind = /^source$/i.test(layer) ? 'source' : 'mod'
+  // mod 层的包目录是第 3 段（`mod1/角色/<ID>/mod-xxxx/runtime`）
+  let modId = null
+  let targetId = null
+  if (layerKind === 'mod') {
+    const hit = seg.slice(1).find(s => JCZX_MODID_RE.test(s))
+    if (!hit) return null            // 只有层目录但没有 mod 包 → 不是我们要的已解包产物
+    modId = hit
+    targetId = seg[1] || null        // 角色 id（`角色` 那层下面）或 cg 名
+  } else {
+    targetId = seg[1] || null
+  }
+  return {
+    layer,
+    layerKind,
+    layerIndex: layerKind === 'source' ? 0 : (parseInt(layer.replace(/\D+/g, ''), 10) || 0),
+    modId,
+    targetId,
+    groupDir: seg[1] || null,        // `角色` / `画册`
+  }
+}
+
+/** mod 层的人读标签。`source` → 「原图」，`mod1` → 「mod1」。 */
+function jczxLayerLabel(layerInfo) {
+  if (!layerInfo || layerInfo.layerKind === 'source') return '原图'
+  return layerInfo.layer
+}
+
+/**
+ * 把语音文件名变成人能读的标签。
+ * 实测命名：`H001_Death_H001_Death_-5214458762417353167.wav`
+ *   → 取「角色_事件」段（第一段），去掉角色 id 前缀 → 「Death」
+ * 拿不准就退回去掉扩展名的原名（宁可长也别丢信息）。
+ */
+function arkVoiceLabel(fileName) {
+  const stem = fileName.replace(/\.wav$/i, '')
+  const first = stem.split('_').slice(0, 3).join('_')   // H001_Death_H001
+  const m = /^([A-Za-z]+\d+)_([A-Za-z0-9]+)_/.exec(stem)
+  if (m) return m[2]
+  return first || stem
+}
+
 /**
  * 需求 5：目录里的 thumb.png 只有「不比资产旧」才挂到条目上。
  * 资产变了（atlas / skeleton / 贴图任一更新）→ 返回 null，前端重新离屏渲并覆盖。
@@ -368,7 +574,35 @@ async function freshThumbRel(dir, rootPath, thumbName, atlasName, skelName, imag
   return path.relative(rootPath, thumbAbs).split(path.sep).join('/')
 }
 
-async function walk(dir, depth, maxDepth, out, rootPath, fmt) {
+/**
+ * Ark：一个角色目录里的 meta.json 读一次就够（目录里有多个 bundle）。
+ * 用 Map 缓存，键是绝对路径。**每次扫描新建一个**（Ark 的 meta 15s 内不会变，走 scanCache 就够）。
+ */
+function makeArkMetaCache() {
+  const m = new Map()
+  return async (dir) => {
+    if (!m.has(dir)) m.set(dir, await readArkMeta(dir))
+    return m.get(dir)
+  }
+}
+
+/** 形态名（bundle → 人看的名字）。前端切换器上显示用。
+ *  实测：`H001_S` → 战斗形态、`H001_N` → 另一形态、`CG_H001_a` → CG a。
+ *  认不出来就原样返回 bundle 名 —— 宁可丑一点也不丢信息。 */
+function arkFormLabel(bundle, charId) {
+  if (!bundle) return ''
+  let s = bundle
+  if (charId && s.startsWith(charId)) s = s.slice(charId.length)
+  if (!s) return '本体'
+  if (s.startsWith('CG_')) {
+    const t = s.slice(3).replace(/^[A-Za-z]+\d+_?/, '')   // 去掉重复的角色 id 段
+    return t ? `CG ${t}` : 'CG'
+  }
+  const MAP = { _S: '战斗形态', _N: '形态 N', _B: '形态 B', _a: 'CG a', _b: 'CG b' }
+  return MAP[s] || s
+}
+
+async function walk(dir, depth, maxDepth, out, rootPath, fmt, arkMetaCache) {
   if (depth > maxDepth) return
   const entries = await listDir(dir)
 
@@ -388,8 +622,12 @@ async function walk(dir, depth, maxDepth, out, rootPath, fmt) {
       // NIKKE 解包缓存同理：只在 nikke 档可见（否则 BD2 档会把抽出来的资产再摆一遍）
       if (isNikkeCacheDirName(entry.name) && fmt.id !== 'nikke') continue
       // Never nest-scan another game's mode folder (bd2/nikke/jczx/lostsword)
+      // ⚠️ 但 `source` / `mod1`… 是「交错战线图鉴」发布包的 mod 层，jczx 档**要**扫进去 ——
+      // 而且它们只在**根目录紧贴一层**时才算（见 jczxLayerOf），用户普通素材目录里
+      // 恰好有个叫 source 的文件夹不会被误认。
       if (MODE_SOURCE_FOLDERS.has(entry.name.toLowerCase())
-        && path.resolve(dir) !== path.resolve(rootPath)) continue
+        && path.resolve(dir) !== path.resolve(rootPath)
+        && !(fmt.id === 'jczx' && jczxLayerOf(rootPath, path.join(dir, entry.name)))) continue
       subdirs.push(path.join(dir, entry.name))
       continue
     }
@@ -438,13 +676,71 @@ async function walk(dir, depth, maxDepth, out, rootPath, fmt) {
     // 分组用相对根目录的第一段（顶层文件夹）；直接放在根目录里的归到「（根目录）」
     const group = relAtlas.includes('/') ? relAtlas.split('/')[0] : '（根目录）'
 
+    // JCZX mod 层：条目属于原图还是某个 mod、挂在哪个角色的哪个槽位上。
+    // **targetKey = `<目标 id>|<bundle 基名>`** 是 mod ↔ 原图的对齐键（同 bundle 名 = 同槽位）。
+    // 不在图鉴布局里就是 null，前端按「没有 mod 可切」处理。
+    let jczx = null
+    if (fmt.id === 'jczx') {
+      const layerInfo = jczxLayerOf(rootPath, dir)
+      if (layerInfo) {
+        const tid = layerInfo.targetId || path.basename(path.dirname(dir))
+        jczx = {
+          layer: layerInfo.layer,
+          layerKind: layerInfo.layerKind,
+          layerIndex: layerInfo.layerIndex,
+          layerLabel: jczxLayerLabel(layerInfo),
+          modId: layerInfo.modId,
+          targetId: tid,
+          // 同 bundle 名的原图与 mod 共用这个键 —— 播页在同键的条目之间循环切换
+          targetKey: `${tid}|${base}`,
+          bundle: base,
+          groupDir: layerInfo.groupDir,
+        }
+      }
+    }
+
     const spineMinor = skel
       ? await spineMinorOfFile(path.join(dir, skel.name), skel.kind)
       : null
+
+    // Ark：这个 bundle 属于哪个角色、角色叫什么、有哪些立绘/语音。
+    // meta.json 在**角色目录**（`角色/<ID>/meta.json`），而骨架在它下面的 `runtime/`。
+    // 所以取的是 walk 当前层的上一级 —— `dir` 就是 `<角色目录>/runtime`。
+    let ark = null
+    if (fmt.id === 'ark' && arkMetaCache) {
+      const charDir = path.dirname(dir)
+      const meta = await arkMetaCache(charDir)
+      if (meta) {
+        const charId = meta.id || dirIdOf(charDir)
+        const form = meta.spineAssets.find(s => s.bundle === base) || null
+        const toRel = f => (f ? path.relative(rootPath, path.join(charDir, f)).split(path.sep).join('/') : null)
+        // 只有「承载条目」带角色级的立绘/语音（carrierBundle 由 readArkMeta 算好，
+        // 没有本体的角色会退到第一条 bundle，不会因为缺本体而丢掉全部立绘）。
+        const isCarrier = base === meta.carrierBundle
+        ark = {
+          charId,
+          charName: meta.name || null,          // null → 前端退回显示 charId
+          charAltName: meta.altName || null,
+          rarity: meta.rarity,                  // null / 1-5（实测 225/648 条目有）
+          group: group === '（根目录）' ? path.basename(charDir) : group,
+          formBundle: base,
+          formLabel: arkFormLabel(base, charId),
+          // 默认形态 = 角色 id 同名的那个（素材自身的惯例：bundle 名等于角色 id 即本体）
+          isDefaultForm: base === charId,
+          isCarrier,
+          animationCount: form ? form.animations.length : null,
+          defaultAnimation: form ? form.defaultAnimation : null,
+          // 立绘/头像/技能图标：路径转成相对根目录，前端可以直接当 URL 用
+          statics: isCarrier ? meta.statics.map(s => ({ ...s, url: toRel(s.file) })).filter(s => s.url) : [],
+          voices: isCarrier ? meta.voices.map(v => ({ ...v, url: toRel(v.file) })).filter(v => v.url) : [],
+        }
+      }
+    }
+
     out.push({
       id: relAtlas,
       dir,
-      group,
+      group: ark ? ark.group : group,
       folder: path.basename(dir),
       base,
       atlas: atlasName,
@@ -453,6 +749,8 @@ async function walk(dir, depth, maxDepth, out, rootPath, fmt) {
       skeleton: skel ? skel.name : null,
       skeletonKind: skel ? skel.kind : null,
       spineMinor,
+      ark,
+      jczx,
       images: found_,
       relImages: found_.map(relOf),
       // 需求 5：thumb.png 且 mtime ≥ 资产文件才算有效（否则前端走离屏重渲并覆盖）
@@ -475,7 +773,8 @@ async function walk(dir, depth, maxDepth, out, rootPath, fmt) {
     if (pngs.length) {
       const relOf = (name) => path.relative(rootPath, path.join(dir, name)).split(path.sep).join('/')
       const relFirst = relOf(pngs[0])
-      if (isJczxCacheRel(relFirst)) {
+      // 两种来源都收：解包缓存（bd2viewer-jczx/）或图鉴发布包的已解包层（source/mod1/mod2）。
+      if (isJczxCacheRel(relFirst) || jczxLayerOf(rootPath, dir)) {
         const base = path.basename(pngs[0], path.extname(pngs[0]))
         const rawFolder = path.basename(dir)
         const pretty = rawFolder.replace(/^[0-9a-f]{10}_/, '')
@@ -505,7 +804,7 @@ async function walk(dir, depth, maxDepth, out, rootPath, fmt) {
   }
 
   for (const sub of subdirs) {
-    await walk(sub, depth + 1, maxDepth, out, rootPath, fmt)
+    await walk(sub, depth + 1, maxDepth, out, rootPath, fmt, arkMetaCache)
   }
 }
 
@@ -553,7 +852,8 @@ async function scanRoot(root, force = false, mode = DEFAULT_FORMAT) {
         autoSetup: true,
       })
     }
-    await walk(root.path, 0, config.maxDepth || 5, items, root.path, fmt)
+    await walk(root.path, 0, config.maxDepth || 5, items, root.path, fmt,
+      fmt.id === 'ark' ? makeArkMetaCache() : null)
     // jczx 模式下只保留缓存目录里抽出的条目（避免误认其它命名）
     if (fmt.id === 'jczx') {
       for (let i = items.length - 1; i >= 0; i--) {

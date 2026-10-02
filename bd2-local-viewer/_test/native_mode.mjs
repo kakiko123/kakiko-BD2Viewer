@@ -2346,8 +2346,8 @@ try {
     return out
   `, 180000)
 
-  check('㉖ 资产页有 BD2 / Lost Sword / NIKKE / JCZX 四段切换，组名可翻译、游戏名保留原文',
-    modeTest.btnCount === 4 && modeTest.btnLabels.join('|') === 'BD2|Lost Sword|NIKKE|JCZX' &&
+  check('㉖ 资产页有 BD2 / Lost Sword / NIKKE / JCZX / 星陨计划 五段切换，组名可翻译、游戏名保留原文',
+    modeTest.btnCount === 5 && modeTest.btnLabels.join('|') === 'BD2|Lost Sword|NIKKE|JCZX|星陨计划' &&
     modeTest.keepMarked === true && modeTest.groupAria.length > 0,
     `按钮=${JSON.stringify(modeTest.btnLabels)} keep=${modeTest.keepMarked} aria="${modeTest.groupAria}"`)
   check('㉖ 默认停在 BD2，且按钮高亮就是状态本身',

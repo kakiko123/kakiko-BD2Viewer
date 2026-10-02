@@ -140,6 +140,19 @@ let cancelled = false
 const I18N_EN = {
   /* ---- 顶栏 / 导航 ---- */
   '本地复刻版': 'Local Edition',
+  '立绘': 'Illustration',
+  '头像': 'Portrait',
+  '语音': 'Voice',
+  '播放中…': 'Playing…',
+  '语音加载失败': 'Voice failed to load',
+  '语音播放失败': 'Voice playback failed',
+  '{n} 个形态': '{n} forms',
+  '{n} 图': '{n} images',
+  '{w}×{h}': '{w}x{h}',
+  '{n} 个动画': '{n} animations',
+  '{n} 张': '{n}',
+  '战斗形态': 'Battle form',
+  'CG {x}': 'CG {x}',
   '选择资产根目录': 'Choose asset root folder',
   '添加目录': 'Add Folder',
   '把任意本地文件夹加为根目录': 'Add any local folder as a root',
@@ -604,18 +617,18 @@ function saveLang(v) {
    id 必须与 server.mjs 的 FORMATS 键、ScanEngine 的 MODE_* 一致。 */
 
 const MODE_KEY = 'bd2.mode'
-const ASSET_MODES = ['bd', 'lostsword', 'nikke', 'jczx']
+const ASSET_MODES = ['bd', 'lostsword', 'nikke', 'jczx', 'ark']
 /** 专名：中英界面都写原文，不进翻译表（R11.1） */
-const MODE_LABEL = { bd: 'BD2', lostsword: 'Lost Sword', nikke: 'NIKKE', jczx: 'JCZX' }
+const MODE_LABEL = { bd: 'BD2', lostsword: 'Lost Sword', nikke: 'NIKKE', jczx: 'JCZX', ark: '星陨计划' }
 /** 需求 4（修正）：spine-player 的 premultipliedAlpha =「按 PMA 混合」。
  *  · BD2 图集 PNG 是直通 alpha → 需要混合开 + 上传时 UNPACK 预乘（见下）。
- *  · NIKKE / JCZX 从 Unity RGBA32 抽出的 PNG 本身已是 PMA（atlas `pma:true`）
+ *  · NIKKE / JCZX / Ark 从 Unity RGBA32 抽出的 PNG 本身已是 PMA（atlas `pma:true`）
  *    → 混合必须开；若再 UNPACK 预乘会双预乘，眼睛/半透明处发黑；关掉混合则
- *    经典「PMA 贴图 + 直通混合」黑边。故 nikke/jczx 默认混合开、上传预乘关。
+ *    经典「PMA 贴图 + 直通混合」黑边。故 nikke/jczx/ark 默认混合开、上传预乘关。
  *  · lostsword 暂保持关（未确认图集 PMA）。 */
-const PREMULTIPLY_DEFAULT = { bd: true, lostsword: false, nikke: true, jczx: true }
+const PREMULTIPLY_DEFAULT = { bd: true, lostsword: false, nikke: true, jczx: true, ark: true }
 /** 上传时 UNPACK_PREMULTIPLY：仅直通 alpha 图集需要（BD2）。已是 PMA 的切勿开。 */
-const UPLOAD_PREMULTIPLY_BY_MODE = { bd: true, lostsword: false, nikke: false, jczx: false }
+const UPLOAD_PREMULTIPLY_BY_MODE = { bd: true, lostsword: false, nikke: false, jczx: false, ark: false }
 function defaultPremultiply(mode) {
   return ASSET_MODES.includes(mode) ? !!PREMULTIPLY_DEFAULT[mode] : true
 }
@@ -670,6 +683,13 @@ async function setAssetMode(mode) {
   // 否则播放页会继续挂着一套不属于当前类型的画面（而且它的文件按新规则根本不成立）。
   if (S.current) { disposePlayer(); S.current = null }
   S.currentPose = 'normal'
+  // 切档时把 ark 的两块 UI 收起来：disposePlayer 不走 resetMeta，光靠它这些组会
+  // 顶着上一个模式的立绘/语音留在侧栏里（切到 bd 档后还看得到星陨计划的语音列表）。
+  for (const id of ['arkStaticGroup', 'arkVoiceGroup']) {
+    const g = $(id)
+    if (g) g.hidden = true
+  }
+  stopArkVoice()
   // 立刻清空可见列表并刷一帧：S.items 还是上一 mode 扫出来的结论，
   // 若等 await scan 回来才清，切换瞬间会出现「NIKKE 档亮着、格子却仍是 BD2 卡」
   // （大目录扫描要几百毫秒到数秒，截图像素级证据就是这么来的）。
@@ -2211,8 +2231,8 @@ function matchesAssetMode(item) {
 
 function allItems() {
   const base = [...S.customItems, ...S.items].filter(matchesAssetMode)
-  if (S.mode === 'nikke') {
-    // NIKKE 档：藏姿势变体（成员挂到主条目上，见 R18）
+  if (S.mode === 'nikke' || S.mode === 'ark') {
+    // nikke：藏姿势变体；ark：藏同一角色的其它形态（都挂在主条目 members 上，见 R18）
     return base.filter(i => !nikkeViewFor().variantKeys.has(itemKey(i)))
   }
   if (S.mode === 'lostsword') {
@@ -2334,6 +2354,55 @@ function nikkeViewFor() {
       for (const m of uniq.slice(1)) variantKeys.add(itemKey(m.item))
     }
   }
+  if (S.mode === 'ark') {
+    // Ark（星陨计划）：一个角色目录里的多个 bundle 是**同一个角色的不同形态**
+    // （本体 / `<ID>_S` 战斗形态 / `<ID>_N` / `CG_<ID>_a|b` 剧情CG骨骼）。
+    //
+    // 与 NIKKE 的关键差别：Ark 的形态**视觉完全不同**（CG 骨骼是剧情立绘级别的构图，
+    // `_S` 是战斗骨骼），不是「同一角色换个姿势」—— 所以播放页的切换入口必须标出形态名
+    // （见 buildFormSwitcher / formLabel），否则用户会以为点坏了。
+    //
+    // 分组键直接用服务端在 meta.json 里给的 charId —— 它已经处理了「本体是否存在」
+    // （只有 189/267 个角色目录真有本体，猜不出就要靠 meta 的 spineAssets 兜底）。
+    const groups = new Map()
+    const sorted = [...S.items].sort((a, b) =>
+      String(a.relAtlas || '').localeCompare(String(b.relAtlas || '')))
+    for (const it of sorted) {
+      const ak = it && it.ark
+      if (!ak || !ak.charId) continue
+      const key = ak.charId
+      let grp = groups.get(key)
+      if (!grp) { grp = []; groups.set(key, grp) }
+      // pose 用 formBundle（唯一且稳定）；本体（isDefaultForm）排在最前。
+      grp.push({ item: it, pose: ak.formBundle || it.base, form: ak })
+    }
+    for (const [key, grp] of groups) {
+      // 本体优先，其余按 bundle 名排，保证顺序稳定
+      grp.sort((a, b) => {
+        const da = a.form && a.form.isDefaultForm ? 0 : 1
+        const db = b.form && b.form.isDefaultForm ? 0 : 1
+        return da !== db ? da - db : String(a.pose).localeCompare(String(b.pose))
+      })
+      const seen = new Set()
+      const uniq = grp.filter(m => (seen.has(m.pose) ? false : (seen.add(m.pose), true)))
+      if (uniq.length < 2) continue
+      const main = uniq[0].item
+      main.members = uniq
+      main.groupId = key
+      // 立绘/语音只在承载条目上（服务端已保证唯一），归组后要把它**搬到主条目**上，
+      // 否则主条目可能不是那个 isCarrier 的 bundle（本体缺失时），播放页就找不到立绘了。
+      const carrier = uniq.find(m => m.form && m.form.isCarrier)
+      if (carrier) {
+        main.ark = main.ark || {}
+        main.ark.statics = carrier.form.statics || []
+        main.ark.voices = carrier.form.voices || []
+        main.ark.charName = main.ark.charName || carrier.form.charName
+        main.ark.rarity = main.ark.rarity != null ? main.ark.rarity : carrier.form.rarity
+        main.ark.carrierBundle = carrier.pose
+      }
+      for (const m of uniq.slice(1)) variantKeys.add(itemKey(m.item))
+    }
+  }
   nikkeView = { src: S.items, mode: S.mode, variantKeys }
   return nikkeView
 }
@@ -2350,12 +2419,71 @@ function isJczxCacheItem(it) {
     || r.startsWith('.bd2viewer-jczx/') || r.includes('/.bd2viewer-jczx/')
 }
 
-/** 当前播放姿势实际指向的条目：主条目本身，或它 members 里的那个变体。 */
+/** 当前播放姿势实际指向的条目：主条目本身，或它 members 里的那个变体。
+ *  NIKKE 的默认成员是 pose==='normal'；Ark 没有 normal，members[0] 就是本体（见 defaultPoseOf）。 */
 function activeMemberOf(item) {
-  const pose = S.currentPose || 'normal'
-  if (!item || !Array.isArray(item.members) || pose === 'normal') return item
+  if (!item || !Array.isArray(item.members) || !item.members.length) return item
+  const pose = S.currentPose || defaultPoseOf(item)
+  if (pose === 'normal') return item
   const m = item.members.find(x => x.pose === pose)
   return m ? m.item : item
+}
+
+/* ------------------------------------------------------------------ Ark 显示口径
+   星陨计划（Ark Re:Code）的卡片不该只显示 `H001` —— 素材 `meta.json` 里就有中文名。
+   但实测这批元数据**不完整**，所以每一层都要能退回 id：
+
+   · `角色/H001` 有 character 字段 → 「夏妮」+ 稀有度 5
+   · `角色/B001` 的 name 是占位「未命名（B001）」→ 服务端已转成 null → 退回显示 `B001`
+   · `画册/A0001` 的 meta.json **根本没有 character 字段**（381 个全是）→ 退回显示目录 id
+   · 分组后主条目可能不是承载条目（本体缺失时），立绘/语音由 nikkeViewFor 搬过来 */
+
+const RARITY_MARK = ['✦', '✦✦', '✦✦✦', '✦✦✦✦', '✦✦✦✦✦']
+
+/** 卡片主标题：Ark 有中文名就用中文名，否则退回 bundle id。
+ *  ⚠️ 退回用 `item.base` 而不是 `item.folder` —— folder 是**骨架文件所在目录**的末段，
+ *  Ark 的骨架全在 `<角色>/runtime/` 下，folder 恒为 "runtime"，596 张卡会全叫这个名字。 */
+function displayNameOf(item) {
+  if (item && item.ark && item.ark.charName) return item.ark.charName
+  return item ? (item.base || item.folder || '') : ''
+}
+
+/** 卡片副标题：稀有度 + 形态数 + 贴图数。Ark 特有（其它模式走原来的 base 写法）。 */
+function arkCardSub(item) {
+  const ak = item && item.ark
+  if (!ak) return ''
+  const bits = []
+  if (ak.rarity != null) {
+    const n = Math.max(0, Math.min(RARITY_MARK.length - 1, ak.rarity - 1))
+    bits.push(RARITY_MARK[n])
+  }
+  const forms = Array.isArray(item.members) ? item.members.length : 1
+  if (forms > 1) bits.push(t('{n} 个形态', { n: forms }))
+  bits.push(t('{n} 图', { n: (item.images || []).length }))
+  return bits.join(' ')
+}
+
+/** 播放页副标题：中文名 · 稀有度 · 形态 · 动画数。 */
+function arkCurrentSub(item) {
+  const ak = item && item.ark
+  if (!ak) return ''
+  const bits = []
+  if (ak.charName) bits.push(ak.charName)
+  if (ak.charId) bits.push(ak.charId)
+  if (ak.rarity != null) {
+    const n = Math.max(0, Math.min(RARITY_MARK.length - 1, ak.rarity - 1))
+    bits.push(RARITY_MARK[n] + t('稀有度 {n}', { n: ak.rarity }))
+  }
+  if (ak.formLabel) bits.push(ak.formLabel)
+  if (ak.animationCount != null) bits.push(t('{n} 个动画', { n: ak.animationCount }))
+  return bits.join(' · ')
+}
+
+/** 这个条目的立绘（kind==='full'）—— 播放页大图用。 */
+function arkIllustrationOf(item) {
+  const ak = item && item.ark
+  if (!ak || !Array.isArray(ak.statics)) return null
+  return ak.statics.find(s => s.kind === 'full' && s.url) || null
 }
 
 /* ------------------------------------------------------------------ 资产顺序
@@ -3555,13 +3683,14 @@ function galleryCard(item) {
     '<div class="card-info"><div class="card-name"></div><div class="card-sub"></div>' +
     '<div class="card-hit" hidden></div></div>'
 
-  el.querySelector('.card-name').textContent = item.folder
+  el.querySelector('.card-name').textContent = displayNameOf(item)
   el.querySelector('.card-sub').textContent = item.pendingUnpack
     ? t('尚未解包')
     : item.imageOnly
       ? t('CG · {n} 张', { n: (item.images || []).length })
-      : (item.base + (item.skeletonKind ? `.${item.skeletonKind}` : '') +
-       t(' · {n} 图', { n: (item.images || []).length }))
+      : (S.mode === 'ark' && item.ark ? arkCardSub(item)
+        : item.base + (item.skeletonKind ? `.${item.skeletonKind}` : '') +
+          t(' · {n} 图', { n: (item.images || []).length }))
 
   // 搜索命中的是**内部资源文件**（不是目录名 / 文件名）时，卡片上要说明一句，
   // 否则用户看到一堆名字里没有关键词的卡片会以为搜错了。
@@ -3806,7 +3935,7 @@ async function makeThumb(item, size = 220) {
     try {
       const data = p.skeleton?.data
       if (data && (data.skins || []).length > 1) {
-        const best = fullestSkin(data)
+        const best = fullestSkin(data, rt)
         const composed = composeSkin(rt, data, best.name)
         if (composed) p.skeleton.setSkin(composed)
         else p.skeleton.setSkinByName(best.name)
@@ -4818,19 +4947,24 @@ function applySkeletonCfg(cfg, urls, compat) {
 
 async function spineMinorFor(item) {
   const jsonKind = !!(item && item.skeletonKind === 'json')
-  // 解包出来的 NIKKE 是 4.1。头里碰巧的 "4.0" 或扫描缓存不能盖过这一点，
-  // 否则 4.0 运行时把动画读成空列表，页面就报「这个骨架里没有任何动画」。
-  if (isNikkeCacheItem(item) && (item.spineMinor === '4.0' || item._spineMinor === '4.0' || !item.spineMinor)) {
+  // ⚠️ 这里**不能**对 NIKKE 缓存一律钉死 4.1。
+  // 解包缓存里绝大多数骨架是 4.1，但**不是全部**（2026-10-02 实测 496 个骨架里 61 个
+  // 是 4.0.47，来自另一个导出器）。当年那条「一律 4.1」是为了绕开全头正则误判，
+  // 而现在 server / Android / 前端三处都按 Spine 二进制布局精确读版本
+  // （[8]=n-1 长度、[9..]="4.x.y"），在本机 496 个文件上与服务端逐个一致。
+  // 所以：**有明确版本就信它**，只在完全没有版本信息时才按 NIKKE 默认 4.1 兜底。
+  //
+  // 2026-10-02 之前这条规则还在时，c022_cover_00（4.0.47）被强塞进 4.1 运行时，
+  // 报「Attachment name must not be null」；更糟的是它连报错里的「换一个 minor 再试」
+  // 兜底都救不回来 —— 重试把 _spineMinor 设成 '4.0'，下一次 spineMinorFor 又被这条
+  // 规则改回 '4.1'，于是永远在 4.1 上打转。
+  if (isNikkeCacheItem(item) && !item.spineMinor && !item._spineMinor) {
     item.spineMinor = '4.1'
-    if (item._spineMinor === '4.0') item._spineMinor = '4.1'
   }
   // 二进制可以缓存。JSON 不行：扫描经常把 JCZX 标成 4.2，或者第一次探测时
   // 文件还没读到，缓存下来之后 3.8.99 就会进 4.2 播放器。
   if (!jsonKind && item && item._spineMinor !== undefined) return item._spineMinor
   if (jsonKind && item.__spineSniffed && item._spineMinor !== undefined) return item._spineMinor
-  // 手机解包的 NIKKE 是 4.1 二进制。扫描若被 hash 里碰巧的 "4.0.xx" 骗成 4.0，
-  // 4.0 运行时读出来动画列表是空的，页面就报「这个骨架里没有任何动画」。
-  if (isNikkeCacheItem(item) && item.spineMinor === '4.0') item.spineMinor = '4.1'
   const fallback = () => modeDefaultSpineMinor(item)
   if (jsonKind) {
     let text = item.__jsonText || ''
@@ -5050,14 +5184,22 @@ function attachNativeSkeleton(item, urls) {
   return true
 }
 
-/** 播放页里切姿势（NIKKE 的 普通/瞄准/掩体）。S.current 不变（还是那张卡），
+/** 播放页里切姿势（NIKKE 的 普通/瞄准/掩体；Ark 的形态：本体/战斗形态/CG a…）。S.current 不变（还是那张卡），
  *  只是把「实际加载的骨架」指到对应成员再重走一遍载入。 */
 function switchPose(pose) {
   const it = S.current
   if (!it || !Array.isArray(it.members) || it.members.length < 2) return
-  if (pose === (S.currentPose || 'normal')) return
+  if (pose === (S.currentPose || defaultPoseOf(it))) return
   S.currentPose = pose
   loadCurrent()
+}
+
+/** 一个分组条目的「默认成员」。NIKKE 是 pose==='normal' 的本体；Ark 没有 normal 概念 ——
+ *  默认成员就是 members[0]（nikkeViewFor 已把本体排在最前）。 */
+function defaultPoseOf(item) {
+  if (!item || !Array.isArray(item.members) || !item.members.length) return 'normal'
+  const n = item.members.find(m => m.pose === 'normal')
+  return n ? 'normal' : item.members[0].pose
 }
 
 async function loadCurrent() {
@@ -5072,7 +5214,7 @@ async function loadCurrent() {
   clearError()
   resetMeta()
 
-  $('currentName').textContent = item.folder
+  $('currentName').textContent = S.mode === 'ark' ? displayNameOf(item) : item.folder
   if (item.imageOnly) {
     const n = (item.relImages || []).length
     $('currentSub').textContent = [item.group, t('CG · {n} 张', { n })].filter(Boolean).join(' · ')
@@ -5085,9 +5227,17 @@ async function loadCurrent() {
   }
   // NIKKE 姿势变体：副标题里写明当前加载的是哪个成员（c022_aim_00），别让人以为还在本体上
   const member = activeMemberOf(item)
-  $('currentSub').textContent = [item.group, member.base, item.skeletonKind ? `.${item.skeletonKind}` : '',
-    item.backLayer ? t('含背层') : '']
-    .filter(Boolean).join(' · ')
+  $('currentSub').textContent = S.mode === 'ark'
+    // Ark：形态切换后副标题要跟着换（member 可能是另一个 bundle），形态名用 formLabel
+    ? (() => {
+        const mk = member && member.ark ? member.ark : item.ark
+        const forms = Array.isArray(item.members) && item.members.length > 1
+          ? t('{n} 个形态', { n: item.members.length }) : ''
+        return [arkCurrentSub(Object.assign({}, item, { ark: mk })), forms].filter(Boolean).join(' · ')
+      })()
+    : [item.group, member.base, item.skeletonKind ? `.${item.skeletonKind}` : '',
+      item.backLayer ? t('含背层') : '']
+        .filter(Boolean).join(' · ')
   $('emptyState').hidden = true
   setBusy(true, t('载入中…'))
   setLoadProgress({ stage: t('阶段：加载骨架'), indeterminate: true })
@@ -5248,7 +5398,7 @@ function createBackLayer(backItem, mainRt) {
         if (S.backPlayer !== bp) return       // 期间用户已经切走 → 丢掉这一层
         try {
           const data = bp.skeleton?.data
-          const best = data && (data.skins || []).length > 1 ? fullestSkin(data) : null
+          const best = data && (data.skins || []).length > 1 ? fullestSkin(data, rt) : null
           if (best) {
             const composed = composeSkin(rt, data, best.name)
             if (composed) bp.skeleton.setSkin(composed)
@@ -5370,6 +5520,162 @@ function cycleStillImage(dir) {
   if (!cleanUI) toast(t('CG {i}/{n}', { i: ((i % n) + n) % n + 1, n }))
 }
 
+/* ------------------------------------------------------- Ark：立绘网格 / 语音列表
+
+   星陨计划的每个角色目录里除了骨架，还有一整套静图与语音（实测 2231 张 PNG、
+   1000 条 wav），素材自己的 viewer 能看，我们原来只拿它们当缩略图背景。
+
+   · 立绘（meta.staticAssets 里 kind==='full'，实测 160 张）竖幅大图，点开看原图；
+     头像/技能图标也列出来，方便认人。
+   · 语音（`runtime/voice/*.wav`，命名绑定事件如 `H001_Death_*.wav`）点一下就播。
+   两块的显隐都只在 ark 档为真（resetMeta 收起来，onLoaded 按 S.current 重挂），
+   别的档不受影响。 */
+
+/** 立绘/图标网格。非 ark 档或没有静图时整组隐藏。 */
+function renderArkStatics() {
+  const group = $('arkStaticGroup')
+  const grid = $('arkStaticGrid')
+  if (!group || !grid) return
+  const item = S.current
+  const list = (S.mode === 'ark' && item && item.ark && Array.isArray(item.ark.statics))
+    ? item.ark.statics.filter(s => s && s.url) : []
+  grid.innerHTML = ''
+  group.hidden = list.length === 0
+  if (!list.length) return
+
+  // 立绘排前面（用户最常看的就是它），其余按 kind 再排
+  const order = { full: 0, face: 1 }
+  const sorted = [...list].sort((a, b) =>
+    (order[a.kind] ?? 9) - (order[b.kind] ?? 9) || a.label.localeCompare(b.label))
+
+  for (const s of sorted) {
+    const cell = document.createElement('div')
+    cell.className = 'ark-static-cell'
+    const img = document.createElement('img')
+    img.alt = ''
+    img.loading = 'lazy'
+    img.draggable = false
+    img.src = assetUrl(s.url)
+    img.title = s.label + (s.width ? t(' · {w}×{h}', { w: s.width, h: s.height }) : '')
+    cell.appendChild(img)
+    const kind = document.createElement('div')
+    kind.className = 'ark-kind'
+    kind.textContent = arkStaticKindLabel(s)
+    cell.appendChild(kind)
+    cell.addEventListener('click', () => openArkImage(s))
+    grid.appendChild(cell)
+  }
+}
+
+function arkStaticKindLabel(s) {
+  if (s.kind === 'full') return t('立绘')
+  if (s.kind === 'face') return t('头像')
+  return s.label
+}
+
+/** 点立绘 → 在播放页叠一张看原图的图层。
+ *  ⚠️ **别用 host.innerHTML = ''** —— 那会把播放器（连它的 canvas）从 DOM 上摘掉，
+ *  之后 disposePlayer / 渲染循环再摸这个 canvas 就抛 "Unable to render skeleton"。
+ *  正解是新建一个覆盖层，原样保留播放器节点，关闭时只摘掉覆盖层。
+ *  （`host.innerHTML` 备份再恢复也不可行：canvas 的 WebGL 上下文会随节点移动丢失。）
+ */
+function openArkImage(s) {
+  if (!s || !s.url) return
+  const host = $('playerHost')
+  if (!host) return
+  closeArkImage(true)            // 已经在看图就换一张，别叠两层
+  const layer = document.createElement('div')
+  layer.id = 'arkImageLayer'
+  layer.style.cssText = 'position:absolute;inset:0;z-index:5;background:var(--g900);display:flex;align-items:center;justify-content:center;cursor:zoom-out;'
+  const img = document.createElement('img')
+  img.id = 'arkFullImage'
+  img.alt = ''
+  img.draggable = false
+  img.src = assetUrl(s.url)
+  img.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain;'
+  layer.appendChild(img)
+  layer.addEventListener('click', () => closeArkImage())
+  host.appendChild(layer)
+  $('currentSub').textContent = [s.label, s.width ? t('{w}×{h}', { w: s.width, h: s.height }) : '']
+    .filter(Boolean).join(' · ')
+}
+
+/** 关掉立铺大图。quiet=true 时只是清掉覆盖层、不重载（内部换图用）。 */
+function closeArkImage(quiet) {
+  const layer = $('arkImageLayer')
+  if (!layer) return
+  layer.remove()
+  if (!quiet && S.current) loadCurrent()   // 副标题回到角色信息
+}
+
+/** 语音列表。点一条播一次，同时停掉上一条（别叠音）。 */
+let arkVoiceAudio = null
+function renderArkVoices() {
+  const group = $('arkVoiceGroup')
+  const list = $('arkVoiceList')
+  if (!group || !list) return
+  const item = S.current
+  const voices = (S.mode === 'ark' && item && item.ark && Array.isArray(item.ark.voices))
+    ? item.ark.voices.filter(v => v && v.url) : []
+  list.innerHTML = ''
+  group.hidden = voices.length === 0
+  if (!voices.length) return
+
+  for (const v of voices) {
+    const row = document.createElement('div')
+    row.className = 'list-item'
+    const nm = document.createElement('div')
+    nm.className = 'voice-name'
+    nm.textContent = v.name
+    nm.title = v.file
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'btn'
+    btn.textContent = t('播放')
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      playArkVoice(v, btn)
+    })
+    row.appendChild(nm)
+    row.appendChild(btn)
+    list.appendChild(row)
+  }
+}
+
+function playArkVoice(v, btn) {
+  // 正在播的就是这条 → 当成「停止」；否则先掐掉上一条再放新的（别叠音）。
+  // 顺序要紧：先记住是不是同一条，再把句柄清掉，反过来就永远判不相等。
+  const same = !!arkVoiceAudio && arkVoiceAudio.__rel === v.url
+  stopArkVoice()
+  if (btn) btn.textContent = t('播放')
+  if (same) return
+  const a = new Audio(assetUrl(v.url))
+  a.__rel = v.url
+  a.addEventListener('ended', () => { if (btn) btn.textContent = t('播放') })
+  a.addEventListener('error', () => {
+    if (btn) btn.textContent = t('播放')
+    showError(t('语音加载失败'))
+  })
+  if (btn) btn.textContent = t('播放中…')
+  arkVoiceAudio = a
+  S.__arkAudio = a         // 调试面探针（R10）：new Audio 的元素不在 DOM 里，排障只能靠它
+  a.play().catch(err => {
+    if (btn) btn.textContent = t('播放')
+    // 自动播放被浏览器策略拒（NotAllowedError）不是故障 —— 音频已解码，
+    // 用户再点一次就能播。别在这种情形下弹错误框吓人。
+    if (err && err.name === 'NotAllowedError') return
+    showError(t('语音播放失败'))
+  })
+}
+
+/** 停掉正在播的语音（切资产 / 切形态 / 卸载时用）。 */
+function stopArkVoice() {
+  if (!arkVoiceAudio) return
+  try { arkVoiceAudio.pause() } catch { /* 忽略 */ }
+  arkVoiceAudio = null
+  for (const b of document.querySelectorAll('#arkVoiceList .btn')) b.textContent = t('播放')
+}
+
 function disposePlayer() {
   // 本轮加载用过的「3.x→4.x 转换后」blob 在这里回收（必须在下面的 early return 之前，
   // 否则「主体还没建起来就切走」的情况会把 blob 漏掉）
@@ -5404,6 +5710,13 @@ function resetMeta() {
   $('layerList').innerHTML = ''
   const pg = $('poseGroup')
   if (pg) pg.hidden = true       // 姿势条随数据重挂（onLoaded → renderPoseBar）
+  // Ark 的立绘网格 / 语音列表同理：先收起来，等 onLoaded 后按新资产重挂。
+  // 语音还要停 —— 正在播的音频属于上一个角色，别让它接着响。
+  for (const id of ['arkStaticGroup', 'arkVoiceGroup']) {
+    const g = $(id)
+    if (g) g.hidden = true
+  }
+  stopArkVoice()
   $('seek').value = 0
   syncStageNav()            // 动画清空了 → 两侧箭头跟着收起来
 }
@@ -5467,9 +5780,13 @@ function onLoaded(player) {
   renderAnimList()
   renderSkinSelect()
   renderPoseBar()
+  // Ark：立绘网格 + 语音列表。非 ark 档这两块自己 hidden 掉（函数内有守卫）。
+  renderArkStatics()
+  renderArkVoices()
   // 初始皮肤挑覆盖最全的（多皮肤骨架里 default 常常只有零头，见皮肤一节的说明），
   // 必须在算取景框之前定下来，否则取景是按残缺身体量的。
-  const bestSkin = fullestSkin(skeleton.data)
+  // 口径是「摆好姿势后实际出图的槽位数」，所以要把当前播放器的运行时传进去。
+  const bestSkin = fullestSkin(skeleton.data, player.__spineRt || activeSpine())
   if (bestSkin && S.skins.length > 1) {
     $('skinSelect').value = bestSkin.name
     applySkin(bestSkin.name, { redraw: false })
@@ -5522,13 +5839,16 @@ function onLoaded(player) {
 }
 
 /** 默认动画优先级：姿势专属的 idle（aim→aim_idle、cover→cover_idle，与参考站一致）
- *  → idle → once → 含 idle 的 → 第一个 */
+ *  → idle → once → 含 idle 的 → 第一个
+ *  Ark 的 pose 是 bundle 名（`H001_S`），不是动画名的一部分，所以只当字面量用
+ *  （并且这里只做 startsWith 判定，别把来路不明的字符串塞进 RegExp）。 */
 function pickDefaultAnimation() {
   const a = S.animations
   if (!a.length) return null
-  const pose = S.currentPose || 'normal'
-  if (pose !== 'normal') {
-    const poseIdle = a.find(x => new RegExp(`^${pose}_idle$`, 'i').test(x))
+  const pose = S.currentPose || defaultPoseOf(S.current)
+  if (pose && pose !== 'normal') {
+    const want = String(pose).toLowerCase() + '_idle'
+    const poseIdle = a.find(x => String(x).toLowerCase() === want)
     if (poseIdle) return poseIdle
   }
   const exact = n => a.find(x => x.toLowerCase() === n)
@@ -5881,10 +6201,18 @@ function renderAnimList() {
    Lost Sword 一类骨架的「default」皮肤常常只有零头：身体部件放在具名皮肤里
    （实测 Elin：81 个槽位里 default 只带 11 个，"1" 带 33 个 —— 所以选 default
    就只显示一小块）。两件事必须做：
-   ①初始皮肤挑「覆盖槽位最多」的那个，而不是照书选第一个（default）；
+   ①初始皮肤挑「覆盖最多」的那个，而不是照书选第一个（default）；
    ②切到具名皮肤时把 default 垫在下面合成（default 皮肤放的是各套共用的部件）。
-   覆盖量数的是「槽位数」不是附件数 —— 一个槽位常挂好几个换装变体。 */
 
+   ⚠️ 覆盖量**既不能数皮肤声明的槽位数、也不能数 attachments 的条目数**，
+   唯一可信的口径是「摆好姿势后真正有附件的槽位数」（2026-10-02 实测 Ark H092 费南雪）：
+     default：声明 45 槽 / attachments 45 条 → 实际出图 42 个附件（只有头+头发+表情+武器）
+     LV1   ：声明 39 槽 / attachments 39 条 → 实际出图 81 个附件（全身衣服都在这里）
+   两套计数法在这里都会选中残的那个，症状是「立绘和动画都只有一个头」。
+   原因：槽位在 setup pose 下会按 attachmentName 链解析到别的附件，
+   所以「皮肤里写了几条」和「画面上出了几个」根本不是一回事。 */
+
+/** 皮肤自己声明的槽位数 / attachments 条目数。只用于平手时打破平局，**不代表出图量**。 */
 function skinSlotCount(skin) {
   const a = skin && skin.attachments
   if (!a) return 0
@@ -5892,12 +6220,51 @@ function skinSlotCount(skin) {
   return Object.keys(a).length
 }
 
-function fullestSkin(data) {
+/** 摆好姿势后，某个皮肤真正能显示的槽位数。maxBones 用于给 probe 骨架一个上界。 */
+function visibleSlotsForSkin(rt, data, skin, maxBones) {
+  let sk
+  try {
+    sk = new rt.Skeleton(data)
+    sk.setSlotsToSetupPose()
+    sk.setSkin(skin)
+    // 槽位名 → 骨骼的解析要在骨骼矩阵就绪后才是稳定的
+    sk.updateWorldTransform(0 /* x */, 0 /* y */, 0 /* a */)
+    sk.setToSetupPose()
+  } catch (err) {
+    return 0
+  }
+  let n = 0
+  for (const slot of sk.slots) {
+    if (slot.getAttachment()) n++
+  }
+  void maxBones
+  return n
+}
+
+/**
+ * 初始皮肤 = 「摆好姿势后可见附件最多」的那个。
+ * 需要运行时（要建一个临时 Skeleton 来试），所以拿不到 rt 就退回静态计数。
+ * 平手时偏向声明槽位多的，再平手取靠前者，保证结果确定（不随 Map 顺序漂）。
+ */
+function fullestSkin(data, rt) {
+  const list = data.skins || []
+  if (!list.length) return null
+  if (!rt || !rt.Skeleton) {
+    // 退化路径：只能数条目数
+    let best = null, bestN = -1
+    for (const s of list) {
+      const n = skinSlotCount(s)
+      if (n > bestN) { bestN = n; best = s }
+    }
+    return best
+  }
   let best = null
-  let bestN = -1
-  for (const s of data.skins || []) {
-    const n = skinSlotCount(s)
-    if (n > bestN) { bestN = n; best = s }
+  let bestV = -1
+  let bestS = -1
+  for (const s of list) {
+    const v = visibleSlotsForSkin(rt, data, s, data.bones ? data.bones.length : 0)
+    const sl = skinSlotCount(s)
+    if (v > bestV || (v === bestV && sl > bestS)) { bestV = v; bestS = sl; best = s }
   }
   return best
 }
@@ -5929,14 +6296,18 @@ function renderPoseBar() {
   group.hidden = !show
   bar.innerHTML = ''
   if (!show) return
-  const cur = S.currentPose || members[0].pose || 'normal'
+  const cur = S.currentPose || defaultPoseOf(S.current)
   for (const m of members) {
     const b = document.createElement('button')
     b.type = 'button'
     b.className = 'gm-btn'
     b.dataset.pose = m.pose
     b.setAttribute('aria-pressed', String(m.pose === cur))
-    b.textContent = t(POSE_LABEL[m.pose] || m.pose)
+    // Ark 的成员带 formLabel（本体 / 战斗形态 / CG a…）—— 用它，别把 bundle 名甩给用户。
+    // Ark 的形态视觉完全不同（CG 骨骼 vs 战斗骨骼），名字必须能区分开。
+    const raw = (m.form && m.form.formLabel) || POSE_LABEL[m.pose] || m.pose
+    b.textContent = t(raw)
+    b.title = m.form ? `${m.form.formBundle}（${m.form.animationCount == null ? '?' : m.form.animationCount} 个动画）` : ''
     b.onclick = () => switchPose(m.pose)
     bar.appendChild(b)
   }
@@ -7424,6 +7795,12 @@ window.__bd2viewer = {
   get pose() { return S.currentPose || 'normal' },
   switchPose,
   renderPoseBar,
+  // Ark 语音（星陨计划）：正在播的 Audio 实例。new Audio 的元素从不进 DOM，
+  // 没有这个探针就没法判断「点了到底播没播」。
+  get arkAudio() {
+    const a = S.__arkAudio
+    return a ? { readyState: a.readyState, networkState: a.networkState, error: a.error ? a.error.code : null, duration: a.duration, paused: a.paused, src: a.currentSrc } : null
+  },
   // Lost Sword 两层角色（R19）：测试用它确认背层真的起来了、且跟着本体同步
   get layers() {
     const bp = S.backPlayer
