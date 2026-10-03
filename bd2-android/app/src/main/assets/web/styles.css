@@ -37,6 +37,8 @@ html, body {
   height: 100%;
   overflow: hidden;
   overscroll-behavior: none;        /* 应用外壳自己滚动，不要下拉刷新/整页橡皮筋 */
+  /* 双指只许放大播放框里的角色。整页禁止捏合缩放，滚动仍可用。 */
+  touch-action: pan-x pan-y;
 }
 
 body {
@@ -171,8 +173,8 @@ body {
               border-color var(--dur-press) var(--ease-out),
               transform var(--dur-press) var(--ease-out);
   white-space: nowrap;
-  /* 声明「这里不会双击缩放」：点击不必等 300ms 的二次点击判定 */
-  touch-action: manipulation;
+  /* 单击不等 300ms，同时禁止双指把整页放大。滚动仍可用。 */
+  touch-action: pan-x pan-y;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
@@ -394,6 +396,8 @@ input[type="range"] {
   border-radius: var(--radius);
   overflow: hidden;
   background: #000;
+  /* 播放框自己处理捏合/拖动，不交给浏览器做整页缩放。 */
+  touch-action: none;
 }
 
 .bg-layer {
@@ -417,7 +421,15 @@ input[type="range"] {
   overflow: hidden;
 }
 
-.player-host canvas { display: block; }
+.player-host canvas {
+  display: block;
+  /* 捏合/拖动由我们自己算。manipulation 会把双指交给浏览器页面缩放，
+     和相机缩放叠在一起就是「手指动了画面不跟着走」。 */
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
 
 /* Lost Sword 的「两层角色」（R19）：背层 `_B` 用第二个播放器，压在主体（`_F`）下面。
    它不接任何指针事件 —— 交互（相机拖动、点图层）全归主体那一层。 */
@@ -1040,7 +1052,7 @@ body.view-grid .mtabs { display: none !important; }
   font-size: 12px;
   line-height: 1.4;
   cursor: pointer;
-  touch-action: manipulation;
+  touch-action: pan-x pan-y;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
@@ -1067,7 +1079,7 @@ body.view-grid .mtabs { display: none !important; }
   font-size: 13px;
   line-height: 1;
   cursor: pointer;
-  touch-action: manipulation;
+  touch-action: pan-x pan-y;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
@@ -1105,7 +1117,7 @@ body.view-grid .mtabs { display: none !important; }
   line-height: 1.4;
   white-space: nowrap;
   cursor: pointer;
-  touch-action: manipulation;
+  touch-action: pan-x pan-y;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
@@ -1241,7 +1253,7 @@ body.card-dragging .gal-grid { overscroll-behavior: none; }
 
 /* 拖动把手：伸手就往左上角摸，所以放左上。
    touch-action: none —— 从把手起手一定是拖动，不可能变成滚动，所以按下即拖、不用长按等待。
-   卡片其它地方是 touch-action: manipulation（允许滚动），靠长按 180ms 进入拖动。 */
+   卡片其它地方是 touch-action: pan-x pan-y（允许滚动，不允许整页捏合），靠长按 180ms 进入拖动。 */
 .card-drag {
   position: absolute;
   top: 5px;
@@ -1291,7 +1303,7 @@ body.card-dragging .gal-grid { overscroll-behavior: none; }
   font-size: 14px;
   line-height: 1;
   cursor: pointer;
-  touch-action: manipulation;
+  touch-action: pan-x pan-y;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
@@ -1418,7 +1430,7 @@ body.is-immersive .fs-fab { display: none !important; }
   justify-content: center;
   cursor: pointer;
   padding: 0;
-  touch-action: manipulation;
+  touch-action: pan-x pan-y;
   user-select: none;
 }
 @media (hover: hover) and (pointer: fine) {
@@ -1800,3 +1812,76 @@ body.is-touch .storage-bar .sb-toggle {
   color: var(--indigo-300, #a5b4fc);
   font-size: 20px;
 }
+
+/* 全屏：姿势条 + 皮肤下拉（BD2Viewer-fs-pose-skin.md §6）
+   放在底部动画条**上面**（它自己在 bottom:14px+safe-area，所以这里用 78px 错开）。
+   容器本身不吃点击，避免挡住画面拖拽；按钮和下拉自己 pointer-events:auto。 */
+.fs-extra {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(78px + env(safe-area-inset-bottom, 0px));
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(94vw, 560px);
+  pointer-events: none;
+  transition: opacity .3s ease;
+}
+.fs-extra.dim { opacity: .1; }
+.fs-pose-row,
+.fs-mod-row,
+.fs-skin-row { pointer-events: auto; }
+.fs-mod-row {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 4px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, .16);
+  background: rgba(10, 12, 18, .72);
+  backdrop-filter: blur(4px);
+}
+.fs-pose-row {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 4px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, .16);
+  background: rgba(10, 12, 18, .72);
+  backdrop-filter: blur(4px);
+}
+.fs-pose-row .gm-btn,
+.fs-mod-row .gm-btn {
+  flex: 0 0 auto;
+  min-height: 40px;
+  padding: 8px 14px;
+  font-size: 14px;
+}
+.fs-skin-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, .16);
+  background: rgba(10, 12, 18, .72);
+  backdrop-filter: blur(4px);
+  color: var(--g300, #c5cdd8);
+  font-size: 13px;
+}
+.fs-skin {
+  flex: 1;
+  min-width: 0;
+  min-height: 40px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, .24);
+  background: rgba(18, 22, 32, .9);
+  color: var(--text, #fff);
+  font: 14px/1.2 inherit;
+  padding: 0 8px;
+}
+/* 「只看画面」时和顶栏、底栏一样藏起来 */
+body.is-cleanui:not(.fs-reveal) .fs-extra { display: none !important; }

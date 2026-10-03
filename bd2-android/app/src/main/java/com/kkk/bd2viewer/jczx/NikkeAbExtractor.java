@@ -59,8 +59,14 @@ public final class NikkeAbExtractor {
     /** 缓存布局版本：2 = 每包一文件夹（与桌面 CACHE_LAYOUT_VERSION 对齐）。 */
     public static final int CACHE_LAYOUT_VERSION = 2;
 
-    /** 包级并发上限（需求 1）：任意时刻同时在解的包 ≤ 10；与桌面端一致。 */
-    public static final int MAX_CONCURRENT = 10;
+    /**
+     * 包级并发上限。
+     *
+     * ⚠️ **必须是 1**（2026-10-03 按 `BD2Viewer-APK-fixes.md` §2.1 改，原值 10）。
+     * 桌面端可以 10，手机不行：同时解多个 UnityFS 会 `OutOfMemoryError`，
+     * 而它是 **Error 不是 Exception**，接不住 → 进程被杀 = 闪退。
+     */
+    public static final int MAX_CONCURRENT = 1;
     /** @deprecated 使用 {@link #MAX_CONCURRENT}；保留别名以免旧引用编译失败。 */
     @Deprecated
     public static final int MAX_PER_PASS = MAX_CONCURRENT;
@@ -287,6 +293,13 @@ public final class NikkeAbExtractor {
             Executors.newFixedThreadPool(MAX_CONCURRENT, r -> {
                 Thread t = new Thread(r, "nikke-ab-unpack");
                 t.setDaemon(true);
+                // 只打日志，**不要**再交给系统默认处理器（那会杀进程）。
+                // ⚠️ 本类刻意保持**纯 Java**（无 android import，桌面端 Java 测试也复用它），
+                // 所以用 printStackTrace（Android 会把它转到 logcat 的 System.err）。
+                t.setUncaughtExceptionHandler((th, e) -> {
+                    System.err.println("[" + th.getName() + "] 解包线程未捕获异常: " + e);
+                    e.printStackTrace();
+                });
                 return t;
             });
 
@@ -495,7 +508,8 @@ public final class NikkeAbExtractor {
                     }
                 }
             }
-        } catch (Exception e) {
+        } catch (Throwable e) {
+            // 必须接 Throwable：OutOfMemoryError 是 Error 不是 Exception（APK-fixes §2.1）
             synchronized (rq.lock) {
                 rq.failed++;
                 if (rq.errors.length() < 6) {
@@ -1000,8 +1014,8 @@ public final class NikkeAbExtractor {
         for (File f : kids) {
             String n = f.getName();
             if (f.isDirectory()) {
-                if (depth > 0 && UnpackCacheHome.MODE_SOURCE_FOLDERS.contains(
-                        n.toLowerCase(Locale.ROOT))) continue;
+                // ⚠️ 不加 depth>0：扫描根正好是父目录时，第一层就要跳过别的游戏目录
+                if (UnpackCacheHome.isOtherGameFolder(n, "nikke")) continue;
                 // 跳过本缓存 + JCZX 缓存（含 legacy 点目录），避免 NIKKE 档串入 JCZX 产物
                 if (n.startsWith(".") || isCacheDirName(n) || JczxExtractor.isCacheDirName(n)) continue;
                 findBundles(f, depth + 1, out);

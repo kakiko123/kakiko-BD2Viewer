@@ -131,8 +131,15 @@ public final class JczxExtractor {
     }
 
 
-    /** 包级并发上限（与 NIKKE 一致）；避免一次扫根同步解完上千包把 UI 卡死。 */
-    public static final int MAX_CONCURRENT = 10;
+    /**
+     * 包级并发上限。
+     *
+     * ⚠️ **必须是 1**（2026-10-03 按 `BD2Viewer-APK-fixes.md` §2.1 改，原值 10）。
+     * 手机内存经不起同时解 10 个 UnityFS；`OutOfMemoryError` 是 **Error 不是 Exception**，
+     * `catch (Exception)` 接不住 → 默认未捕获处理器会把整个进程杀掉，
+     * 表现就是「一点读取就闪退」。
+     */
+    public static final int MAX_CONCURRENT = 1;
     /** 单包 inFlight 超时：超时记 failed 并腾槽，避免进度/toast 永远卡住。 */
     public static final long INFLIGHT_STUCK_MS = 180_000L;
     private static final int PRI_NORMAL = 0;
@@ -169,6 +176,13 @@ public final class JczxExtractor {
             Executors.newFixedThreadPool(MAX_CONCURRENT, r -> {
                 Thread t = new Thread(r, "jczx-unpack");
                 t.setDaemon(true);
+                // 只打日志，**不要**再交给系统默认处理器（那会杀进程）。
+                // ⚠️ 本类刻意保持**纯 Java**（无 android import，桌面端 Java 测试也复用它），
+                // 所以用 printStackTrace（Android 会把它转到 logcat 的 System.err）。
+                t.setUncaughtExceptionHandler((th, e) -> {
+                    System.err.println("[" + th.getName() + "] 解包线程未捕获异常: " + e);
+                    e.printStackTrace();
+                });
                 return t;
             });
     private static final Comparator<QItem> QUEUE_CMP =
@@ -283,7 +297,9 @@ public final class JczxExtractor {
                     rq.skippedNoSpine++;
                 }
             }
-        } catch (Exception e) {
+        } catch (Throwable e) {
+            // 必须接 Throwable：OutOfMemoryError 是 Error 不是 Exception，
+            // 漏出去就会被默认未捕获处理器杀掉进程（APK-fixes §2.1）
             synchronized (rq.lock) {
                 rq.failed++;
                 try {
@@ -1069,7 +1085,8 @@ public final class JczxExtractor {
             }
             if (f.isDirectory()) {
                 // Never enter sibling game mode folders (cache lives at BD2Viewer parent)
-                if (depth > 0 && UnpackCacheHome.MODE_SOURCE_FOLDERS.contains(n.toLowerCase(Locale.ROOT))) {
+                // ⚠️ **不加 depth>0 条件**：扫描根正好是 BD2Viewer 父目录时，第一层就要跳过兄弟游戏目录
+                if (UnpackCacheHome.isOtherGameFolder(n, "jczx")) {
                     continue;
                 }
                 findBundles(f, depth + 1, maxDepth, out);

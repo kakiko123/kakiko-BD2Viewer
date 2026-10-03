@@ -1,6 +1,6 @@
 # 改进需求文档
 
-> 创建：**2026-10-01** · 当前版本 **1.07**（versionCode 10，见需求 7 的冻结规则）
+> 创建：**2026-10-01** · 当前版本 **1.09**（versionCode 20；用户已确认升版）
 > 本文件是持续累积的改进需求清单：每条需求写明「现状 → 期望 → 设计要点 / 验收标准」。
 > 做完一条勾一条，不重写历史。
 
@@ -480,3 +480,155 @@ atlas 无 `blend:` 行 → 混合逻辑不动）。
   ark_mode（25 项，需 `BD2_ARK_ROOT`）。
 - 另修两条 1.07 遗留的**过期断言**（不是回归）：`bundle_check` 的「app.js 引用的 id 必须在
   index.html」误报运行时自建的 `#arkImageLayer`；`native_mode` ㉖ 断言 4 个模式按钮（现为 5 个）。
+
+---
+
+## 七、2026-10-03
+
+### 需求 8（P0）：jczx 档默认不开启名字含 `hexie` / `tape` 的图层
+
+**现状**：JCZX 骨架里有一批补丁图层（实测 slot 名如 `hexie_smog_61`、`tape_1`、
+`B_tape_20`、`renwu_booktape_4`、`hexie_light`、`cheattape_1`），默认全开会把角色盖住。
+实测素材：710 个骨架里 **13 个含 hexie slot、57 个含 tape slot**；打开
+`source/角色/10010/...alps03...` 时 352 个槽里有 **30 个**命中。
+
+**期望**：jczx 档进播放页时，这些图层默认是关的；用户想看自己在图层列表里勾。
+
+**修法**（不变量 **R27**，`public/app.js`）：
+- `JCZX_DEFAULT_HIDDEN_LAYERS = ['hexie', 'tape']`（**子串**匹配、大小写不敏感）+
+  `applyDefaultHiddenLayers()`，只按名字匹配，不改骨架数据、不写盘。
+- 调用点在 `loadCurrent()` 里、`renderLayerList()` **之前** —— 但必须排在 `applySkin()`
+  **之后**：`applySkin` 内部的 `setSlotsToSetupPose` 会 `S.hidden.clear()`，
+  早于它设置会被静默清掉（表现为「规则没生效」）。
+- **故意不进 `S.hiddenStack`**：那是「用户手动隐藏」的撤销栈（U 键），默认隐藏不是用户按的。
+- 切 mod / 切形态都会走 `loadCurrent()`，所以规则对 mod 层同样生效。
+
+**回归锁**：`jczx_mode` 新增 6 条断言（33 → 39 项）：先在**本地读盘**找一个骨架内容真含
+hexie/tape 的可见条目（不写死角色 id），打开后断言「命中的全被关掉 + 没误伤别的图层 +
+图层列表里这些行的勾是空的」。已验**退回修复确实会 FAIL**（隐藏 0/30、0/30 未勾）。
+
+**缩略图也一起关（用户 2026-10-03 拍板「一起关」）**：
+- 平铺页缩略图走的是**离屏渲染**，不经 `S.hidden`、也没有逐帧回调 —— 所以另用
+  `hideDefaultHiddenSlots(skeleton)` 直接清命中 slot 的 `color.a` / `darkColor.a`，
+  且**每次 `drawFrame` 前都要重设一次**（动画的 slot 颜色时间轴会把 alpha 写回去）。
+- 判据抽成**唯一一份** `isDefaultHiddenLayerName()`，播放页与缩略图共用。
+- 肉眼实测：关掉规则后 `source/角色/10010/…alps03…` 的卡面整个人被 `hexie_smog` 白雾盖住，
+  开着则角色清晰（`_scratch/thumb_rule_ON.png` / `OFF.png`）。
+- 断言方式：**不能比对两张缩略图**（两次渲染的动画时刻不同，图必然不同），
+  用 `thumbLayerHide` 计数器断言「真的执行了」+「清空规则键后归零」。已验退回会 FAIL。
+- `jczx_mode` 9 条新断言（33 → 42 项）。
+
+**顺带修掉一个测试污染**：`jczx_mode` 从来没调 `setThumbPersist(false)`，而
+`thumbPersist` 默认 `true` → **每跑一次测试就往用户的图鉴素材里写 `thumb.png`**。
+本机实测 `交错战线图鉴-20260917` 下已积累 **155 个**（source 112 / mod1 18 / 缓存 25）。
+已在套件开头补上开关。⚠️ 这 155 个文件**没有删**（需求 5 的缩略图持久化本来就是设计内功能，
+正常使用也会产生），需要的话由用户决定是否清理。
+
+**另一件**：`ARCHITECTURE.md` 缺 **R23 / R24 / R25** 正文（只存在于项目记忆里），需回补。
+
+---
+
+## 八、2026-10-03（第二批，用户四问）
+
+### 需求 9-A（P1）：图鉴 App 比我们「清晰」——已定位到三条具体差异
+
+对照物是用户素材根里的图鉴 App（`交错战线图鉴-20260917`，Vite+React 工程，`launcher.config.json`
+起在 5907）。查到的**硬差异**（都有文件证据，不是猜）：
+
+1. **渲染器不同**：图鉴用 **PixiJS**（`dependencies`: `pixi.js ^7.4.3` + `pixi-spine ^4.0.6` +
+   `@esotericsoftware/spine-pixi-v7 ~4.2.0`）；我们用 spine-player 自带 WebGL 渲染器。
+   PixiJS 默认**生成 mipmap + 各向异性过滤 + 预乘 alpha**，我们那条路只有 `LINEAR`、无 mipmap
+   → 图集被缩小显示时更容易发糊/闪烁。
+2. **它自带逐 CG 取景预设**：`public/runtime/spine_view_presets.json`，**466 条** `{zoom, x, y}`
+   （如 `prefabs_spine_cg0085_twinstarattendantsa_spine` → `zoom 4.73`；另一个角色是 `1.0`）。
+   也就是说**每张图都是调好的比例与位置**；我们是 `fitToWindow()` 自动适配 → 缩放比不同，
+   且往往不是 1:1 像素，观感自然差一截。
+3. **它在资产层就清掉了遮挡层**：`package.json` 有
+   `clean-assets = python ./scripts/build_clean_occluder_assets.py`（去遮挡层）、
+   `repair-primary-textures`、`repair:source-spine-atlas-pages`、`dedupe-assets`。
+   我们是**运行期**隐藏（今天做的 R27）。**遮挡层（hexie/tape）就是薄雾/黑条，直接拉低对比度**——
+   用户截图 2 左下角那团暗块极可能就是 `tape` 的残影。
+
+**待用户确认**：对比用的是哪个构建？R27 今天才加，**1.08 APK 里没有**，所以 APK 上看仍然会
+有薄雾/黑条。（PC 端刷新即可吃到 R27。）
+**可选后续**：①给 JCZX 也做「按图集 1:1 像素」的默认取景（而不是单纯 fit 窗口）；
+②在 GL 侧开 mipmap/各向异性（要改 `lib/spine-player.js` 的贴图上传，风险中）。
+
+### 需求 9-B（P0）：中文名缺失——已量化，角色可修，画册要确认映射键
+
+实测（1625 条 jczx 条目）：
+
+| 类别 | 有名字 | 缺失 |
+|---|---|---|
+| 角色 | **1076 / 1400** | 324 |
+| 画册 | **0 / 225** | 225（全缺） |
+
+**角色那 324 条**——四类根因（都能修）：
+1. bundle 名尾带中文：`prefabs_spine_30430_skin_lepus03_spine利普丝兔女郎同调前_(1)`
+2. 双下划线：`prefabs_spine_70010_skin_zues04__spine`
+3. 尾部多一个字母：`prefabs_spine_10220_skin_garnet03c_spine`（`\d+$` 剥不掉）
+4. 素材本身拼错：`zues`（表里多半写作 `Zeus`）→ 需要**容错模糊匹配**（编辑距离 ≤1，且唯一）
+
+**画册那 225 条**：名字在 `data/biligame_archive_catalog.json` 的
+`items[].displayName`（如「医疗仓」「据点外围」，按 `imageNumber` 索引，371 条）。
+**但 `imageNumber` 与我们的 `cgN` 目录对不上**：`cg11` → `011` → 图上叫「格纳库」，
+而它的骨架是 `prefabs_spine_cg00011_starrynight_spine`（星夜）；`cg00010_intoxicatedshadow`
+→ `010` = 「生态实验室」。**硬按编号匹配会把名字标错**，所以这一半**先不动**，等确认映射键。
+（`mod_runtime_index.archives[].archiveId` 确实就是 `cgN`，但它的 `displayLabel` 是「第二版整合包」
+这类**mod 包名**，不是画作名。）
+
+### 需求 9-C（P0）：按「角色/CG → 姿势 → 原图/mod」重新分类 ✅ 已落地（**磁盘就地重组**，R29）
+
+用户 2026-10-03 拍板：**选 B（就地真移动）**，理由是「现在的文件架构完全不方便我管理」。
+配套选择：`_未分姿势/原图/`（Q2=①）、姿势目录名 `代号__中文名`（Q3=①）。
+
+**目标形状**（实测 10010 阿尔卑斯）：
+
+```
+角色/10010__阿尔卑斯/
+├─ alps03__阿尔卑斯/  ← 原图/ + 7 个 mod（mod-<id>__<包名>）
+├─ alps04__阿尔卑斯/  ← 原图/ + 3 个 mod
+├─ alps05__阿尔卑斯/  ├─ alps06__阿尔卑斯/  ├─ alps__阿尔卑斯/
+├─ _未分姿势/原图/    ← 立绘 / UI 图 / thumb.png（1705 个，分不出姿势）
+└─ meta.json
+```
+
+**做法**：`_tools/jczx_reorg.mjs`（`--backup` / `--plan` / `--apply` / `--undo`）
+- **姿势归属只信索引**：mod 用 `data/mod_runtime_index.json` 的 `targetBundle`；原图用
+  `public/runtime/index.json` 的 `spineBundles` + 文件名兜底。**不许靠文件名猜** ——
+  第一版靠猜就出错了：`alps` 是 `alps06` 的子串，把 alps03~06 的原图全抢走、alps06 的
+  `原图/` 直接空了。修法是**先长后短 + 词边界校验**。
+- **备份 = 硬链接镜像**（`__原布局备份_20261003/`）：同盘硬链接 → **0 额外空间**、原路径全保留。
+  另拷 `_meta/`（release-manifest.json、data/*.json、public/runtime/*.json，共 43 个文件）。
+- 每个文件一行 `_reorg_log.tsv`（from→to），`--undo` 按日志 rename 回去。`--apply` 无备份时拒绝执行。
+
+**结果**：6794 个文件 **0 失败**；重组前后 `itemCount` **完全一致（1625）**、中文名覆盖不变
+（1076/1625）、`playableCount=1616`；画册 225 条仍在旧布局且照常被识别（映射键未确认，**没动**）。
+全量 11 套件全绿（jczx_mode 105.9s / layer_pick 46s 都在新布局下通过）。
+
+**画册侧（用户 2026-10-03 追加要求「画册就用 cg0 之类的名字」）**：
+- 画册**不建姿势层** —— 实测 56 个 archiveId 里 52 个只有 1 个 bundle，那层纯属多余。
+- 形状：`画册/<cgN>/{原图|mod-<id>__<包名>}/…` + `<cgN>/meta.json`。**目录名只用 cgN**，
+  所以之前卡住的「中文名映射键」问题自然消失（我一度把「结构重组」和「起中文名」绑在一起了，
+  那是过度保守 —— 已纠正）。
+- 830 个文件搬完 0 失败；`source|mod1|mod2/画册` 残留 0（含 `cg42/runtime/variants/*` 这类
+  多一层嵌套，第一版只走一层漏了 2 个，已改递归）。
+- 同时把槽位目录里多余的 `runtime/` 一层**摊平**（`--flatten`，1081 个目录 / 3444 个文件），
+  与同级的 `原图/` 保持一致。
+- 扫描对账：`itemCount` 仍 **1625**（角色 1400 + 画册 225）、`playableCount=1616`、
+  中文名 1076（画册按约定不带名）。
+
+**代价（用户已知情）**：
+- **图鉴 App 失效** —— `release-manifest.json` 里 24212 条路径作废（备份的 `_meta/` 里留有副本）。
+- 查看器侧已同步支持两套布局（R29），否则 jczx 档会 0 条。
+- 遗留 **1285 个空目录**（旧 `source|mod1|mod2/角色` 的空壳）被进程句柄锁住，`EPERM`、
+  提权也解不开 → 纯装饰问题，**需手工删除**。
+- 4 条 mod 在索引里没有 `runtimeRoot` → 层标签退化成「mod」（可接受）。
+
+### 需求 9-D（P0）：图层点选「重复点往下挪一层」✅ 已落地（R28）
+
+- 列表与模型两个入口都做了；「下面一个」口径分别是**列表显示顺序**与**该点的命中栈**。
+- 窗口 900ms；换行/换点归零；换资产时 `resetLayerPickMemory()`。
+- 行为变化：点已选中那行不再立刻取消选中（窗口内变成往下挪），取消选中改按 Esc 或点别的行。
+- 回归锁 `_test/layer_pick.mjs` **7 条**（需 `BD2_JCZX_ROOT`），已接进 `run_all`，
+  排在 `native_mode` 之后（用 Chrome）。实测 7/7 通过。

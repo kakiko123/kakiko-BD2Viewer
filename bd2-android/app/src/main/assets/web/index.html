@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
   <title>Kakiko Viewer · 本地版</title>
   <link rel="stylesheet" href="/lib/spine-player.css">
   <link rel="stylesheet" href="/styles.css">
@@ -80,6 +80,11 @@
         <section class="group" id="poseGroup" hidden>
           <h4 data-i18n="姿势 (Pose)">姿势 (Pose)</h4>
           <div class="pose-bar" id="poseBar" role="group" data-i18n-aria="姿势 (Pose)" aria-label="姿势"></div>
+        </section>
+
+        <section class="group" id="modGroup" hidden>
+          <h4 data-i18n="Mod">Mod</h4>
+          <div class="pose-bar" id="modBar" role="group" data-i18n-aria="Mod" aria-label="Mod"></div>
         </section>
 
         <section class="group" id="arkStaticGroup" hidden>
@@ -338,6 +343,7 @@
       </div>
       <div class="row small filters">
         <label class="row small"><input type="checkbox" id="chkOnlyPlayable" checked><span data-i18n="仅可播放">仅可播放</span></label>
+        <label class="row small" id="modFilterRow" hidden><input type="checkbox" id="chkModsOnly"><span data-i18n="只看 Mod">只看 Mod</span></label>
         <button class="btn tiny" id="btnClearCustom" data-i18n="清除已上传">清除已上传</button>
       </div>
       <div class="list asset-list" id="assetList"></div>
@@ -383,6 +389,16 @@
       </svg>
     </button>
     <button class="fs-btn" id="fsExit" data-i18n-title="退出全屏" title="退出全屏">✕</button>
+  </div>
+  <!-- 全屏时的姿势条 + Mod 条 + 皮肤下拉（侧栏在全屏被藏起来，这里补一份同样能操作）。
+       只放空壳，按钮/选项由 app.js 的 renderPoseBar / renderModBar / renderSkinSelect 填，两边同一份数据。 -->
+  <div class="fs-extra" id="fsExtra" hidden>
+    <div class="fs-pose-row" id="fsPoseBar" hidden></div>
+    <div class="fs-mod-row" id="fsModBar" hidden></div>
+    <label class="fs-skin-row" id="fsSkinWrap" hidden>
+      <span data-i18n="皮肤 (Skin)">皮肤</span>
+      <select class="fs-skin" id="fsSkin"></select>
+    </label>
   </div>
   <div class="fs-anim-bar" id="fsAnimBar" hidden>
     <button class="fs-btn tiny" id="fsPrevAnim" data-i18n-title="上一个动画（音量−）" title="上一个动画（音量−）">◀</button>

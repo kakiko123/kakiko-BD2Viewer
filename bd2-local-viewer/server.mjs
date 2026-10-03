@@ -425,12 +425,12 @@ async function readArkMeta(dir) {
     })
   }
 
-  // 语音：meta.json 里没有清单，直接列 voice/ 目录（实测 9 个角色有，共 1000 条）。
-  const voices = []
-  for (const f of await listDir(path.join(dir, 'runtime', 'voice'))) {
-    if (!f.isFile() || !/\.wav$/i.test(f.name)) continue
-    voices.push({ file: `runtime/voice/${f.name}`, name: arkVoiceLabel(f.name) })
-  }
+  // 语音：meta.json 里没有清单，只能**列目录**。
+  // ⚠️ 两个位置都要试，而且要**递归**：
+  //   · Ark 原布局：`<角色目录>/runtime/voice/*.wav`（扁平）
+  //   · 交错战线整理树：`<角色目录>/voice/<批次>/wav/<皮肤>/*.wav`（嵌套，只列一层会全丢）
+  let voices = await listVoicesUnder(dir, 'voice')
+  if (!voices.length) voices = await listVoicesUnder(dir, 'runtime/voice')
 
   // 形态表：bundle 名 → 动画列表。让前端能给形态标出「有几个动画」并挑默认动画。
   const spineAssets = []
@@ -468,8 +468,30 @@ async function readArkMeta(dir) {
   }
 }
 
-/** Ark 目录名（`角色` / `画册` 下的那层）就是角色 id。 */
-function dirIdOf(dir) {
+/**
+ * 列出某个语音根（相对角色目录）下的音频，**递归 ≤3 层**。
+ * `file` 是相对**角色目录**的路径（前端 `charDir + '/' + file` 拼 URL）。
+ * 为什么必须递归：交错战线的语音是 `voice/<批次>/wav/<皮肤>/*.wav`，
+ * 只列一层会一条都找不到（2026-10-03 实测：522 个 wav 全丢）。
+ */
+async function listVoicesUnder(dir, base) {
+  const out = []
+  const walk = async (abs, sub, depth) => {
+    if (depth > 3 || out.length > 2000) return
+    for (const f of await listDir(abs)) {
+      if (f.isFile()) {
+        if (!/\.(wav|mp3|ogg|m4a)$/i.test(f.name)) continue
+        out.push({ file: `${sub ? `${base}/${sub}` : base}/${f.name}`, name: arkVoiceLabel(f.name) })
+      } else if (f.isDirectory() && !f.name.includes('.')) {
+        await walk(path.join(abs, f.name), sub ? `${sub}/${f.name}` : f.name, depth + 1)
+      }
+    }
+  }
+  await walk(path.join(dir, base), '', 0)
+  return out
+}
+
+/** Ark 目录名（`角色` / `画册` 下的那层）就是角色 id。 */function dirIdOf(dir) {
   return path.basename(dir)
 }
 
@@ -488,43 +510,112 @@ function dirIdOf(dir) {
 // 原图与各 mod 是同槽位的不同资源层，播页在它们之间循环切换（与图鉴 App 的
 // `getNextModVariantId` 同一套：走完最后一个回到原图）。
 //
-// 图鉴包还带 `data/mod_runtime_index.json`，里面是 modId → 包名/目标 bundle 的清单。
-// **但我们不读它**：路径本身已经足够解析出这三样（层/角色/modId/bundle），
-// 而依赖外部清单会让「把这个目录当普通素材根扫」也必须先认得图鉴的私有格式。
+// 图鉴包还带 `data/mod_runtime_index.json`，里面是 modId → 包名/目标 bundle/runtimeRoot 的清单。
+// **原布局**下我们不读它：路径本身已经足够解析出层/角色/modId/bundle，而依赖外部清单会让
+// 「把这个目录当普通素材根扫」也必须先认得图鉴的私有格式。
+// ⚠️ 例外：**整理树布局**（③）的目录名不带层号（只有 `mod-<id>__<包名>`），所以那里会
+// 读一次 `runtimeRoot` 把 mod1/mod2 找回来（见 readJczxModLayerTable）。
 
 /** 认 mod 层目录名：`source`（原图层）/ `mod1`…（mod 层）。`mods`（未解包包）不算。 */
 const JCZX_LAYER_RE = /^(source|mod\d+)$/i
 /** mod 单个包目录名：`mod-840d7e284b`（10 位 hex）。 */
 const JCZX_MODID_RE = /^mod-([0-9a-z]{6,16})$/i
+/**
+ * 就地**整理树**布局（2026-10-03 用户选择重组的形状，R29）：
+ *   `<root>/<角色|画册>/<ID>__<中文名>/<姿势>/{原图 | mod-<id>__<包名>}/…`
+ * 第一段只认这两个大类 —— 与「贴根」原则同源，免得把用户普通素材目录里恰好叫「角色」的
+ * 文件夹当成图鉴包。第二段的 `__` 后面是给人看的中文名，解析只取 `__` 前的 id。
+ */
+const JCZX_TREE_CATEGORY_RE = /^(角色|画册)$/
+/** 整理树里的「姿势槽位」：`原图` 或 `mod-<id>[__<包名>]`。 */
+const JCZX_TREE_SLOT_RE = /^(原图|mod-[0-9a-z]{6,16}(?:__.*)?)$/i
+/**
+ * **本档解包缓存**的包目录名 —— 我们自己 jczx_support 抽出来的，形如
+ *   `<10位hash>_mods__<类别>__<目标id>__mod-<id>__<bundle>`
+ * 例如 `000fc3916c_mods__角色__20240__mod-ee692050de__prefabs_spine_20240_skin_uillean04_spine`。
+ * 目录名里带全了来源，所以不用读图鉴的 data/*.json 也能把它接回同一套 mod 层
+ * （2026-10-02 实测：图鉴发布包里混着这批 2.3G 缓存，解的正是它 mods/ 下那批包）。
+ */
+const JCZX_CACHE_PKG_RE =
+  /^[0-9a-f]{10}_mods__([^_]+)__(.+)__(mod-[0-9a-z]{6,16})__(.+)$/i
 
 /**
  * 从条目所在目录往上回溯，判断它属于哪个 mod 层。
- * 只认 `<root>/<layer>/<角色|画册>/<...>` 这种「层紧贴根」的布局（图鉴包的实测形状），
- * 免得在用户普通素材目录里乱认。返回 null = 不属于任何已解包层。
+ * 认**三种**布局：
+ *   ① `<root>/<layer>/<角色|画册>/<ID|cgN>/[mod-<id>/]runtime`  layer = source|mod1|mod2|…
+ *      （图鉴发布包原布局）
+ *   ② `<root>/bd2viewer-jczx/<hash>_mods__<类别>__<ID>__mod-<id>__<bundle>/`（解包缓存）
+ *   ③ `<root>/<角色|画册>/<ID>__<名>/<姿势>/{原图|mod-<id>__<包名>}/…`（**就地重组后的布局**，
+ *      2026-10-03 用户选择重组，R29）。③ 里 `原图` 当 source、`mod-…` 当 mod；
+ *      它丢了原本的 mod1/mod2 层号，所以用 `modLayerMap`（来自 mod_runtime_index.json 的
+ *      `runtimeRoot`）把层号找回来 —— 否则 UI 上「mod1/mod2」会退化成笼统的「mod」，
+ *      mod 链的排序也会乱。
+ * ①②只认**贴根**布局（图鉴包的实测形状），免得在用户普通素材目录里乱认；③ 同理要求
+ * 第一段就是 `角色`/`画册`。
  *
  * @param {string} rootPath 根目录绝对路径
  * @param {string} dir      条目所在目录
+ * @param {Map<string,string>|null} modLayerMap modId → 'mod1'|'mod2'（可空）
  * @returns {{layer:string, layerKind:'source'|'mod', layerIndex:number,
- *            modId:string|null, targetId:string|null, groupDir:string}|null}
+ *            modId:string|null, targetId:string|null, groupDir:string, fromCache:boolean}|null}
  */
-function jczxLayerOf(rootPath, dir) {
+function jczxLayerOf(rootPath, dir, modLayerMap) {
   const rel = path.relative(rootPath, dir).split(path.sep).join('/')
   const seg = rel.split('/').filter(Boolean)
   if (seg.length < 2) return null
+
+  // 布局 ③：就地重组后的整理树（<类别>/<ID>__<名>/<姿势>/{原图|mod-…}/…）
+  if (JCZX_TREE_CATEGORY_RE.test(seg[0])) {
+    const idPart = seg[1].split('__')[0]
+    const slotIdx = seg.findIndex(s => JCZX_TREE_SLOT_RE.test(s))
+    if (slotIdx < 0) return null                 // 只有角色目录、还没到姿势层 → 不算条目
+    const slot = seg[slotIdx]
+    const isSource = slot === '原图'
+    const modId = isSource ? null : (JCZX_MODID_RE.exec(slot.split('__')[0]) || [])[0] || null
+    if (!isSource && !modId) return null
+    const origLayer = modId ? (modLayerMap && modLayerMap.get(modId)) || null : null
+    return {
+      layer: origLayer || (isSource ? 'source' : 'mod'),
+      layerKind: isSource ? 'source' : 'mod',
+      layerIndex: isSource ? 0 : (parseInt(String(origLayer || '').replace(/\D+/g, ''), 10) || 500),
+      modId,
+      targetId: idPart || null,
+      groupDir: seg[0],                          // `角色` / `画册`
+      fromCache: false,
+    }
+  }
+
+  // 布局 ②：解包缓存
+  if (isJczxCacheDirName(seg[0])) {
+    // 目录是 `<root>/bd2viewer-jczx/<pkg>/`，条目在 <pkg> 里
+    const m = JCZX_CACHE_PKG_RE.exec(seg[1] || '')
+    if (!m) return null
+    return {
+      layer: seg[0],
+      layerKind: 'mod',
+      // 缓存排在所有 mod 层之后（图鉴的 mod1/mod2 是「官方的」，优先）
+      layerIndex: 900,
+      modId: m[3],
+      targetId: m[2],                 // `20240` / `cg59`
+      groupDir: m[1],                 // 角色 / 画册
+      fromCache: true,
+    }
+  }
+
+  // 布局 ①：图鉴发布包
   const m = JCZX_LAYER_RE.exec(seg[0])
   if (!m) return null
   const layer = seg[0]
   const layerKind = /^source$/i.test(layer) ? 'source' : 'mod'
-  // mod 层的包目录是第 3 段（`mod1/角色/<ID>/mod-xxxx/runtime`）
+  // 目录形状：`<layer>/<角色|画册>/<ID|cgN>/[mod-<id>/]runtime`（实测）。
+  // 所以「谁」是第 3 段（`10010` / `cg0`），第 2 段只是大类（角色 / 画册）。
+  const targetId = seg[2] || seg[1] || null
+  // mod 层的包目录是第 4 段（`mod1/角色/10010/mod-xxxx/runtime`）
   let modId = null
-  let targetId = null
   if (layerKind === 'mod') {
     const hit = seg.slice(1).find(s => JCZX_MODID_RE.test(s))
     if (!hit) return null            // 只有层目录但没有 mod 包 → 不是我们要的已解包产物
     modId = hit
-    targetId = seg[1] || null        // 角色 id（`角色` 那层下面）或 cg 名
-  } else {
-    targetId = seg[1] || null
   }
   return {
     layer,
@@ -533,13 +624,99 @@ function jczxLayerOf(rootPath, dir) {
     modId,
     targetId,
     groupDir: seg[1] || null,        // `角色` / `画册`
+    fromCache: false,
   }
 }
 
-/** mod 层的人读标签。`source` → 「原图」，`mod1` → 「mod1」。 */
+/** mod 层的人读标签。`source` → 「原图」，`mod1` → 「mod1」，解包缓存 → 「mod」。 */
 function jczxLayerLabel(layerInfo) {
   if (!layerInfo || layerInfo.layerKind === 'source') return '原图'
+  if (layerInfo.fromCache) return 'mod'
   return layerInfo.layer
+}
+
+// 归一：wiki 名 `Barbera·Red` / 素材代号 `barberared04` → 同一个键
+function jczxNormName(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
+/**
+ * 交错战线的**中文名**。meta.json 里的 `character.name` 实测 119 个角色里只有 5 个
+ * 不是纯 id（都是目录 id 本身）—— 也就是说这个包**没有** id→中文名的索引，
+ * 图鉴自己的中文名来自它抓的 wiki 数据但没按素材 id 建表。
+ *
+ * 可用的替代是英文代号：bundle 名 `prefabs_spine_10010_skin_alps03_spine` 里的
+ * `alps03`，去掉尾部数字得 `alps`，归一后能在 `data/biligame_character_catalog.json`
+ * 的 `characters[].nameEn` 里命中 → 拿到 `nameZh`「阿尔卑斯」。
+ * 实测 249 个皮肤代号里 167 个能命中（其余是 wiki 上没有的新角色/机甲，认不出来就显示代号）。
+ *
+ * @param {string} rootPath 根目录（`data/` 在它下面）
+ * @returns {Promise<Map<string,string>>} 归一后的代号（小写）→ 中文名
+ */
+async function readJczxNameTable(rootPath) {
+  const out = new Map()
+  let raw
+  try {
+    raw = await fsp.readFile(path.join(rootPath, 'data', 'biligame_character_catalog.json'), 'utf-8')
+  } catch {
+    return out          // 没有这份表就只用代号显示，不算错误
+  }
+  let j
+  try { j = JSON.parse(stripBom(raw)) } catch { return out }
+  const list = Array.isArray(j) ? j : (Array.isArray(j.characters) ? j.characters : [])
+  for (const c of list) {
+    if (!c || typeof c !== 'object') continue
+    const zh = typeof c.nameZh === 'string' ? c.nameZh.trim() : ''
+    const en = typeof c.nameEn === 'string' ? c.nameEn.trim() : ''
+    if (!zh) continue
+    const k = jczxNormName(en)
+    // 同键多译（实测有 139 键 / 141 条，撞车的保留第一个 —— 宁可重复也不给错名）
+    if (k && !out.has(k)) out.set(k, zh)
+  }
+  return out
+}
+
+/**
+ * `modId → 'mod1' | 'mod2'`。**只给整理树布局（③）用**。
+ *
+ * 整理树的 mod 目录名是 `mod-<id>__<包名>`，**不带层号**（那是图鉴打包时的人工分层，
+ * 对「按角色/姿势管理文件」没有意义，所以重组时丢掉了）。但 UI 的副标题要显示
+ * 「mod1/mod2」、mod 链排序也要按层走，所以从 `data/mod_runtime_index.json` 的
+ * `runtimeRoot` 把它找回来。读不到就退化成笼统的「mod」+ 排序垫后，**不算错误**。
+ *
+ * @param {string} rootPath 根目录（`data/` 在它下面）
+ * @returns {Promise<Map<string,string>>} modId（`mod-xxxx`）→ 层名
+ */
+async function readJczxModLayerTable(rootPath) {
+  const out = new Map()
+  let raw
+  try {
+    raw = await fsp.readFile(path.join(rootPath, 'data', 'mod_runtime_index.json'), 'utf-8')
+  } catch {
+    return out
+  }
+  let j
+  try { j = JSON.parse(stripBom(raw)) } catch { return out }
+  const groups = [j.characters, j.archives]
+  for (const g of groups) {
+    if (!Array.isArray(g)) continue
+    for (const owner of g) {
+      for (const md of (owner && owner.mods) || []) {
+        if (!md || !md.modId) continue
+        const root = typeof md.runtimeRoot === 'string' ? md.runtimeRoot : ''
+        if (root) out.set(md.modId, root)
+      }
+    }
+  }
+  return out
+}
+
+/** 从 bundle 基名里取皮肤代号：`prefabs_spine_10010_skin_alps03_spine` → `alps03` */
+function jczxSkinCode(bundle) {
+  const m = /^prefabs_spine_(?:\d+_)?skin_(.+?)(?:_spine)?$/i.exec(String(bundle || ''))
+  if (m) return m[1]
+  const t = String(bundle || '').replace(/^prefabs_spine_/i, '').replace(/_spine$/i, '')
+  return t
 }
 
 /**
@@ -577,13 +754,30 @@ async function freshThumbRel(dir, rootPath, thumbName, atlasName, skelName, imag
 /**
  * Ark：一个角色目录里的 meta.json 读一次就够（目录里有多个 bundle）。
  * 用 Map 缓存，键是绝对路径。**每次扫描新建一个**（Ark 的 meta 15s 内不会变，走 scanCache 就够）。
+ *
+ * ⚠️ 除了缓存，它还**自带计数器**（`report()`）—— 这是「静默失败」的第一道防线。
+ * 2026-10-03 踩过一次：walk() 里基于 rootPath 的守卫因斜杠形式不一致短路，
+ * 向上搜索 meta.json **一次都没执行**，结果 499 条数据全部静默退化成「没有角色名」，
+ * 服务端和界面**一条错都没报**，接手的人只能靠猜。所以这里必须能回答：
+ *   · lookups    —— 到底去查过几次 meta.json（0 = 搜索压根没跑）
+ *   · probed     —— 查过几个不同的目录
+ *   · withMeta   —— 其中几个目录真有 meta.json
+ * 扫描结束时由 `scanRoot` 据此判定管道是否通畅，不通就**显式报警**（见 metaHealth）。
  */
 function makeArkMetaCache() {
   const m = new Map()
-  return async (dir) => {
+  const fn = async (dir) => {
+    fn.stats.lookups++
     if (!m.has(dir)) m.set(dir, await readArkMeta(dir))
     return m.get(dir)
   }
+  fn.stats = { lookups: 0 }
+  fn.report = () => ({
+    lookups: fn.stats.lookups,
+    probed: m.size,
+    withMeta: [...m.values()].filter(Boolean).length,
+  })
+  return fn
 }
 
 /** 形态名（bundle → 人看的名字）。前端切换器上显示用。
@@ -602,8 +796,32 @@ function arkFormLabel(bundle, charId) {
   return MAP[s] || s
 }
 
-async function walk(dir, depth, maxDepth, out, rootPath, fmt, arkMetaCache) {
+/**
+ * JCZX 的形态名。交错战线的 bundle 命名是
+ * `prefabs_spine_<角色id>_skin_<皮肤名>_spine`（实测 `prefabs_spine_10010_skin_alps03_spine`
+ * → 角色 10010 的皮肤 alps03），所以形态名取 `_skin_` 与 `_spine` 之间那段。
+ * 少数不带 `_skin_` 的（`prefabs_spine_alps.atlas`）退回去掉前后缀。
+ * 认不出来就原样返回 bundle 名 —— 宁可丑一点也不丢信息。
+ */
+function jczxFormLabel(bundle) {
+  let s = String(bundle || '')
+  const m = /^prefabs_spine_(?:(\d+)_)?skin_(.+?)(?:_spine)?$/i.exec(s)
+  if (m) return m[2]
+  const t = s.replace(/^prefabs_spine_/i, '').replace(/_spine$/i, '').replace(/_/g, ' · ')
+  return t || String(bundle || '')
+}
+
+async function walk(dir, depth, maxDepth, out, rootPath, fmt, arkMetaCache, jczxAux) {
   if (depth > maxDepth) return
+  // 【路径比较铁律】**不许对 rootPath / dir 做裸字符串 `startsWith` 比较**，
+  // 一律走 `isInside(rootAbs, p)`（它两边都会 `path.resolve`，还正确处理 `rel === ''`）。
+  // 原因：配置里的 `roots[].path` 可能是 `C:/…` 正斜杠，而 `path.join`/`path.dirname`
+  // 出来一律 `C:\…` —— 裸 `startsWith` 在正斜杠配置下**第一轮就 false**，向上搜索
+  // meta.json 整条短路 → 角色名/稀有度/立绘/语音全丢且**一条错都不报**
+  // （2026-10-03 实测 499/499 条连 ark 对象都没有）。`path.relative` 自带 resolve
+  // 所以容错，唯独裸字符串比较不容错。rootPath 已在 scanRoot 边界归一化过，
+  // 这里再 resolve 一次是纵深防御（walk 也可能被别处直接调用）。
+  const rootAbs = path.resolve(rootPath)
   const entries = await listDir(dir)
 
   // 按「资产角色」归类，而不是按扩展名 —— 扩展名的差异已经被 fmt.classify 吃掉了。
@@ -626,8 +844,8 @@ async function walk(dir, depth, maxDepth, out, rootPath, fmt, arkMetaCache) {
       // 而且它们只在**根目录紧贴一层**时才算（见 jczxLayerOf），用户普通素材目录里
       // 恰好有个叫 source 的文件夹不会被误认。
       if (MODE_SOURCE_FOLDERS.has(entry.name.toLowerCase())
-        && path.resolve(dir) !== path.resolve(rootPath)
-        && !(fmt.id === 'jczx' && jczxLayerOf(rootPath, path.join(dir, entry.name)))) continue
+        && path.resolve(dir) !== rootAbs
+        && !(fmt.id === 'jczx' && jczxLayerOf(rootPath, path.join(dir, entry.name), jczxAux && jczxAux.modLayer))) continue
       subdirs.push(path.join(dir, entry.name))
       continue
     }
@@ -681,7 +899,7 @@ async function walk(dir, depth, maxDepth, out, rootPath, fmt, arkMetaCache) {
     // 不在图鉴布局里就是 null，前端按「没有 mod 可切」处理。
     let jczx = null
     if (fmt.id === 'jczx') {
-      const layerInfo = jczxLayerOf(rootPath, dir)
+      const layerInfo = jczxLayerOf(rootPath, dir, jczxAux && jczxAux.modLayer)
       if (layerInfo) {
         const tid = layerInfo.targetId || path.basename(path.dirname(dir))
         jczx = {
@@ -695,6 +913,9 @@ async function walk(dir, depth, maxDepth, out, rootPath, fmt, arkMetaCache) {
           targetKey: `${tid}|${base}`,
           bundle: base,
           groupDir: layerInfo.groupDir,
+          // 解包缓存（`bd2viewer-jczx/`）里的包，图鉴发布包可能已经有了同样的 mod。
+          // 前端按「图鉴的 mod1/mod2 优先、缓存只补缺的」去重（见 buildJczxModChains）。
+          fromCache: !!layerInfo.fromCache,
         }
       }
     }
@@ -703,30 +924,98 @@ async function walk(dir, depth, maxDepth, out, rootPath, fmt, arkMetaCache) {
       ? await spineMinorOfFile(path.join(dir, skel.name), skel.kind)
       : null
 
-    // Ark：这个 bundle 属于哪个角色、角色叫什么、有哪些立绘/语音。
+    // Ark / JCZX：这个 bundle 属于哪个角色、角色叫什么、有哪些立绘/语音。
     // meta.json 在**角色目录**（`角色/<ID>/meta.json`），而骨架在它下面的 `runtime/`。
     // 所以取的是 walk 当前层的上一级 —— `dir` 就是 `<角色目录>/runtime`。
+    // 交错战线图鉴发布包用同一套 meta 约定（2026-10-02 实测：name/rarity/staticAssets/
+    // spineAssets 字段名与 Ark 完全一致），所以复用同一个读取器。
     let ark = null
-    if (fmt.id === 'ark' && arkMetaCache) {
-      const charDir = path.dirname(dir)
-      const meta = await arkMetaCache(charDir)
+    if ((fmt.id === 'ark' || fmt.id === 'jczx') && arkMetaCache) {
+      // meta.json 在**角色目录**。原图层是 `<…>/角色/<ID>/meta.json`，而 `dir` 就是
+      // `<ID>/runtime`；但 mod 层多一层包目录 —— `mod1/角色/<ID>/mod-<id>/runtime`，
+      // 直接取上一级会撞在 `mod-<id>` 上（读不到 meta → 名字/立绘全丢）。
+      //
+      // ⚠️ 找 meta.json **不能靠数目录层数**（`dirname` 几次），2026-10-02 实测踩了两次：
+      //   ① mod 层多一层包目录：`<root>/mod1/角色/<ID>/mod-<id>/runtime`
+      //   ② 个别包解包时**多嵌了一层同名子目录**：
+      //      `<root>/mod1/角色/<ID>/mod-<id>/runtime/<bundle>/<bundle>.atlas`
+      //      （实测 8 条，文件名还带中文后缀）→ 往上数两层正好撞在 bundle 目录上。
+      // 所以改成**逐级向上找第一个带 meta.json 的祖先**，找到就用。
+      //
+      // 另外 **mod 层根本没有 meta.json**（实测 mod1/角色/10010 下只有一堆 `mod-<id>/`，
+      // meta.json 只存在于 source/角色/10010/）。找不到时按 jczx 里解析出的
+      // groupDir/targetId 拼回原图角色目录 —— 这正是我们要的语义：切 mod 只换骨架和贴图，
+      // 名字/稀有度/立绘/形态表全部沿用原图。
+      let charDir = null
+      let meta = null
+      if (jczx && (jczx.fromCache || jczx.targetId)) {
+        // 已知「这个 bundle 属于哪个角色的哪个槽位」→ 直接去**原图层**找。
+        // mod 层（无论是图鉴的 mod1/mod2 还是解包缓存）本来就没有 meta.json，
+        // 向上搜索必然落空，所以这条是主路径；拼出来的路径也天然免疫
+        // 「个别包多嵌一层 bundle 子目录」（实测 8 条）这种深度异常。
+        charDir = path.join(rootPath, 'source', jczx.groupDir || '角色', jczx.targetId || '')
+        meta = await arkMetaCache(charDir)
+      }
+      if (!meta) {
+        // 兜底：向上找第一个带 meta.json 的祖先（散装 jczx / Ark 素材走这条）。
+        for (let d = dir, up = 0; d && isInside(rootAbs, d) && up < 6; d = path.dirname(d), up++) {
+          const m = await arkMetaCache(d)
+          if (m) { meta = m; charDir = d; break }
+        }
+      }
+      if (!meta && jczx && jczx.layerKind === 'mod' && !jczx.fromCache) {
+        // 跨层回原图：`mod1/角色/<ID>/…` → `source/角色/<ID>/meta.json`
+        const guess = (jczx && jczx.layerKind === 'mod')
+          ? path.dirname(path.dirname(dir))
+          : path.dirname(dir)
+        const srcCharDir = path.join(path.dirname(path.dirname(path.dirname(guess))),
+          'source', path.basename(path.dirname(guess)), path.basename(guess))
+        meta = await arkMetaCache(srcCharDir)
+        if (meta) charDir = srcCharDir
+      }
       if (meta) {
         const charId = meta.id || dirIdOf(charDir)
         const form = meta.spineAssets.find(s => s.bundle === base) || null
+        // 立绘/语音的相对路径基于**读到的这份 meta 所在目录**（`charDir`）。
+        // mod 条目跨层读原图的 meta 后，`charDir` 已经指向原图角色目录，
+        // 所以这里算出来的 URL 自然落在 source/ 层 —— 正是想要的（立绘来自原图）。
         const toRel = f => (f ? path.relative(rootPath, path.join(charDir, f)).split(path.sep).join('/') : null)
         // 只有「承载条目」带角色级的立绘/语音（carrierBundle 由 readArkMeta 算好，
         // 没有本体的角色会退到第一条 bundle，不会因为缺本体而丢掉全部立绘）。
         const isCarrier = base === meta.carrierBundle
+        const isJczx = fmt.id === 'jczx'
+        // JCZX 的形态表来自 meta.spineAssets 的**顺序**（= 图鉴里的形态顺序），
+        // 第一个是默认形态；Ark 则用「bundle 名 == 角色 id 即本体」那条素材惯例。
+        // ⚠️ mod 层的 bundle 名和原图同名，但 meta.json 是**原图**那份，所以
+        // mod 条目在 spineAssets 里找得到同一个 bundle（实测 303 个槽位对齐成功），
+        // 找不到才退到 -1（此时 label 仍能从 bundle 名算出来，只是没有序号）。
+        const formIndex = isJczx ? meta.spineAssets.findIndex(s => s.bundle === base) : -1
+        // 中文名：meta.json 的 name 基本是目录 id，所以拿皮肤代号去 wiki 名表里查。
+        // mod 层的 bundle 名和原图**同名**，所以 mod 条目也能查到同一个名字。
+        let codeName = null
+        if (isJczx && jczxAux && jczxAux.names && jczxAux.names.size) {
+          const code = jczxSkinCode(base)
+          codeName = jczxAux.names.get(jczxNormName(code))
+            || jczxAux.names.get(jczxNormName(code.replace(/\d+$/, '')))
+            || null
+        }
+        const metaName = meta.name || null
+        // meta.name 是纯数字（= 目录 id）时不当名字用，让位给代号查出来的中文名
+        const metaNameReal = (metaName && !/^\d+$/.test(metaName)) ? metaName : null
         ark = {
           charId,
-          charName: meta.name || null,          // null → 前端退回显示 charId
-          charAltName: meta.altName || null,
+          charName: codeName || metaNameReal,     // null → 前端退回显示 charId
+          charAltName: metaNameReal || meta.altName || null,
+          charCode: isJczx ? jczxSkinCode(base) : null,   // 英文代号（alps03），副标题用
           rarity: meta.rarity,                  // null / 1-5（实测 225/648 条目有）
           group: group === '（根目录）' ? path.basename(charDir) : group,
           formBundle: base,
-          formLabel: arkFormLabel(base, charId),
-          // 默认形态 = 角色 id 同名的那个（素材自身的惯例：bundle 名等于角色 id 即本体）
-          isDefaultForm: base === charId,
+          formLabel: isJczx ? jczxFormLabel(base) : arkFormLabel(base, charId),
+          formIndex: formIndex >= 0 ? formIndex : null,
+          formCount: isJczx ? meta.spineAssets.length : null,
+          // 默认形态：JCZX 取形态表第一条（角色 id 规则在这里不成立 ——
+          // 交错战线每个 bundle 都是 `..._skin_<皮肤名>_spine`，没有「本体」那个 bundle）
+          isDefaultForm: isJczx ? formIndex === 0 : base === charId,
           isCarrier,
           animationCount: form ? form.animations.length : null,
           defaultAnimation: form ? form.defaultAnimation : null,
@@ -774,7 +1063,7 @@ async function walk(dir, depth, maxDepth, out, rootPath, fmt, arkMetaCache) {
       const relOf = (name) => path.relative(rootPath, path.join(dir, name)).split(path.sep).join('/')
       const relFirst = relOf(pngs[0])
       // 两种来源都收：解包缓存（bd2viewer-jczx/）或图鉴发布包的已解包层（source/mod1/mod2）。
-      if (isJczxCacheRel(relFirst) || jczxLayerOf(rootPath, dir)) {
+      if (isJczxCacheRel(relFirst) || jczxLayerOf(rootPath, dir, jczxAux && jczxAux.modLayer)) {
         const base = path.basename(pngs[0], path.extname(pngs[0]))
         const rawFolder = path.basename(dir)
         const pretty = rawFolder.replace(/^[0-9a-f]{10}_/, '')
@@ -804,7 +1093,7 @@ async function walk(dir, depth, maxDepth, out, rootPath, fmt, arkMetaCache) {
   }
 
   for (const sub of subdirs) {
-    await walk(sub, depth + 1, maxDepth, out, rootPath, fmt, arkMetaCache)
+    await walk(sub, depth + 1, maxDepth, out, rootPath, fmt, arkMetaCache, jczxAux)
   }
 }
 
@@ -835,6 +1124,9 @@ async function scanRoot(root, force = false, mode = DEFAULT_FORMAT) {
   const exists = fs.existsSync(root.path)
   let jczxMeta = null
   let nikkeMeta = null
+  // 声明在 `if (exists)` **外面**：下面扫描结束时的管道自检（metaHealth）要用它，
+  // 放在块里会因块级作用域直接 ReferenceError，把整个 /api/scan 打成 500。
+  let arkMetaCache = null
   if (exists) {
     // JCZX：先把根下双 UnityFS AB 抽到 `bd2viewer-jczx/`，再按 bd 规则扫
     if (fmt.id === 'jczx') {
@@ -852,13 +1144,29 @@ async function scanRoot(root, force = false, mode = DEFAULT_FORMAT) {
         autoSetup: true,
       })
     }
-    await walk(root.path, 0, config.maxDepth || 5, items, root.path, fmt,
-      fmt.id === 'ark' ? makeArkMetaCache() : null)
-    // jczx 模式下只保留缓存目录里抽出的条目（避免误认其它命名）
+    // ⚠️ rootPath **必须在边界处归一化**（`path.resolve`）。
+    // 配置里的 `roots[].path` 来自用户手填 / 前端 POST，可能是 `C:/…` 正斜杠，
+    // 而 walk() 内部一律用 `path.join` 拼路径（Windows 上出来是 `C:\…`）。
+    // 只要下游有人拿 rootPath 做裸字符串 `startsWith` 比较，正斜杠就会让它**第一轮就 false**
+    // → 向上搜索 meta.json 整条短路 → 角色名/稀有度/立绘/语音全丢且不报错（2026-10-03）。
+    // `path.relative` 内部自带 resolve 所以容错，唯独裸字符串比较不容错 —— 在这里归一
+    // 化一次，下游拿到的就都是同一种形式。
+    const rootPath = path.resolve(root.path)
+    arkMetaCache = (fmt.id === 'ark' || fmt.id === 'jczx') ? makeArkMetaCache() : null
+    // jczx 的两份辅助表：中文名表 + modId→层号表（后者只给「整理树」布局用，见 jczxLayerOf ③）
+    const jczxAux = fmt.id === 'jczx'
+      ? { names: await readJczxNameTable(rootPath), modLayer: await readJczxModLayerTable(rootPath) }
+      : null
+    await walk(rootPath, 0, config.maxDepth || 5, items, rootPath, fmt, arkMetaCache, jczxAux)
+    // jczx 档只认两种来源：解包缓存（bd2viewer-jczx/）和「交错战线图鉴」发布包的
+    // 已解包层（source / mod1 / mod2，后者带 jczx 层标记）。别的命名一律不收 ——
+    // 之前这里是「只保留缓存目录」，会把图鉴包整个扫空。
     if (fmt.id === 'jczx') {
       for (let i = items.length - 1; i >= 0; i--) {
-        const rel = String(items[i].relAtlas || '').replace(/\\/g, '/')
-        if (!isJczxCacheRel(rel)) items.splice(i, 1)
+        const it = items[i]
+        const rel = String(it.relAtlas || '').replace(/\\/g, '/')
+        if (isJczxCacheRel(rel) || it.jczx) continue
+        items.splice(i, 1)
       }
     }
     // NIKKE 档不展示交错战线的解包结果（哪怕曾经误抽进了 bd2viewer-nikke/<prefabs_spine_*>）
@@ -877,6 +1185,40 @@ async function scanRoot(root, force = false, mode = DEFAULT_FORMAT) {
     return a.folder.localeCompare(b.folder) || a.base.localeCompare(b.base)
   })
 
+  /**
+   * 管道自检（R26）：ark / jczx 档「角色元数据一条都没挂上」时**必须显式报警**。
+   *
+   * 为什么不许静默：这两个档的条目在 `ark` 为 null 时会退化成「只显示目录 id」，
+   * 界面看起来一切正常、不报错、不空列表 —— 于是坏了也没人知道，接手的人只能
+   * 逐个猜测原因（2026-10-03 实测为此耗掉大量时间）。这里把两种根因分开报：
+   *   · meta-search-never-ran —— 一次都没去查 meta.json：搜索逻辑被守卫短路了
+   *     （历史上就是 rootPath 斜杠形式没归一化导致 `startsWith` 恒 false）
+   *   · meta-not-found        —— 查了但一个 meta.json 都没有：素材根选错层
+   */
+  let metaHealth = null
+  if (arkMetaCache && exists) {
+    const r = arkMetaCache.report()
+    const withMeta = items.filter(i => i.ark).length
+    metaHealth = {
+      ok: !(items.length > 0 && withMeta === 0),
+      code: null,
+      itemCount: items.length,
+      itemsWithMeta: withMeta,
+      lookups: r.lookups,
+      dirsProbed: r.probed,
+      dirsWithMeta: r.withMeta,
+    }
+    if (!metaHealth.ok) {
+      metaHealth.code = r.lookups === 0 ? 'meta-search-never-ran' : 'meta-not-found'
+      const hint = metaHealth.code === 'meta-search-never-ran'
+        ? '向上搜索 meta.json 一次都没执行 —— 先查 walk() 里基于 rootPath 的守卫是不是短路了（rootPath 有没有 path.resolve 归一化？）'
+        : `查过 ${r.probed} 个目录却一个 meta.json 都没有 —— 素材根是不是选错层（Ark 要选 .../runtime/source 这层，不是 .../runtime）`
+      console.error(
+        `[scan] ⚠ ${fmt.id} 档扫到 ${items.length} 条，但一条角色元数据都没挂上（${metaHealth.code}）。`
+        + `${hint}。根目录：${root.path}`)
+    }
+  }
+
   const payload = {
     root: { id: root.id, label: root.label, path: root.path },
     mode: fmt.id,
@@ -885,6 +1227,7 @@ async function scanRoot(root, force = false, mode = DEFAULT_FORMAT) {
     playableCount: items.filter(i => i.ok).length,
     scanMs: Date.now() - t0,
     items,
+    ...(metaHealth ? { metaHealth } : {}),
     ...(jczxMeta ? { jczx: jczxMeta } : {}),
     ...(nikkeMeta ? { nikkeAb: nikkeMeta } : {}),
   }

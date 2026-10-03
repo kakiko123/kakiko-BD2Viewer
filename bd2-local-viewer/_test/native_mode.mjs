@@ -2132,8 +2132,11 @@ try {
     langTest.stored === 'zh' && langTest.pickedAfterSet === true &&
     langTest.pickedWhenCleared === false,
     `存储=${langTest.stored} 选过后=${langTest.pickedAfterSet} 清掉后=${langTest.pickedWhenCleared}`)
+  // ⚠️ 别写成 `JSON.stringify({q, onlyOk})` 整体相等 —— JCZX 档加了 modsOnly（R25），
+  //    filters 合法地多了第三个键，断言就会一直红。这条要守的是「切语言**只**动文案、
+  //    过滤状态原样」，所以逐个比值，而不是比整份序列化。
   check('㉔ 切语言只动文案，不动过滤状态',
-    langTest.enFilters === JSON.stringify({ q: '', onlyOk: true }),
+    langTest.enFilters === JSON.stringify({ q: '', onlyOk: true, modsOnly: false }),
     `filters=${langTest.enFilters}`)
 
   /* ㉕ 搜索能搜到「资产内部资源文件」------------------------------------

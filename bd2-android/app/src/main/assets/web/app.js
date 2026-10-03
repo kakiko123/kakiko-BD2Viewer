@@ -77,6 +77,9 @@ const S = {
   items: [],            // 服务端扫描到的资产
   customItems: [],      // 手动上传的资产
   current: null,
+  // JCZX mod 层（R25）：当前播的是 mod 链里的哪一个（null = 原图）。
+  // 和 currentPose 一样是「播放会话」的状态 —— 换卡时重置。
+  currentMod: null,
   player: null,
   camera: null,
   // Lost Sword 两层角色（R19）：背层 `_B` 单独一个播放器，叠在本体（`_F`）下面
@@ -147,6 +150,7 @@ const I18N_EN = {
   '语音加载失败': 'Voice failed to load',
   '语音播放失败': 'Voice playback failed',
   '{n} 个形态': '{n} forms',
+  '{n} 个 mod': '{n} mods',
   '{n} 图': '{n} images',
   '{w}×{h}': '{w}x{h}',
   '{n} 个动画': '{n} animations',
@@ -683,6 +687,14 @@ async function setAssetMode(mode) {
   // 否则播放页会继续挂着一套不属于当前类型的画面（而且它的文件按新规则根本不成立）。
   if (S.current) { disposePlayer(); S.current = null }
   S.currentPose = 'normal'
+  S.currentMod = null
+  // 「只看 Mod」只对 jczx 有意义：换档时把勾收掉、控件藏起来。
+  // ⚠️ 必须同时改 filters 和 DOM —— filters 是可见性的事实来源，DOM 只是入口（R1）。
+  filters.modsOnly = false
+  const chkMods = $('chkModsOnly')
+  if (chkMods) chkMods.checked = false
+  const modRow = $('modFilterRow')
+  if (modRow) modRow.hidden = (mode !== 'jczx')
   // 切档时把 ark 的两块 UI 收起来：disposePlayer 不走 resetMeta，光靠它这些组会
   // 顶着上一个模式的立绘/语音留在侧栏里（切到 bd 档后还看得到星陨计划的语音列表）。
   for (const id of ['arkStaticGroup', 'arkVoiceGroup']) {
@@ -1366,11 +1378,12 @@ function setFullscreen(on) {
     animBar.hidden = !on
     animBar.classList.remove('dim')
   }
+  syncFsExtra()          // 全屏的姿势条/皮肤下拉跟着显隐
   if (on) {
     closeSheet()
     updateFsLabels()
     wakeFsBar()
-    toast(t('◀▶ 切资产 · 音量键切动画 · ☰ 换文件 · ✕ 退出'))
+    toast(t('全屏可切姿势和皮肤，停几秒后控制条会变淡，点画面唤回。'))
     try { window.BD2Native.setFullscreen(true) } catch { /* 桌面版没有这个口 */ }
     if (!NATIVE && !document.fullscreenElement && document.documentElement.requestFullscreen) {
       try { document.documentElement.requestFullscreen().catch(() => {}) } catch { /* ignore */ }
@@ -1400,6 +1413,7 @@ function toggleFsFiles(force) {
   // 文件面板开着时收起底部动画条，别盖住列表
   const animBar = $('fsAnimBar')
   if (animBar && fsMode) animBar.hidden = want
+  syncFsExtra()          // 别让姿势条/皮肤下拉盖住文件列表
   if (want) { refreshLists(); wakeFsBar() }
 }
 
@@ -1448,24 +1462,45 @@ function updateFsLabels() {
   const file = $('fsFile')
   const anim = $('fsAnim')
   if (!file || !anim) return
+  syncFsExtra()
   file.textContent = S.current?.folder || t('未载入')
   const a = currentAnimation()?.name
   const i = a ? S.animations.indexOf(a) : -1
   anim.textContent = a ? `${a}　${i + 1}/${S.animations.length}` : '—'
 }
 
+/** 全屏下的姿势条 / 皮肤下拉该不该显示。数据来自侧栏那两份，**不做第二套切换逻辑**。 */
+function syncFsExtra() {
+  const box = $('fsExtra')
+  if (!box) return
+  const pose = $('fsPoseBar')
+  const skinWrap = $('fsSkinWrap')
+  const mod = $('fsModBar')
+  const hasPose = !!(pose && pose.childElementCount > 0)
+  const hasSkin = Array.isArray(S.skins) && S.skins.length > 1
+  const hasMod = !!(mod && mod.childElementCount > 0)
+  if (pose) pose.hidden = !hasPose
+  if (skinWrap) skinWrap.hidden = !hasSkin
+  if (mod) mod.hidden = !hasMod
+  // 不在全屏 / 全屏文件列表开着（会盖住列表）/ 三样一样都没有 → 整条藏
+  box.hidden = !fsMode || fsFilesOpen || (!hasPose && !hasSkin && !hasMod)
+}
+
 /** 顶部条/底部条静置几秒一起淡出，点一下画面回来 */
 function wakeFsBar() {
   const bar = $('fsBar')
   const animBar = $('fsAnimBar')
+  const extra = $('fsExtra')      // 姿势条/皮肤下拉跟顶栏、底栏同一套淡出计时
   if (!bar) return
   bar.classList.remove('dim')
   if (animBar) animBar.classList.remove('dim')
+  if (extra) extra.classList.remove('dim')
   clearTimeout(fsDimTimer)
   fsDimTimer = setTimeout(() => {
     if (!fsMode) return
     bar.classList.add('dim')
     if (animBar) animBar.classList.add('dim')
+    if (extra) extra.classList.add('dim')
   }, 4000)
 }
 
@@ -2221,7 +2256,17 @@ function matchesAssetMode(item) {
     || rel.includes('/bd2viewer-nikke/')
     || rel === '.bd2viewer-nikke' || rel.startsWith('.bd2viewer-nikke/')
     || rel.includes('/.bd2viewer-nikke/')
-  if (S.mode === 'jczx') return isJczx || !!item.pendingUnpack
+  if (S.mode === 'jczx') {
+    // 交错战线这一档有两种素材（2026-10-02 实测，用户两种都有）：
+    //   ① 散装 jczx 资源：只认解包缓存 `bd2viewer-jczx/`
+    //   ② **图鉴发布包**：`source/` `mod1/` `mod2/` 下的已解包层（R25）
+    // 早先这里只放行 ①，把 ② 整档过滤掉了 —— 症状是服务端扫到 1981 条、
+    // 网格却只有 1 张卡（唯一没被 jczx 标记的那条），全被 here 挡在门外。
+    // 判据用服务端给的 jczx 标记（它认得两种布局），判不出再退回路径前缀。
+    if (item.jczx) return true
+    if (isJczx) return true
+    return !!item.pendingUnpack
+  }
   if (isJczx) return false
   // 名字里带 prefabs_spine 的是交错战线包（含 hash 前缀），其它档不展示
   if (/prefabs_spine/i.test(rel)) return false
@@ -2231,9 +2276,29 @@ function matchesAssetMode(item) {
 
 function allItems() {
   const base = [...S.customItems, ...S.items].filter(matchesAssetMode)
-  if (S.mode === 'nikke' || S.mode === 'ark') {
-    // nikke：藏姿势变体；ark：藏同一角色的其它形态（都挂在主条目 members 上，见 R18）
-    return base.filter(i => !nikkeViewFor().variantKeys.has(itemKey(i)))
+  if (S.mode === 'nikke' || S.mode === 'ark' || S.mode === 'jczx') {
+    // nikke：藏姿势变体；ark：藏同一角色的其它形态；jczx：藏其它形态 **和 mod 变体**
+    // （都挂在主条目 members 上，见 R18 / R25）
+    //
+    // ⚠️ 「只看 Mod」档（filters.modsOnly）**不**在这里分叉：那样要么改条目身份
+    // （违反 R3 —— filteredItems 只该读 allItems，不该被二次加工），要么把 filters
+    // 提成 TDZ 依赖。真正需要变的是「mod 条目算不算可见」，那件事由
+    // jczxViewFor() 一次性算清两组 key，allItems 只做集合判断。
+    const view = nikkeViewFor()
+    if (S.mode === 'jczx' && filters.modsOnly) {
+      // mod 档：形态仍归组（一个角色的多个皮肤一张卡），但卡片内容换成 mod 那条，
+      // 原图层收起来。view.modCardKeys 给出「哪个 mod 条目当这张卡的内容」。
+      const keep = view.modCardKeys
+      return base.filter(i => !view.variantKeys.has(itemKey(i)) || keep.has(itemKey(i)))
+    }
+    if (S.mode === 'jczx' && view.modCardKeys) {
+      // 常规档：**两个集合都要藏**。modCardKeys 是「被折进主条目 mod 链的那些 mod」
+      // （原图 → mod1 → mod2 循环切换），它们在常规档不该各占一张卡。
+      // ⚠️ 早先只按 variantKeys 过滤 → 1152 个 mod 条目全露着，网格 1349 张卡里
+      // 大半是 mod 的裸条目，形态归组的效果完全看不出来（196 个角色本该 ~200 张卡）。
+      return base.filter(i => !view.variantKeys.has(itemKey(i)) && !view.modCardKeys.has(itemKey(i)))
+    }
+    return base.filter(i => !view.variantKeys.has(itemKey(i)))
   }
   if (S.mode === 'lostsword') {
     // Lost Sword 档：藏「两层角色」的背层（`_B`，挂到 `_F` 上叠着渲染，见 R19）
@@ -2323,8 +2388,12 @@ function nikkeGroupOf(base) {
 }
 
 function nikkeViewFor() {
-  if (nikkeView && nikkeView.src === S.items && nikkeView.mode === S.mode) return nikkeView
+  // ⚠️ 缓存键必须带 modsOnly：「只看 Mod」档的归组结论**完全不同**（不做形态归组、
+  // 每条 mod 独立成卡）。漏了它 → 切档后还是上一档的卡片集合。
+  if (nikkeView && nikkeView.src === S.items && nikkeView.mode === S.mode
+    && nikkeView.modsOnly === !!filters.modsOnly) return nikkeView
   const variantKeys = new Set()
+  const modCardKeys = new Set()   // 「只看 Mod」档里要当卡露出来的条目
   if (S.mode === 'nikke') {
     const groups = new Map()
     const sorted = [...S.items].sort((a, b) =>
@@ -2403,8 +2472,193 @@ function nikkeViewFor() {
       for (const m of uniq.slice(1)) variantKeys.add(itemKey(m.item))
     }
   }
-  nikkeView = { src: S.items, mode: S.mode, variantKeys }
+  // 声明在函数级：末尾要把 jczx 的中间结果挂进 nikkeView（排障用，见 __bd2viewer.jczxView）
+  let modChains = null
+  if (S.mode === 'jczx') {
+    // 交错战线图鉴（R25）：**两层**归组。
+    //
+    //   第一层（形态）：一个角色目录下的多个 bundle 是同一角色的不同皮肤/形态
+    //   （`prefabs_spine_10010_skin_alps03_spine` / `..._alps04_spine` …），
+    //   和 Ark 一样按 charId 收成一张卡 + 形态切换。
+    //
+    //   第二层（mod）：mod1/ mod2/ 下的同名 bundle 是**同一槽位的不同资源层**
+    //   （原图 ↔ mod1 ↔ mod2 …），切换时整个骨架+贴图换掉，但名字/稀有度/立绘/形态表
+    //   仍来自原图。这正是「交错战线图鉴」App 的做法（它的 getNextModVariantId 在
+    //   走完最后一个 mod 时返回 null → 落回原图）。
+    //
+    // 两层的键不同：形态用 charId（跨层合并，因为 mod 和原图是同一角色），
+    // mod 用 targetKey（`<角色id>|<bundle 基名>`，只合并同名 bundle 的各层）。
+    //
+    // ⚠️ 「只看 Mod」档下**不做形态归组**：1222 个 mod 版本 vs 403 个原图，
+    // 合成 100 多张卡就找不到具体某个 mod 了。那一档让每条 mod 独立成卡
+    // （原图层收起来），所以下面 mod 链一建好就直接 return。
+    modChains = buildJczxModChains(S.items)
+    if (filters.modsOnly) {
+      // 有原图对照的：同槽位的每个 mod 各占一张卡（本来就是不同资源，合并就没法挑了）。
+      for (const [, arr] of modChains.chains) {
+        for (const it of arr) {
+          if (it.jczx && it.jczx.layerKind !== 'source') modCardKeys.add(itemKey(it))
+        }
+      }
+      // 孤儿 mod（作者新增的皮肤，原图根本没这个 bundle）也要能翻到。
+      for (const it of S.items) {
+        const j = it && it.jczx
+        if (!j || !j.targetKey) continue
+        if (j.layerKind === 'source') continue
+        if (modChains.drop.has(itemKey(it))) continue
+        modCardKeys.add(itemKey(it))
+      }
+      // **原图层全部收起来**（含那些一个 mod 都没有的槽位）。
+      // ⚠️ 早先只在 chains 里收 → 132 张「这个槽位压根没有 mod」的 CG/角色原图
+      // 留在 mod 档里，看着像漏网之鱼。这一档的语义就是「只列 mod」，所以按层
+      // 一刀切最干净，也不用去区分「有 mod 的原图」和「没 mod 的原图」。
+      for (const it of S.items) {
+        const j = it && it.jczx
+        if (j && j.layerKind === 'source') variantKeys.add(itemKey(it))
+      }
+      nikkeView = { src: S.items, mode: S.mode, variantKeys, modCardKeys, modsOnly: !!filters.modsOnly,
+        chains: modChains.chains, drop: modChains.drop }
+      return nikkeView
+    }
+    // 常规档：先把重复的缓存条目整体藏掉，再建 mod 链（挂在**原图条目**上）、
+    // 最后建形态组（此时各形态的 mod 链已经就位，主条目接管 members 时要把它也搬过去）。
+    for (const it of S.items) {
+      if (modChains.drop.has(itemKey(it))) variantKeys.add(itemKey(it))
+    }
+    for (const [k, chain] of modChains.chains) {
+      const first = chain[0]
+      if (first) first.mods = chain
+      for (const it of chain.slice(1)) modCardKeys.add(itemKey(it))
+    }
+
+    const groups = new Map()
+    const sorted = [...S.items].sort((a, b) =>
+      String(a.relAtlas || '').localeCompare(String(b.relAtlas || '')))
+    for (const it of sorted) {
+      const ak = it && it.ark
+      if (!ak || !ak.charId) continue
+      const key = ak.charId
+      let grp = groups.get(key)
+      if (!grp) { grp = []; groups.set(key, grp) }
+      grp.push({ item: it, pose: ak.formBundle || it.base, form: ak })
+    }
+    for (const [key, grp] of groups) {
+      // 原图层优先（layerIndex 0）、解包缓存垫后，其余按 bundle 名排，保证顺序稳定。
+      // 用共用的 jczxLayerOrder：形态归组和 mod 归组对「谁是原图」的判断必须一致，
+      // 否则主条目会挑到一个缓存条目当载体（于是卡片没名字 / 没立绘）。
+      grp.sort((a, b) => (jczxLayerOrder(a.item, b.item)
+        || String(a.pose).localeCompare(String(b.pose))))
+      const seen = new Set()
+      const uniq = grp.filter(m => (seen.has(m.pose) ? false : (seen.add(m.pose), true)))
+      if (uniq.length < 2) {
+        // 单形态也要把 mod 链挂上去（只有一个皮肤但有 3 个 mod 的角色很常见）
+        continue
+      }
+      const main = uniq[0].item
+      main.members = uniq
+      main.groupId = key
+      // 立绘/语音只在承载条目上（服务端已保证唯一），归组后搬到主条目，
+      // 否则主条目可能不是那个 isCarrier 的 bundle，播放页就找不到立绘了。
+      const carrier = uniq.find(m => m.form && m.form.isCarrier)
+      if (carrier) {
+        main.ark = main.ark || {}
+        main.ark.statics = carrier.form.statics || []
+        main.ark.voices = carrier.form.voices || []
+        main.ark.charName = main.ark.charName || carrier.form.charName
+        main.ark.charCode = main.ark.charCode || carrier.form.charCode
+        main.ark.rarity = main.ark.rarity != null ? main.ark.rarity : carrier.form.rarity
+        main.ark.carrierBundle = carrier.pose
+      }
+      // 成员里非主条目的 mod 链要挂到**主条目**上 —— 播页切形态时按形态找链
+      for (const m of uniq) {
+        if (m.item === main) continue
+        const chain = modChains.chains.get(m.item.jczx && m.item.jczx.targetKey)
+        if (chain) m.item.mods = chain
+      }
+      for (const m of uniq.slice(1)) variantKeys.add(itemKey(m.item))
+    }
+  }
+  nikkeView = { src: S.items, mode: S.mode, variantKeys, modCardKeys, modsOnly: !!filters.modsOnly }
+  if (S.mode === 'jczx') { nikkeView.chains = modChains.chains; nikkeView.drop = modChains.drop }
   return nikkeView
+}
+
+/* ---------------- JCZX：mod 变体链（R25） ----------------
+   「交错战线图鉴」发布包（2026-10-02 实测）的 mod 层是**资源层替换**而不是贴图覆盖：
+   `mod1/角色/10010/mod-<id>/runtime/prefabs_spine_10010_skin_alps04_spine.{atlas,json,png}`
+   与 `source/角色/10010/runtime/` 下的**同名** bundle 一一对应 —— 同名即同槽位。
+
+   所以 mod 链的键是服务端给的 `jczx.targetKey`（`<角色id>|<bundle 基名>`），
+   链里**原图永远排第一**（切到底回到原图，和图鉴 App 的行为一致）。
+   没有 jczx 标记的条目（用户自己放的散装 jczx 文件）不参与，也不会被藏。 */
+function buildJczxModChains(items) {
+  const chains = new Map()
+  const byKey = new Map()
+  for (const it of items) {
+    const j = it && it.jczx
+    if (!j || !j.targetKey) continue
+    let arr = byKey.get(j.targetKey)
+    if (!arr) { arr = []; byKey.set(j.targetKey, arr) }
+    arr.push(it)
+  }
+  const drop = jczxModDedupe(items)
+  for (const [key, arr0] of byKey) {
+    // 原图优先；图鉴层优先于解包缓存；同层内按 modId 排（稳定）。
+    // 原图没有的 mod（作者新增的皮肤）也收，它们照样能播，只是没有「原图」可回退。
+    const arr = arr0.slice().sort(jczxLayerOrder)
+    const kept = arr.filter(it => !drop.has(itemKey(it)))
+    if (kept.length < 2) continue        // 只有一份 = 没有可切的
+    chains.set(key, kept)
+  }
+  return { chains, drop }
+}
+
+/**
+ * 同槽位（targetKey）的 mod 排序：原图 → 图鉴 mod 层 → 解包缓存 → modId。
+ * ⚠️ 必须容忍**没有 jczx 标记**的条目（S.customItems 等）：`.jczx` 直接解构会抛，
+ *    而排序回调里抛异常会让整条归组链断掉（表现为整页卡片塌成 0）。
+ */
+function jczxLayerOrder(a, b) {
+  const ja = a && a.jczx
+  const jb = b && b.jczx
+  if (!ja || !jb) return (!ja ? 1 : 0) - (!jb ? 1 : 0)   // 有标记的排前面
+  const sa = ja.layerKind === 'source' ? 0 : 1
+  const sb = jb.layerKind === 'source' ? 0 : 1
+  if (sa !== sb) return sa - sb
+  const ca = ja.fromCache ? 1 : 0
+  const cb = jb.fromCache ? 1 : 0
+  if (ca !== cb) return ca - cb
+  const la = ja.layerIndex || 0
+  const lb = jb.layerIndex || 0
+  if (la !== lb) return la - lb
+  return String(ja.modId || '').localeCompare(String(jb.modId || ''))
+}
+
+/**
+ * mod 去重：同一个 mod 只留**图鉴发布包里那一份**，丢掉「同一个 mod 的解包缓存版」。
+ *
+ * ⚠️ 去重键必须用 `(targetId, modId)`，**不能用 targetKey**（2026-10-02 实测踩过）：
+ * 解包器把 `prefabs_spine_20240_skin_uillean04_spine` 这个 bundle 解出来时，文件落盘名
+ * 是 `20240_skin_Uillean04.atlas`（原包里的名字），而图鉴发布包里保留着全名 ——
+ * 同一个 mod 两边 targetKey 长得不一样，354 条**一条都对不上**，于是去重全失效、
+ * 缓存条目全成了可见的裸卡片（没名字、没立绘，还把真正的角色卡淹掉）。
+ * 同一份素材里 `targetId`（目录里的角色 id）和 `modId`（包目录名）两边完全一致。
+ *
+ * 缓存里图鉴真的没有的 mod（targetId+modId 都没见过）不受影响，仍然露出。
+ * @returns {Set<string>} 要藏起来的 itemKey 集合
+ */
+function jczxModDedupe(items) {
+  const drop = new Set()
+  const seen = new Set()
+  // 先按 jczxLayerOrder 排（图鉴层在前、解包缓存在后），再「先到先留」
+  for (const it of items.slice().sort(jczxLayerOrder)) {
+    const j = it && it.jczx
+    if (!j || !j.targetKey || j.layerKind === 'source') continue
+    const slot = `${j.targetId}|${j.modId || it.relAtlas}`
+    if (seen.has(slot)) { drop.add(itemKey(it)); continue }
+    seen.add(slot)
+  }
+  return drop
 }
 
 /** 解包缓存里的条目（目录名与服务端 /ScanEngine 的常量保持一致）。 */
@@ -2427,6 +2681,76 @@ function activeMemberOf(item) {
   if (pose === 'normal') return item
   const m = item.members.find(x => x.pose === pose)
   return m ? m.item : item
+}
+
+/* ------------------------------------------------------------------ JCZX mod 链（R25）
+   两级解析，和 `currentPose` 平行：
+     activeMemberOf(item)  → 当前形态（原图层的那条 spine）
+     activeModOf(item)     → 该形态下的资源层（原图 / mod1 / mod2 …）
+   两者相乘才是真正要播的条目。为什么要两级：交错战线的角色既有皮肤
+   （alps03 / alps04，跨层都有），mod 又是**按皮肤**挂的（`..._skin_alps04_spine`
+   的 mod 和原图同名）—— 只有一个维度切不完整。 */
+
+/** 当前形态的 mod 链（数组，原图在第 0）。没有链就 null。 */
+function modChainOf(item) {
+  const mem = activeMemberOf(item)
+  if (!mem) return null
+  const chain = Array.isArray(mem.mods) && mem.mods.length > 1 ? mem.mods : null
+  if (!chain) return null
+  if (S.current) {
+    // 从别的形态切过来时，上一形态的 modId 可能不在新链里 → 退回原图
+    if (S.currentMod && chain.some(m => itemKey(m) === S.currentMod)) return chain
+  }
+  return chain
+}
+
+/** 当前真正要加载的条目 = 形态 × mod 层。 */
+function activeSpineItemOf(item) {
+  const mem = activeMemberOf(item)
+  const chain = modChainOf(item)
+  if (!chain || !S.currentMod) return mem
+  return chain.find(m => itemKey(m) === S.currentMod) || chain[0]
+}
+
+/** 播页里切 mod（原图 → mod1 → mod2 → … → 回原图，循环）。
+ *  走完最后一个回到原图，与「交错战线图鉴」App 的 getNextModVariantId 行为一致。 */
+function cycleMod() {
+  const it = S.current
+  if (!it) return
+  const chain = modChainOf(it)
+  if (!chain) return
+  const cur = S.currentMod || itemKey(chain[0])
+  const idx = chain.findIndex(m => itemKey(m) === cur)
+  // 走完最后一个 → 回原图（图鉴 App 那边返回 null，落回 activeForm）
+  const next = (idx + 1) < chain.length ? chain[idx + 1] : chain[0]
+  const nextKey = itemKey(next)
+  if (nextKey === cur) return
+  S.currentMod = next.jczx && next.jczx.layerKind === 'source' ? null : nextKey
+  loadCurrent()
+}
+
+/** 播页里直接点某个 mod（原图 / modN）。 */
+function switchMod(key) {
+  const it = S.current
+  if (!it) return
+  const chain = modChainOf(it)
+  if (!chain) return
+  const target = key ? chain.find(m => itemKey(m) === key) : chain[0]
+  if (!target) return
+  const nextKey = target.jczx && target.jczx.layerKind === 'source' ? null : itemKey(target)
+  if (nextKey === S.currentMod) return
+  S.currentMod = nextKey
+  loadCurrent()
+}
+
+/** 当前 mod 层的显示标签：「原图」/「mod1」/「mod2」。 */
+function currentModLabel(item) {
+  const mem = activeMemberOf(item)
+  if (!S.currentMod || !mem) return null
+  const chain = Array.isArray(mem.mods) ? mem.mods : null
+  if (!chain) return null
+  const m = chain.find(x => itemKey(x) === S.currentMod)
+  return (m && m.jczx && m.jczx.layerLabel) || null
 }
 
 /* ------------------------------------------------------------------ Ark 显示口径
@@ -2459,8 +2783,38 @@ function arkCardSub(item) {
   }
   const forms = Array.isArray(item.members) ? item.members.length : 1
   if (forms > 1) bits.push(t('{n} 个形态', { n: forms }))
+  // JCZX：常规档这张卡是原图，标出「有几个 mod 可切」；mod 档则标出自己是哪一层。
+  const j = item.jczx
+  if (j && j.layerKind === 'mod') {
+    bits.push(j.layerLabel || 'mod')
+  } else if (j) {
+    const nMods = modCountOf(item)
+    if (nMods > 0) bits.push(t('{n} 个 mod', { n: nMods }))
+  }
   bits.push(t('{n} 图', { n: (item.images || []).length }))
   return bits.join(' ')
+}
+
+/** 这张卡（原图层）挂了几个可切的 mod。mod 档下条目自己是 mod，不数。 */
+function modCountOf(item) {
+  if (!item) return 0
+  const chain = Array.isArray(item.mods) ? item.mods : null
+  if (chain) return chain.length - 1
+  // 归组主条目：把各成员的链加起来（不同皮肤的 mod 是各自独立的）
+  let n = 0
+  const seen = new Set()
+  for (const m of (Array.isArray(item.members) ? item.members : [item])) {
+    const c = Array.isArray(m.mods) ? m.mods : null
+    if (!c) continue
+    for (const x of c) {
+      if (x.jczx && x.jczx.layerKind === 'source') continue
+      const k = itemKey(x)
+      if (seen.has(k)) continue
+      seen.add(k)
+      n++
+    }
+  }
+  return n
 }
 
 /** 播放页副标题：中文名 · 稀有度 · 形态 · 动画数。 */
@@ -2672,7 +3026,7 @@ function itemKey(i) { return i.key || i.id || i.relAtlas || '' }
    #chkOnlyPlayable.checked，等于把「排序 + 过滤」这一层和左侧抽屉的控件绑死：
    没法单独推理或测试，同一个条件还出现了两个事实来源。
    约定：控件只是**入口**，filters 才是事实来源 —— 控件一变调 syncFilters()，其余人只读 filters。 */
-const filters = { q: '', onlyOk: true }
+const filters = { q: '', onlyOk: true, modsOnly: false }
 
 /* 搜索的「命中理由」：assetKey → 命中的资源文件名。
    它**不是**第二个可见性口径 —— 可见性仍然只由 filteredItems() 决定。
@@ -2685,6 +3039,7 @@ const searchHits = new Map()
 function syncFilters() {
   filters.q = $('assetFilter').value.trim().toLowerCase()
   filters.onlyOk = $('chkOnlyPlayable').checked
+  filters.modsOnly = !!($('chkModsOnly') && $('chkModsOnly').checked)
 }
 
 /**
@@ -3688,7 +4043,7 @@ function galleryCard(item) {
     ? t('尚未解包')
     : item.imageOnly
       ? t('CG · {n} 张', { n: (item.images || []).length })
-      : (S.mode === 'ark' && item.ark ? arkCardSub(item)
+      : ((S.mode === 'ark' || S.mode === 'jczx') && item.ark ? arkCardSub(item)
         : item.base + (item.skeletonKind ? `.${item.skeletonKind}` : '') +
           t(' · {n} 图', { n: (item.images || []).length }))
 
@@ -3950,7 +4305,13 @@ async function makeThumb(item, size = 220) {
         // 让它自己走几帧，避开绑定姿势/起始空帧
         await new Promise(r => setTimeout(r, 260))
         try { p.setViewport(name) } catch { /* 用默认取景 */ }
-        for (let i = 0; i < 3; i++) { p.drawFrame(false); await new Promise(r => requestAnimationFrame(r)) }
+        // ⚠️ 每次 drawFrame **前**都要重设一次：动画的 slot 颜色时间轴会把 alpha 写回来，
+        // 只在建播放器后设一次的话，卡面照样会带出 hexie / tape 层（R27）。
+        for (let i = 0; i < 3; i++) {
+          hideDefaultHiddenSlots(p.skeleton)
+          p.drawFrame(false)
+          await new Promise(r => requestAnimationFrame(r))
+        }
       } catch { /* 尽力而为 */ }
     }
     // 两层角色（R19）：把背层也渲进卡面 —— 有些角色 `_F` 只有十来个 region
@@ -5069,6 +5430,9 @@ function selectItem(item, pose) {
   // NIKKE 分组条目：默认姿势 = 成员表第一项的 pose（通常是本体 normal；
   // 只有 aim/cover 没有本体时，第一项就是那个姿势）
   S.currentPose = pose || (Array.isArray(item?.members) ? (item.members[0].pose || 'normal') : 'normal')
+  // JCZX：换卡 = 回到原图层。mod 选择是**播放会话**状态，不跟着卡片走
+  // （否则从 mod 卡切到同角色原图卡时会莫名停在 mod 上）。
+  S.currentMod = null
   refreshLists()
   if (fsMode) updateFsLabels()
   // 同步到地址栏，方便直接分享 / 刷新回到同一套资产
@@ -5191,6 +5555,9 @@ function switchPose(pose) {
   if (!it || !Array.isArray(it.members) || it.members.length < 2) return
   if (pose === (S.currentPose || defaultPoseOf(it))) return
   S.currentPose = pose
+  // JCZX：mod 是**按皮肤**挂的，切形态后原来的 modId 大概率不在新链里。
+  // 置回原图（而不是留着让 modChainOf 兜底）—— 语义上「换皮肤」就该看新皮肤的原图。
+  S.currentMod = null
   loadCurrent()
 }
 
@@ -5214,7 +5581,7 @@ async function loadCurrent() {
   clearError()
   resetMeta()
 
-  $('currentName').textContent = S.mode === 'ark' ? displayNameOf(item) : item.folder
+  $('currentName').textContent = (S.mode === 'ark' || S.mode === 'jczx') ? displayNameOf(item) : item.folder
   if (item.imageOnly) {
     const n = (item.relImages || []).length
     $('currentSub').textContent = [item.group, t('CG · {n} 张', { n })].filter(Boolean).join(' · ')
@@ -5226,7 +5593,10 @@ async function loadCurrent() {
     return
   }
   // NIKKE 姿势变体：副标题里写明当前加载的是哪个成员（c022_aim_00），别让人以为还在本体上
-  const member = activeMemberOf(item)
+  // ⚠️ JCZX 是**两级**（形态 × mod 层），真正要播的条目是 activeSpineItemOf。
+  // 后面所有 urlsForItem / 版本嗅探 / 缩略图都必须用「它」，不是 activeMemberOf。
+  const member = S.mode === 'jczx' ? activeSpineItemOf(item) : activeMemberOf(item)
+  const modLabel = S.mode === 'jczx' ? currentModLabel(item) : null
   $('currentSub').textContent = S.mode === 'ark'
     // Ark：形态切换后副标题要跟着换（member 可能是另一个 bundle），形态名用 formLabel
     ? (() => {
@@ -5235,9 +5605,18 @@ async function loadCurrent() {
           ? t('{n} 个形态', { n: item.members.length }) : ''
         return [arkCurrentSub(Object.assign({}, item, { ark: mk })), forms].filter(Boolean).join(' · ')
       })()
-    : [item.group, member.base, item.skeletonKind ? `.${item.skeletonKind}` : '',
-      item.backLayer ? t('含背层') : '']
-        .filter(Boolean).join(' · ')
+    : S.mode === 'jczx'
+      // JCZX：形态数 + 当前 mod 层（图鉴那边叫「原spine / modN」）
+      ? (() => {
+          const mk = member && member.ark ? member.ark : item.ark
+          const forms = Array.isArray(item.members) && item.members.length > 1
+            ? t('{n} 个形态', { n: item.members.length }) : ''
+          return [displayNameOf(Object.assign({}, item, { ark: mk })), forms, modLabel]
+            .filter(Boolean).join(' · ')
+        })()
+      : [item.group, member.base, item.skeletonKind ? `.${item.skeletonKind}` : '',
+        item.backLayer ? t('含背层') : '']
+          .filter(Boolean).join(' · ')
   $('emptyState').hidden = true
   setBusy(true, t('载入中…'))
   setLoadProgress({ stage: t('阶段：加载骨架'), indeterminate: true })
@@ -5615,7 +5994,10 @@ function renderArkVoices() {
   const list = $('arkVoiceList')
   if (!group || !list) return
   const item = S.current
-  const voices = (S.mode === 'ark' && item && item.ark && Array.isArray(item.ark.voices))
+  // 语音面板：ark 有，交错战线（jczx）也有 —— 交错战线的语音是 `<角色>/voice/**/*.wav`
+  // （服务端/原生都会给出 ark.voices）。立绘网格仍只给 ark：jczx 整理树里 meta 声明的
+  // `runtime/static/…` 路径已经不存在了，硬显示只会是一排坏图。
+  const voices = ((S.mode === 'ark' || S.mode === 'jczx') && item && item.ark && Array.isArray(item.ark.voices))
     ? item.ark.voices.filter(v => v && v.url) : []
   list.innerHTML = ''
   group.hidden = voices.length === 0
@@ -5677,6 +6059,9 @@ function stopArkVoice() {
 }
 
 function disposePlayer() {
+  // 手势监听挂在 document 上（拖出画布也要继续跟手）。先拆掉，
+  // 否则切资产后旧监听还按上一台相机改位置。
+  if (detachCameraGestures) { detachCameraGestures(); detachCameraGestures = null }
   // 本轮加载用过的「3.x→4.x 转换后」blob 在这里回收（必须在下面的 early return 之前，
   // 否则「主体还没建起来就切走」的情况会把 blob 漏掉）
   dropSpineJsonBlobs()
@@ -5704,12 +6089,24 @@ function resetMeta() {
   S.hidden = new Set()
   S.hiddenStack = []
   S.selectedLayer = null
+  // 换了资产/骨头，上一次「点选往下挪」的记忆必须清掉 —— 否则换了图还按旧 key 继续往下数
+  resetLayerPickMemory()
   S.bounds = null
   $('animList').innerHTML = ''
   $('skinSelect').innerHTML = ''
+  const fsSkinNow = $('fsSkin')
+  if (fsSkinNow) fsSkinNow.innerHTML = ''
+  const fsPoseNow = $('fsPoseBar')
+  if (fsPoseNow) fsPoseNow.innerHTML = ''
+  const fsModNow = $('fsModBar')
+  if (fsModNow) fsModNow.innerHTML = ''
   $('layerList').innerHTML = ''
   const pg = $('poseGroup')
   if (pg) pg.hidden = true       // 姿势条随数据重挂（onLoaded → renderPoseBar）
+  syncFsExtra()                  // 清完立刻重算：空窗期别留着上一个角色的全屏条
+  // JCZX mod 栏同理：切资产时先收起来，等 onLoaded 后按新资产的链重挂。
+  const mg = $('modGroup')
+  if (mg) mg.hidden = true
   // Ark 的立绘网格 / 语音列表同理：先收起来，等 onLoaded 后按新资产重挂。
   // 语音还要停 —— 正在播的音频属于上一个角色，别让它接着响。
   for (const id of ['arkStaticGroup', 'arkVoiceGroup']) {
@@ -5739,7 +6136,7 @@ function onLoaded(player) {
     const actual = `4.${rm[1]}`
     const used = player.__spineMinor
     if (used && actual !== used && !player.__spineVerRetry) {
-      const member = S.current ? activeMemberOf(S.current) : null
+      const member = S.current ? activeSpineItemOf(S.current) : null
       if (member) {
         member._spineMinor = actual
         member.spineMinor = actual
@@ -5760,7 +6157,7 @@ function onLoaded(player) {
   // 4.0 运行时读 4.1 骨架时，版本串有时也读不出来，上面的对照不会触发，动画直接是空的。
   // 解包缓存只可能是 4.1，空列表就换 4.1 再载一次。
   if (!animList.length && !player.__spineVerRetry) {
-    const member = S.current ? activeMemberOf(S.current) : null
+    const member = S.current ? activeSpineItemOf(S.current) : null
     if (member && (S.mode === 'nikke' || isNikkeCacheItem(member))) {
       const tried = member.__spineTried || []
       const next = ['4.1', '4.2', '4.0'].find(v => v !== player.__spineMinor && !tried.includes(v))
@@ -5780,6 +6177,8 @@ function onLoaded(player) {
   renderAnimList()
   renderSkinSelect()
   renderPoseBar()
+  // JCZX：mod 栏跟形态栏联动（切形态后链变了，按钮要重画）
+  renderModBar()
   // Ark：立绘网格 + 语音列表。非 ark 档这两块自己 hidden 掉（函数内有守卫）。
   renderArkStatics()
   renderArkVoices()
@@ -5791,6 +6190,10 @@ function onLoaded(player) {
     $('skinSelect').value = bestSkin.name
     applySkin(bestSkin.name, { redraw: false })
   }
+  // 档位默认该关的图层（JCZX 的 hexie / tape，见 R27）。
+  // ⚠️ 必须排在 applySkin() **之后** —— applySkin 里的 setSlotsToSetupPose 会清空 S.hidden，
+  // 早于它设置会被直接清掉（表现为「规则没生效」）。
+  applyDefaultHiddenLayers()
   renderLayerList()
   syncStageNav()            // 动画列表变了 → 两侧箭头的显隐跟着变
 
@@ -5802,7 +6205,7 @@ function onLoaded(player) {
     if (e) e.trackTime = 0
   } else {
     const reported = String((player.skeleton && player.skeleton.data && player.skeleton.data.version) || '')
-    const memberNow = S.current ? activeMemberOf(S.current) : null
+    const memberNow = S.current ? activeSpineItemOf(S.current) : null
     showError(t('这个骨架里没有任何动画')
       + `\nruntime ${player.__spineMinor || '?'} / skeleton ${reported || '?'} / bytes ${memberNow && memberNow.__skelBytes || '?'}`)
   }
@@ -5826,7 +6229,9 @@ function onLoaded(player) {
   S.camera.zoom = 1
   S.camera.update()
   fitToWindow()
-  new rt.CameraController(player.canvas, S.camera)
+  // 不用运行时自带的 CameraController：它把捏合缩在画面中心，
+  // 并且捏合过程中仍按单指去平移，手指底下的内容会滑走。
+  attachCameraGestures(player.canvas, S.camera)
 
   renderAnimList()
 
@@ -6289,40 +6694,99 @@ const POSE_LABEL = { normal: '普通', aim: '瞄准', cover: '掩体' }
 
 function renderPoseBar() {
   const bar = $('poseBar')
+  const fsBar = $('fsPoseBar')
   const group = $('poseGroup')
   if (!bar || !group) return
   const members = Array.isArray(S.current?.members) ? S.current.members : null
   const show = !!(members && members.length > 1)
   group.hidden = !show
+  // 侧栏 + 全屏条**两个容器填同一份数据**（不写第二套切换逻辑，见 BD2Viewer-fs-pose-skin.md）
   bar.innerHTML = ''
-  if (!show) return
+  if (fsBar) fsBar.innerHTML = ''
+  if (!show) { syncFsExtra(); return }
   const cur = S.currentPose || defaultPoseOf(S.current)
   for (const m of members) {
-    const b = document.createElement('button')
-    b.type = 'button'
-    b.className = 'gm-btn'
-    b.dataset.pose = m.pose
-    b.setAttribute('aria-pressed', String(m.pose === cur))
-    // Ark 的成员带 formLabel（本体 / 战斗形态 / CG a…）—— 用它，别把 bundle 名甩给用户。
-    // Ark 的形态视觉完全不同（CG 骨骼 vs 战斗骨骼），名字必须能区分开。
-    const raw = (m.form && m.form.formLabel) || POSE_LABEL[m.pose] || m.pose
-    b.textContent = t(raw)
-    b.title = m.form ? `${m.form.formBundle}（${m.form.animationCount == null ? '?' : m.form.animationCount} 个动画）` : ''
-    b.onclick = () => switchPose(m.pose)
-    bar.appendChild(b)
+    // 造两个**真按钮**：cloneNode 不会带走 onclick（它是属性不是 attribute）
+    const mkBtn = () => {
+      const b = document.createElement('button')
+      b.type = 'button'
+      b.className = 'gm-btn'
+      b.dataset.pose = m.pose
+      b.setAttribute('aria-pressed', String(m.pose === cur))
+      // Ark 的成员带 formLabel（本体 / 战斗形态 / CG a…）—— 用它，别把 bundle 名甩给用户。
+      // Ark 的形态视觉完全不同（CG 骨骼 vs 战斗骨骼），名字必须能区分开。
+      const raw = (m.form && m.form.formLabel) || POSE_LABEL[m.pose] || m.pose
+      b.textContent = t(raw)
+      b.title = m.form ? `${m.form.formBundle}（${m.form.animationCount == null ? '?' : m.form.animationCount} 个动画）` : ''
+      b.onclick = () => switchPose(m.pose)   // 全屏按钮也只调它，不要自己 loadCurrent
+      return b
+    }
+    bar.appendChild(mkBtn())
+    if (fsBar) fsBar.appendChild(mkBtn())
   }
+  syncFsExtra()
+}
+
+/* ------------------------------------------------- Mod 层（JCZX 的原图 ↔ mod1 ↔ mod2）
+   与姿势栏同一套做法（R1：可见性随数据变，用 JS 摘 hidden，不走 CSS）：
+   形态链有 2 个以上成员就摆按钮，一条一条列出来而不是只给一个「下一个」——
+   1000 多个 mod 的集合里，「直接跳到 mod2」比「点 5 次 mod1」有用得多。
+   顺序 = 链上顺序（原图在第 0），和 buildJczxModChains 排的序一致。 */
+function renderModBar() {
+  const bar = $('modBar')
+  const group = $('modGroup')
+  const fsBar = $('fsModBar')
+  if (!bar || !group) return
+  const chain = S.current ? modChainOf(S.current) : null
+  const show = !!(chain && chain.length > 1)
+  group.hidden = !show
+  // 侧栏 + 全屏条**两个容器填同一份数据**（和姿势栏同一套做法，不写第二套切换逻辑）
+  bar.innerHTML = ''
+  if (fsBar) fsBar.innerHTML = ''
+  if (!show) { syncFsExtra(); return }
+  const curKey = S.currentMod || itemKey(chain[0])
+  for (const m of chain) {
+    const isSrc = m.jczx && m.jczx.layerKind === 'source'
+    const k = isSrc ? null : itemKey(m)
+    // 造两个**真按钮**：cloneNode 不会带走 onclick（它是属性不是 attribute）
+    const mkBtn = () => {
+      const b = document.createElement('button')
+      b.type = 'button'
+      b.className = 'gm-btn'
+      b.dataset.mod = k || 'source'
+      b.setAttribute('aria-pressed', String((k || null) === (S.currentMod || null)))
+      const label = (m.jczx && m.jczx.layerLabel) || (isSrc ? '原图' : 'mod')
+      b.textContent = t(label)
+      b.title = m.relAtlas || ''
+      b.onclick = () => switchMod(k)
+      return b
+    }
+    bar.appendChild(mkBtn())
+    if (fsBar) fsBar.appendChild(mkBtn())
+  }
+  void curKey
+  syncFsExtra()
 }
 
 function renderSkinSelect() {
   const sel = $('skinSelect')
-  sel.innerHTML = ''
-  for (const name of S.skins) {
-    const opt = document.createElement('option')
-    opt.value = name
-    opt.textContent = name
-    sel.appendChild(opt)
+  if (!sel) return
+  const names = Array.isArray(S.skins) ? S.skins : []
+  const keep = sel.value                 // 重建 option 前记住当前选择
+  // 侧栏 + 全屏条**两个下拉一起填**
+  for (const box of [sel, $('fsSkin')]) {
+    if (!box) continue
+    box.innerHTML = ''
+    for (const name of names) {
+      const opt = document.createElement('option')
+      opt.value = name
+      opt.textContent = name
+      box.appendChild(opt)
+    }
+    box.disabled = names.length <= 1
+    if (keep && names.includes(keep)) box.value = keep
   }
-  sel.disabled = S.skins.length <= 1
+  syncFsExtra()
 }
 
 /** opts.redraw = false 时不主动画帧 —— onLoaded（播放器载入上下文）里调 drawFrame
@@ -6345,17 +6809,136 @@ function applySkin(name, opts) {
   skeletonUpdateWorld(p.skeleton)
   S.hidden.clear()
   S.hiddenStack = []
+  // R27：切皮肤会重建 slot 颜色，遮挡层（hexie/tape）得重新关掉，否则切一次皮肤它们就回来了
+  applyDefaultHiddenLayers()
   renderLayerList()
+  // 两个皮肤下拉同步到同一张（新列表里还有这个值才设）
+  for (const id of ['skinSelect', 'fsSkin']) {
+    const box = $(id)
+    if (box && Array.from(box.options || []).some(o => o.value === name)) box.value = name
+  }
   if (redraw) p.drawFrame(false)
 }
 
 /* ------------------------------------------------------------------ 图层 */
 
+/**
+ * 档位默认**不开启**的图层（名字含任一子串即命中，大小写不敏感）。
+ *
+ * JCZX 的图鉴包里有 `hexie`（和谐 / 遮挡）与 `tape`（贴条）两类补丁层 ——
+ * 默认全开会把角色盖住，所以进播放页时先关掉；想看的话在图层列表里自己勾。
+ *
+ * 只按**名字**匹配，不改骨架数据、不写盘。见 ARCHITECTURE R27。
+ */
+/** 离屏缩略图「默认隐藏图层」执行计数（R27 的回归锁用，见 hideDefaultHiddenSlots）。 */
+const thumbLayerHide = { calls: 0, slots: 0 }
+
+const JCZX_DEFAULT_HIDDEN_LAYERS = ['hexie', 'tape']
+
+/** 名字是否命中「默认该关」的判据（子串、大小写不敏感）。播放页与离屏缩略图共用。 */
+function isDefaultHiddenLayerName(name) {
+  const low = String(name == null ? '' : name).toLowerCase()
+  return JCZX_DEFAULT_HIDDEN_LAYERS.some(k => low.includes(k))
+}
+
+/** 把「这个档默认该关的图层」加进 `S.hidden`（播放页路径）。
+ *
+ *  两条调用纪律：
+ *  ① 必须在 `applySkin()` **之后** —— `applySkin` 里的 `setSlotsToSetupPose` 会清空
+ *     `S.hidden`，早于它设置会被清掉，表现为「规则静默不生效」。
+ *  ② 故意**不进 `S.hiddenStack`** —— 那是「用户手动隐藏」的撤销栈（U 键撤回），
+ *     默认隐藏不是用户按的，不该被 U 翻出来。
+ */
+function applyDefaultHiddenLayers() {
+  if (S.mode !== 'jczx') return
+  for (const name of S.slots) if (isDefaultHiddenLayerName(name)) S.hidden.add(name)
+}
+
+/** 离屏渲染路径（缩略图）：离屏播放器**不走** `S.hidden`，也没有逐帧回调，
+ *  所以要在每次 `drawFrame` 前直接把命中的 slot 透明度清 0。
+ *  必须「每次画之前都调」—— 动画的 slot 颜色时间轴会把 alpha 写回去。
+ *
+ *  `thumbLayerHide` 是给测试看的计数器（R27 的回归锁）：它证明「这条路真的执行了」，
+ *  而不是靠比对两张缩略图（两次渲染的动画时刻不同，图必然不同，比了也说明不了问题）。 */
+function hideDefaultHiddenSlots(skeleton) {
+  if (S.mode !== 'jczx' || !skeleton || !skeleton.slots) return
+  for (const slot of skeleton.slots) {
+    const n = slot.data && slot.data.name
+    if (!n || !isDefaultHiddenLayerName(n)) continue
+    if (slot.color) slot.color.a = 0
+    if (slot.darkColor) slot.darkColor.a = 0
+    thumbLayerHide.slots++
+  }
+  thumbLayerHide.calls++
+}
+
+/** 图层列表的**显示顺序**（唯一口径）：列表渲染与「往下挪一层」共用同一份，别各写各的。 */
+function layerNamesInOrder() {
+  return [...S.slots].sort((a, b) => a.localeCompare(b))
+}
+
+/** 上一次点选 `{ anchor, index }`。anchor 是「这次在往哪一层下面钻」。 */
+let lastLayerPick = null
+
+/* layer-pick-pure:start */
+/**
+ * 连续点选同一层时往下走。
+ *
+ * 第一次点中某层 → 就选它。
+ * 再点一次，直接目标还是这一层（或仍在从这一层往下钻）→ 改选序列里它下面一层。
+ * 第三次、第四次同样再往下。序列尽头就停在最后一层。
+ * 换了一个目标 → 从那个目标本身重新开始。
+ *
+ * sequence 的顺序就是「下面」：列表用显示顺序，模型用该点命中栈（上→下）。
+ *
+ * @param {string|null} selected 当前已选图层
+ * @param {{anchor:string, index:number}|null} memory
+ * @param {string} anchor 本次点击的钻取起点（列表 `list:行名`，模型 `model:最上层名`）
+ * @param {string[]} sequence
+ * @param {number} base 直接目标在 sequence 里的下标
+ * @returns {{ index:number, memory: {anchor:string, index:number}|null }}
+ */
+function nextLayerPick(selected, memory, anchor, sequence, base) {
+  const total = sequence.length
+  if (total <= 0) return { index: -1, memory: null }
+  const start = Math.max(0, Math.min(base, total - 1))
+  const drilling = memory && memory.anchor === anchor && selected
+  if (drilling) {
+    const cur = sequence.indexOf(selected)
+    if (cur >= 0) {
+      const index = Math.min(cur + 1, total - 1)
+      return { index, memory: { anchor, index } }
+    }
+  }
+  // 没有钻取记忆，但这次点中的就是当前图层：同样往下走一层
+  if (selected && sequence[start] === selected) {
+    const index = Math.min(start + 1, total - 1)
+    return { index, memory: { anchor, index } }
+  }
+  return { index: start, memory: { anchor, index: start } }
+}
+/* layer-pick-pure:end */
+
+/**
+ * 按 nextLayerPick 更新记忆并返回下标。
+ * @param {string} anchor
+ * @param {string[]} sequence
+ * @param {number} base
+ */
+function layerPickIndex(anchor, sequence, base) {
+  const picked = nextLayerPick(S.selectedLayer, lastLayerPick, anchor, sequence, base)
+  lastLayerPick = picked.memory
+  return picked.index
+}
+
+/** 列表被重建/换资产后要清掉「上一次点选」的记忆，否则换了图还按旧 key 往下数。 */
+function resetLayerPickMemory() { lastLayerPick = null }
+
 function renderLayerList() {
   const box = $('layerList')
   const q = $('layerFilter').value.trim().toLowerCase()
   box.innerHTML = ''
-  const names = [...S.slots].sort((a, b) => a.localeCompare(b))
+  const names = layerNamesInOrder()
   let n = 0
   for (const name of names) {
     if (q && !name.toLowerCase().includes(q)) continue
@@ -6374,9 +6957,12 @@ function renderLayerList() {
     }
     row.onclick = e => {
       if (e.target.tagName === 'INPUT') return
-      S.selectedLayer = S.selectedLayer === name ? null : name
+      // 再点已选中的这一行 → 改选列表里它下面一行；继续点就继续往下。
+      const idx = layerPickIndex(`list:${name}`, names, names.indexOf(name))
+      S.selectedLayer = idx >= 0 ? names[idx] : null
       updateLayerToast()
       renderLayerList()
+      drawOverlay()
     }
     box.appendChild(row)
   }
@@ -6451,11 +7037,17 @@ function screenToWorld(clientX, clientY) {
   }
 }
 
-function pickLayerAt(clientX, clientY) {
+/**
+ * 点这个位置能命中的**所有**图层，按绘制顺序**从上到下**。
+ * 第一个元素就是「最上面那层」（= 旧 pickLayerAt 的返回值）。
+ * 之所以要整条栈：重复点同一处时要依次穿透到被压住的下一层。
+ */
+function pickLayersAt(clientX, clientY) {
   const p = S.player
   const pt = screenToWorld(clientX, clientY)
-  if (!p || !pt || !p.skeleton) return null
+  if (!p || !pt || !p.skeleton) return []
   const slots = p.skeleton.drawOrder
+  const hits = []
   for (let i = slots.length - 1; i >= 0; i--) {
     const slot = slots[i]
     const name = slot.data && slot.data.name
@@ -6466,9 +7058,13 @@ function pickLayerAt(clientX, clientY) {
     if (!n) continue
     const verts = new Float32Array(n)
     try { att.computeWorldVertices(slot, 0, n, verts, 0, 2) } catch { continue }
-    if (isPointInPolygon(pt.x, pt.y, verts)) return name
+    if (isPointInPolygon(pt.x, pt.y, verts)) hits.push(name)
   }
-  return null
+  return hits
+}
+
+function pickLayerAt(clientX, clientY) {
+  return pickLayersAt(clientX, clientY)[0] || null
 }
 
 function drawOverlay() {
@@ -6519,6 +7115,265 @@ function drawOverlay() {
   ctx.fill()
 }
 
+/* ------------------------------------------------------------------ 相机手势
+ * 官方 CameraController 的捏合有两处让缩放不跟手：
+ *   1. 只改 zoom、不挪镜头，缩放中心永远是画面中心。手指分开时，
+ *      指尖底下的内容会朝中心滑走。
+ *   2. 捏合过程中第一根手指的移动仍走单指平移，而且平移量按「当下的 zoom」
+ *      把整段位移重算一遍。zoom 一变，同一段手指位移对应的世界位移就变了，
+ *      画面会跳。
+ * 4.0 / 4.2 的 Input 还有一处 dy 用 x 相减的笔误，竖着捏几乎不缩放。
+ * 这里自己接指针：缩放比 = 起始指距 / 当前指距（与 zoom 越小画面越大的方向一致），
+ * 并让「第二指落下时中点底下的世界坐标」一直落在当前两指中点上。
+ * 单指平移在捏合期间不生效。
+ *
+ * 纯函数用标记包住，_test/pinch_math.mjs 直接抽这段跑，不启动浏览器。
+ */
+/* pinch-camera-pure:start */
+/** 屏幕像素 (sx, sy)（相对画布左上，y 向下）对应的世界坐标。 */
+function cameraWorldAt(vw, vh, viewW, viewH, cam, sx, sy) {
+  const cw = viewW > 0 ? viewW : 1
+  const ch = viewH > 0 ? viewH : 1
+  const nx = (sx / cw) * 2 - 1
+  const ny = 1 - (sy / ch) * 2
+  return {
+    x: cam.x + nx * (cam.zoom * vw) / 2,
+    y: cam.y + ny * (cam.zoom * vh) / 2,
+  }
+}
+
+/**
+ * 单指平移。start 是手指落下时的相机与落点。
+ * 手指往右，镜头往左，这样落点下的世界坐标一直停在手指下。
+ * 用落下时的 zoom，避免中途缩放把同一段像素位移换成另一段世界位移。
+ */
+function panCamera(start, view, sx, sy) {
+  const cw = view.w > 0 ? view.w : 1
+  const ch = view.h > 0 ? view.h : 1
+  const z = start.zoom
+  return {
+    zoom: z,
+    x: start.x - (sx - start.sx) * (start.vw * z) / cw,
+    y: start.y + (sy - start.sy) * (start.vh * z) / ch,
+  }
+}
+
+/**
+ * 双指缩放 + 双指平移。
+ * start 是第二指落下时的相机；pinch.world 是那时中点下的世界坐标；
+ * fingers 是当前两指的画布坐标。每次都从 start 重算，不在上一帧上累加。
+ * 指距变成原来的 k 倍 → 画面放大 k 倍 → zoom 乘 1/k。
+ * 返回 null 表示这帧距离没有意义（两指几乎重叠），调用方应保持原相机。
+ */
+function pinchCamera(start, view, pinch, fingers) {
+  const d = Math.hypot(fingers.x1 - fingers.x0, fingers.y1 - fingers.y0)
+  if (!(pinch.dist > 0.5) || !(d > 0.5)) return null
+  const midX = (fingers.x0 + fingers.x1) / 2
+  const midY = (fingers.y0 + fingers.y1) / 2
+  const zoom = start.zoom * (pinch.dist / d)
+  if (!(zoom > 0) || !Number.isFinite(zoom)) return null
+  const now = cameraWorldAt(start.vw, start.vh, view.w, view.h,
+    { x: start.x, y: start.y, zoom }, midX, midY)
+  return {
+    zoom,
+    x: start.x + (pinch.worldX - now.x),
+    y: start.y + (pinch.worldY - now.y),
+  }
+}
+
+/** 滚轮：以光标下的世界坐标为锚放大/缩小。newZoom 是目标 zoom。 */
+function zoomAboutPoint(cam, view, sx, sy, newZoom) {
+  if (!(newZoom > 0) || !Number.isFinite(newZoom)) return null
+  const before = cameraWorldAt(cam.vw, cam.vh, view.w, view.h, cam, sx, sy)
+  const after = cameraWorldAt(cam.vw, cam.vh, view.w, view.h,
+    { x: cam.x, y: cam.y, zoom: newZoom }, sx, sy)
+  return {
+    zoom: newZoom,
+    x: cam.x + (before.x - after.x),
+    y: cam.y + (before.y - after.y),
+  }
+}
+/* pinch-camera-pure:end */
+
+let detachCameraGestures = null
+
+function viewSizeOf(canvas) {
+  const r = canvas.getBoundingClientRect()
+  return {
+    w: canvas.clientWidth || r.width || 1,
+    h: canvas.clientHeight || r.height || 1,
+  }
+}
+
+function localTouch(canvas, t) {
+  const r = canvas.getBoundingClientRect()
+  return { x: t.clientX - r.left, y: t.clientY - r.top }
+}
+
+function applyCameraResult(cam, next) {
+  if (!next) return
+  cam.zoom = next.zoom
+  cam.position.x = next.x
+  cam.position.y = next.y
+  cam.update()
+}
+
+/**
+ * 浏览器和 WebView 的双指会把整页放大。这里一律取消这次默认行为。
+ * 播放框里的相机缩放另挂在 #stageInner 上，preventDefault 不会拆掉那个监听。
+ */
+function lockDocumentPinch() {
+  const blockPinch = (ev) => {
+    if (ev.touches && ev.touches.length < 2) return
+    ev.preventDefault()
+  }
+  document.addEventListener('touchmove', blockPinch, { passive: false, capture: true })
+  // 旧 WebKit 用 gesture* 做整页缩放。播放框缩放走 touch，不走这组事件。
+  document.addEventListener('gesturestart', (ev) => ev.preventDefault(), { passive: false })
+  document.addEventListener('gesturechange', (ev) => ev.preventDefault(), { passive: false })
+}
+
+/**
+ * 接上播放画布的拖动 / 捏合 / 滚轮。返回拆卸函数。
+ * 同一时间只留一套监听：切资产时先拆上一套。
+ */
+function attachCameraGestures(canvas, cam) {
+  if (detachCameraGestures) { detachCameraGestures(); detachCameraGestures = null }
+  if (!canvas || !cam) return () => {}
+  // 手势挂在播放框上，不挂在 window 上。框外的双指不会进这里。
+  const host = canvas.closest('#stageInner') || canvas
+  canvas.style.touchAction = 'none'
+  host.style.touchAction = 'none'
+
+  const points = new Map()
+  let gesture = null
+  let mouse = null
+
+  const snapshot = () => ({
+    x: cam.position.x,
+    y: cam.position.y,
+    zoom: cam.zoom,
+    vw: cam.viewportWidth,
+    vh: cam.viewportHeight,
+  })
+
+  const baseline = () => {
+    const fs = [...points.values()]
+    const view = viewSizeOf(canvas)
+    if (fs.length >= 2) {
+      const a = fs[0], b = fs[1]
+      const cam0 = snapshot()
+      const midX = (a.x + b.x) / 2
+      const midY = (a.y + b.y) / 2
+      const world = cameraWorldAt(cam0.vw, cam0.vh, view.w, view.h, cam0, midX, midY)
+      gesture = {
+        mode: 'pinch',
+        cam0,
+        dist: Math.hypot(b.x - a.x, b.y - a.y),
+        worldX: world.x,
+        worldY: world.y,
+      }
+    } else if (fs.length === 1) {
+      const cam0 = snapshot()
+      gesture = { mode: 'pan', cam0, sx: fs[0].x, sy: fs[0].y }
+    } else {
+      gesture = null
+    }
+  }
+
+  const applyFingers = () => {
+    if (!gesture) return
+    const view = viewSizeOf(canvas)
+    const fs = [...points.values()]
+    let next = null
+    if (gesture.mode === 'pinch' && fs.length >= 2) {
+      next = pinchCamera(gesture.cam0, view,
+        { dist: gesture.dist, worldX: gesture.worldX, worldY: gesture.worldY },
+        { x0: fs[0].x, y0: fs[0].y, x1: fs[1].x, y1: fs[1].y })
+    } else if (gesture.mode === 'pan' && fs.length === 1) {
+      next = panCamera(
+        { ...gesture.cam0, sx: gesture.sx, sy: gesture.sy },
+        view, fs[0].x, fs[0].y)
+    }
+    applyCameraResult(cam, next)
+  }
+
+  // TouchList 在部分 WebView 上不能 for...of，按下标走。
+  const eachTouch = (list, fn) => {
+    for (let i = 0; i < list.length; i++) fn(list.item(i))
+  }
+  const onTouchStart = (ev) => {
+    eachTouch(ev.changedTouches, t => points.set(t.identifier, localTouch(canvas, t)))
+    baseline()
+    ev.preventDefault()
+  }
+  const onTouchMove = (ev) => {
+    eachTouch(ev.touches, t => {
+      if (points.has(t.identifier)) points.set(t.identifier, localTouch(canvas, t))
+    })
+    applyFingers()
+    ev.preventDefault()
+  }
+  const onTouchEnd = (ev) => {
+    eachTouch(ev.changedTouches, t => points.delete(t.identifier))
+    baseline()
+    ev.preventDefault()
+  }
+
+  const onMouseDown = (ev) => {
+    if (ev.button !== 0 || points.size) return
+    const p = localTouch(canvas, ev)
+    const cam0 = snapshot()
+    mouse = { cam0, sx: p.x, sy: p.y }
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
+  }
+  const onMouseMove = (ev) => {
+    if (!mouse) return
+    const p = localTouch(canvas, ev)
+    applyCameraResult(cam, panCamera(
+      { ...mouse.cam0, sx: mouse.sx, sy: mouse.sy },
+      viewSizeOf(canvas), p.x, p.y))
+  }
+  const onMouseUp = () => {
+    mouse = null
+    document.removeEventListener('mousemove', onMouseMove)
+    document.removeEventListener('mouseup', onMouseUp)
+  }
+  const onWheel = (ev) => {
+    if (points.size) return
+    let delta = ev.deltaY
+    if (ev.deltaMode === 1) delta *= 8
+    if (ev.deltaMode === 2) delta *= 24
+    const p = localTouch(canvas, ev)
+    const cam0 = snapshot()
+    const next = zoomAboutPoint(cam0, viewSizeOf(canvas), p.x, p.y, cam0.zoom * (1 + delta / 200))
+    applyCameraResult(cam, next)
+    ev.preventDefault()
+  }
+
+  host.addEventListener('touchstart', onTouchStart, { passive: false })
+  host.addEventListener('touchmove', onTouchMove, { passive: false })
+  host.addEventListener('touchend', onTouchEnd, { passive: false })
+  host.addEventListener('touchcancel', onTouchEnd, { passive: false })
+  host.addEventListener('mousedown', onMouseDown)
+  host.addEventListener('wheel', onWheel, { passive: false })
+
+  const detach = () => {
+    host.removeEventListener('touchstart', onTouchStart)
+    host.removeEventListener('touchmove', onTouchMove)
+    host.removeEventListener('touchend', onTouchEnd)
+    host.removeEventListener('touchcancel', onTouchEnd)
+    host.removeEventListener('mousedown', onMouseDown)
+    host.removeEventListener('wheel', onWheel)
+    document.removeEventListener('mousemove', onMouseMove)
+    document.removeEventListener('mouseup', onMouseUp)
+    if (detachCameraGestures === detach) detachCameraGestures = null
+  }
+  detachCameraGestures = detach
+  return detach
+}
+
 /* ------------------------------------------------------------------ 相机 */
 
 /**
@@ -6526,8 +7381,8 @@ function drawOverlay() {
  * 记这个比例而不是绝对值：换动画后取景框大小会变，按同一个比例换算，
  * 用户看到的画面占比就不变 —— 也就不会「一切换动画就被打回原始大小」。
  *
- * 注意：不要把比值夹在 [0.08, 4]（对应最多 12.5×）。CameraController 的
- * 双指捏合没有上限；夹取会让「捏到 >12.5× 再切动画」被 refitBounds 打回 12.5×。
+ * 注意：不要把比值夹在 [0.08, 4]（对应最多 12.5×）。双指捏合没有上限；
+ * 夹取会让「捏到 >12.5× 再切动画」被 refitBounds 打回 12.5×。
  * 这里只做数值合法性检查（非正 / 非有限 → 当作 1）。
  */
 function currentZoomRatio() {
@@ -7220,6 +8075,7 @@ function fileToBase64(file) {
 /* ------------------------------------------------------------------ 界面绑定 */
 
 function bindUI() {
+  lockDocumentPinch()
   setupFullscreenUI()
   if (NATIVE) {
     // 不再让用户进系统文件夹选择器 —— 那玩意儿在部分机型上会把进程带崩。
@@ -7383,6 +8239,9 @@ function bindUI() {
   // 动画
   $('animFilter').oninput = renderAnimList
   $('skinSelect').onchange = e => applySkin(e.target.value)
+  // 全屏的皮肤下拉走**同一个**函数（不写第二套切换逻辑）
+  const fsSkinSel = $('fsSkin')
+  if (fsSkinSel) fsSkinSel.onchange = e => applySkin(e.target.value)
 
   // 播放
   $('btnPlay').onclick = () => setPlaying(!S.playing)
@@ -7466,6 +8325,17 @@ function bindUI() {
   $('assetFilterClear').onclick = () => clearSearch('assetFilter')
   $('galFilterClear').onclick = () => clearSearch('galFilter')
   $('chkOnlyPlayable').onchange = refreshLists
+  // JCZX「只看 Mod」：勾上后 mod 条目各占一张卡、原图层收起来（见 buildJczxModChains）。
+  // 切模式时这个勾要跟着收掉 —— 它只对 jczx 有意义，带到别的档会让人以为筛选失效了。
+  const chkMods = $('chkModsOnly')
+  if (chkMods) {
+    chkMods.onchange = () => {
+      filters.modsOnly = chkMods.checked
+      // 卡片集合整个换了一份，顺序/焦点/选中项都要重来
+      if (S.current) { S.currentMod = null }
+      refreshLists()
+    }
+  }
   $('btnClearCustom').onclick = () => {
     if (!S.customItems.length) return
     S.customItems = []
@@ -7513,8 +8383,19 @@ function bindUI() {
     const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y)
     down = null
     if (moved > 5) return
-    const name = pickLayerAt(e.clientX, e.clientY)
-    S.selectedLayer = name
+    // 命中栈从上到下。再点到当前这一层（或仍从这一层往下点）就改选它下面一层。
+    // 锚点用最上层的名字，不用像素：手指挪开几个像素仍算同一次往下钻。
+    const hits = pickLayersAt(e.clientX, e.clientY)
+    if (!hits.length) {
+      S.selectedLayer = null
+      lastLayerPick = null
+      updateLayerToast()
+      renderLayerList()
+      drawOverlay()
+      return
+    }
+    const idx = layerPickIndex(`model:${hits[0]}`, hits, 0)
+    S.selectedLayer = hits[idx] || null
     updateLayerToast()
     renderLayerList()
     drawOverlay()
@@ -7692,8 +8573,8 @@ function bindUI() {
     resizeTimer = setTimeout(onStageResize, 60)
   }).observe($('stageInner'))
 
-  // 滚轮缩放（交给 CameraController，这里只保证缩放后刷新）
-  $('playerHost').addEventListener('wheel', () => { if (!S.busy) setTimeout(() => S.player?.drawFrame(false), 0) }, { passive: true })
+  // 滚轮缩放在 attachCameraGestures 里完成（以光标为锚）。
+  // 播放循环每帧都会画，这里不再额外 drawFrame：那会在滚动时把动画多推一帧。
 
   // seek
   $('seek').addEventListener('input', e => {
@@ -7760,6 +8641,22 @@ window.__bd2viewer = {
   get thumbPersist() { return thumbPersist },
   setLayerHidden,
   pickLayerAt,
+  // 命中栈（从上到下）：重复点同一处会依次穿透，回归断言要能读到整条栈
+  pickLayersAt,
+  nextLayerPick,
+  // R27：档位默认关闭的图层。`thumbLayerHide` 让测试能断言**离屏缩略图那条路真的执行了**
+  // （比比对两张缩略图可靠 —— 两次渲染的动画时刻不同，图必然不同，比了说明不了问题）。
+  get defaultHiddenLayerKeys() { return JCZX_DEFAULT_HIDDEN_LAYERS.slice() },
+  setDefaultHiddenLayerKeys(list) {
+    JCZX_DEFAULT_HIDDEN_LAYERS.length = 0
+    for (const k of (Array.isArray(list) ? list : [])) {
+      const s = String(k).toLowerCase()
+      if (s) JCZX_DEFAULT_HIDDEN_LAYERS.push(s)
+    }
+    return JCZX_DEFAULT_HIDDEN_LAYERS.slice()
+  },
+  get thumbLayerHide() { return { calls: thumbLayerHide.calls, slots: thumbLayerHide.slots } },
+  resetThumbLayerHide() { thumbLayerHide.calls = 0; thumbLayerHide.slots = 0; return true },
   screenshot,
   exportWebm,
   exportFrames,
@@ -7795,6 +8692,27 @@ window.__bd2viewer = {
   get pose() { return S.currentPose || 'normal' },
   switchPose,
   renderPoseBar,
+  // 可见口径（R3 的唯一入口）：测试要断言「网格里到底有几张卡、mod 有没有被藏起来」，
+  // 就得能直接问到 allItems，而不是从 DOM 反推。
+  allItems, filteredItems,
+  get filters() { return { ...filters } },
+  // JCZX mod 层（R25）：形态 × mod 两级解析。activeSpineItemOf 是「真正在播的那条」，
+  // 另两个用来解释「有哪些可切」「这张卡挂了几个 mod」。
+  get mod() { return S.currentMod || null },
+  activeSpineItemOf, modChainOf, currentModLabel, modCountOf,
+  switchMod, cycleMod, renderModBar,
+  /** 归组中间结果：排障时要看「到底哪一步把条目藏了」——
+   *  网格空 / 卡片数对不上时，光看 allItems 的结果猜不出来是哪一层出的问题。 */
+  get jczxView() {
+    const v = nikkeViewFor()
+    return {
+      variantKeys: v.variantKeys ? v.variantKeys.size : 0,
+      modCardKeys: v.modCardKeys ? v.modCardKeys.size : 0,
+      modsOnly: !!v.modsOnly,
+      chains: v.chains ? v.chains.size : 0,
+      drop: v.drop ? v.drop.size : 0,
+    }
+  },
   // Ark 语音（星陨计划）：正在播的 Audio 实例。new Audio 的元素从不进 DOM，
   // 没有这个探针就没法判断「点了到底播没播」。
   get arkAudio() {
@@ -7845,6 +8763,11 @@ window.__bd2viewer = {
   // 真机音量键：MainActivity 拦下后回调 dir（+1=音量上，-1=音量下），方向由设置决定
   onVolumeKey(dir) { switchAnimation(dir * volDirMul()) },
   get zoomRatio() { return currentZoomRatio() },
+  /** 捏合/平移的纯计算（测试直接断言「手指底下的点不动」） */
+  cameraWorldAt,
+  panCamera,
+  pinchCamera,
+  zoomAboutPoint,
   /** 相对「铺满」放大了几倍（脚本化测试双击阶梯用） */
   get zoomFactor() { return 1 / (currentZoomRatio() || 1) },
   ZOOM_LADDER,

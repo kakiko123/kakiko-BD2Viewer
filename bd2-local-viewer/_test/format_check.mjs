@@ -451,6 +451,44 @@ try {
       !(bdNoArk.items || []).some(i => i.ark && i.ark.charId === 'H001'),
       rels(bdNoArk).filter(r => r.indexOf('角色/') === 0).join(', '))
   }
+
+  /* ---------------------------------------------------- 根目录斜杠形式（回归） */
+  // 用户手填 / 前端 POST 进来的 root.path **不保证是反斜杠**。配置写成正斜杠时，
+  // walk() 里那句 `d.startsWith(rootPath)` 的守卫第一轮就 false（`path.join` 出来
+  // 一律是 `C:\…`）→ 向上搜索 meta.json 整条短路 → 角色名/稀有度/立绘/语音全丢，
+  // 而且**一条错都不报**（实测 499/499 条连 ark 对象都没有，界面只显示目录 id）。
+  // 本机 viewer.config.json 恰好是反斜杠才一直没暴露 —— 这里故意用正斜杠钉住。
+  // ⚠️ `path.relative` 内部自带 resolve 所以容错，唯独裸字符串 startsWith 不容错。
+  {
+    const port2 = await freePort()
+    const cfg2 = path.join(work, 'viewer.slash.config.json')
+    const slashRoot = dataRoot.split(path.sep).join('/')
+    fs.writeFileSync(cfg2, JSON.stringify({
+      host: '127.0.0.1', port: port2, maxDepth: 4,
+      roots: [{ id: 'tmp', label: '正斜杠配置', path: slashRoot }],
+    }, null, 2), 'utf-8')
+    const child2 = spawn(process.execPath, [path.join(root, 'server.mjs')], {
+      cwd: root,
+      env: { ...process.env, BD2_CONFIG: cfg2 },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    child2.stderr.on('data', () => { /* 端口探测日志 */ })
+    const base2 = `http://127.0.0.1:${port2}`
+    const dl2 = Date.now() + 20000
+    let up2 = false
+    while (Date.now() < dl2 && !up2) {
+      try { up2 = (await fetch(`${base2}/api/health`)).ok } catch { await new Promise(r => setTimeout(r, 250)) }
+    }
+    check('正斜杠配置的服务也起来了', up2, `${base2} · ${slashRoot}`)
+    if (up2) {
+      const ak2 = await (await fetch(`${base2}/api/scan?root=tmp&mode=ark&refresh=1`)).json()
+      const h2 = (ak2.items || []).filter(i => i.ark && i.ark.charId === 'H001')
+      check('正斜杠根目录：ark 元数据照常挂上（startsWith 守卫不许短路）',
+        h2.length > 0 && h2.some(i => i.ark.charName === '夏妮'),
+        `H001 带 ark 的条目 ${h2.length} 个 · ${h2.map(i => i.ark.charName).join(',')}`)
+    }
+    await kill(child2)
+  }
 } catch (e) {
   check('测试执行', false, e.stack || e.message)
 } finally {

@@ -2,6 +2,7 @@ package com.kkk.bd2viewer;
 
 import com.kkk.bd2viewer.jczx.JczxExtractor;
 import com.kkk.bd2viewer.jczx.NikkeAbExtractor;
+import com.kkk.bd2viewer.jczx.UnpackCacheHome;
 
 import android.content.ContentResolver;
 import android.content.ContentUris;
@@ -924,14 +925,19 @@ public final class ScanEngine {
                 } else if (root.treeUri != null) {
                     walkSaf(ctx, Uri.parse(root.treeUri), "", 0, fresh, root, mode);
                 }
-                // jczx 模式只保留缓存目录里抽出的条目（与桌面 server.mjs 一致）
+                // 补 `item.jczx`（层信息）与 `item.ark`（中文名/立绘/**语音**）。
+                // 必须在 jczx 过滤**之前** —— 过滤要用到刚补出来的 item.jczx。
+                enrich(ctx, root, fresh, mode);
+                // jczx 模式保留两种来源：解包缓存（bd2viewer-jczx/）**或**带层信息的图鉴包
+                // （原布局 source|mod1|mod2，以及 2026-10-03 就地重组后的「整理树」角色/画册）。
+                // ⚠️ 旧版只留 `isCacheRel` → 手机端完全看不到图鉴包内容（用户 2026-10-03 反馈）。
                 if (MODE_JCZX.equals(mode)) {
                     JSONArray filtered = new JSONArray();
                     for (int i = 0; i < fresh.length(); i++) {
                         JSONObject o = fresh.optJSONObject(i);
                         if (o == null) continue;
                         String rel = o.optString("relAtlas", o.optString("id", ""));
-                        if (JczxExtractor.isCacheRel(rel)) filtered.put(o);
+                        if (JczxExtractor.isCacheRel(rel) || o.has("jczx")) filtered.put(o);
                     }
                     fresh = filtered;
                 }
@@ -999,6 +1005,8 @@ public final class ScanEngine {
             if (f.isDirectory()) {
                 String n = f.getName().toLowerCase(Locale.ROOT);
                 if (SKIP_DIRS.contains(n)) continue;
+                // 别的游戏的素材目录一律不 walk（depth 0 也跳）—— 见 APK-fixes §4
+                if (UnpackCacheHome.isOtherGameFolder(f.getName(), UnpackCacheHome.folderOfMode(mode))) continue;
                 // JCZX 解包缓存（含旧版 .bd2viewer-jczx）：仅 jczx 模式进入
                 if (JczxExtractor.isCacheDirName(f.getName()) && !MODE_JCZX.equals(mode)) continue;
 
@@ -1028,6 +1036,157 @@ public final class ScanEngine {
             return r.replace("\\", "/").replaceAll("^/+", "").replaceAll("/+$", "");
         }
         return dir.getName();
+    }
+
+    /* ------------------------------------------------- 后置补齐：jczx 层 / ark 元数据 */
+
+    /**
+     * 给扫描结果补两块桌面 `server.mjs` 有、安卓此前完全没有的数据（逻辑在 {@link PackMeta}）：
+     *   · `item.jczx` —— 层信息，前端靠它做「形态 × mod 两级归组」
+     *   · `item.ark`  —— 中文名 / 稀有度 / 立绘 / **语音**（语音只能列目录得到，
+     *     所以手机端此前一条 wav 都播不出来）
+     *
+     * 放在 walk 之后做**一次后置遍历**，而不是塞进三个 walker 里 ——
+     * 三个 walker（file / SAF / MediaStore）共用这一份逻辑，不会各自跑偏。
+     */
+    static void enrich(Context ctx, Root root, JSONArray items, String mode) {
+        // 补齐只是**锦上添花**（中文名/立绘/语音/层信息），绝不能因为它让整次扫描失败。
+        // 这里兜住 Throwable（含 OutOfMemoryError 这类 Error）：扫不到名字也比「一扫描就崩」好。
+        try {
+            enrich0(ctx, root, items, mode);
+        } catch (Throwable t) {
+            Log.w(TAG, "enrich 失败（忽略，继续用未补齐的结果）: " + t);
+        }
+    }
+
+    private static void enrich0(Context ctx, Root root, JSONArray items, String mode) {
+        if (items == null || items.length() == 0 || root == null) return;
+        boolean jczx = MODE_JCZX.equals(mode);
+        boolean ark = MODE_ARK.equals(mode);
+        if (!jczx && !ark) return;
+
+        PackMeta.IO io = null;
+        try {
+            if ("file".equals(root.kind) && root.path != null) {
+                io = PackMeta.fileIo(root.path);
+            } else if (root.treeUri != null) {
+                io = PackMeta.safIo(ctx, Uri.parse(root.treeUri));
+            }
+        } catch (Throwable e) {
+            Log.w(TAG, "enrich io: " + e.getMessage());
+        }
+        if (io == null) return;
+
+        Map<String, String> names = jczx ? PackMeta.readNameTable(io) : null;
+        // 角色目录 → meta（null 表示查过但没有 meta.json）。一次遍历里复用，别反复读盘。
+        Map<String, JSONObject> metaCache = new LinkedHashMap<>();
+
+        for (int i = 0; i < items.length(); i++) {
+            JSONObject it = items.optJSONObject(i);
+            if (it == null) continue;
+            String rel = it.optString("relAtlas", "");
+            if (rel.isEmpty()) continue;
+            // 单个条目出问题只跳过它自己 —— 别让一条脏数据毁掉整批补齐
+            try {
+                String base = it.optString("base", "");
+                String dir = PackMeta.parentDir(rel);
+
+                JSONObject jczxInfo = jczx ? PackMeta.layerOf(dir) : null;
+                if (jczxInfo != null) {
+                    String targetId = jczxInfo.optString("targetId", "");
+                    PackMeta.fillTargetKey(jczxInfo, targetId, base, jczxInfo.optBoolean("fromCache", false));
+                    it.put("jczx", jczxInfo);
+                }
+
+                // 角色目录：从条目目录向上找第一个带 meta.json 的祖先（最多 6 层）。
+                // 整理树是 `角色/<ID>__名/meta.json`（2 层），原布局是 `角色/<ID>/meta.json`（1 层）。
+                String charRel = null;
+                JSONObject meta = null;
+                int up = 0;
+                for (String d = dir; d != null && !d.isEmpty() && up < 6; d = PackMeta.parentDir(d), up++) {
+                    JSONObject m;
+                    if (metaCache.containsKey(d)) {
+                        m = metaCache.get(d);
+                    } else {
+                        m = PackMeta.readMeta(io, d);
+                        metaCache.put(d, m);
+                    }
+                    if (m != null) { meta = m; charRel = d; break; }
+                }
+                if (meta != null) it.put("ark", buildArk(meta, base, charRel, jczx, names));
+            } catch (Throwable t) {
+                Log.w(TAG, "enrich 单条跳过: " + rel + " / " + t);
+            }
+        }
+    }
+
+    /** 与 server.mjs 的 `ark` 对象**同形状**（前端一行都不用改）。 */
+    private static JSONObject buildArk(JSONObject meta, String base, String charRel,
+                                       boolean jczx, Map<String, String> names) {
+        JSONObject out = new JSONObject();
+        try {
+            String charId = meta.optString("id", "");
+            JSONArray assets = meta.optJSONArray("spineAssets");
+            if (assets == null) assets = new JSONArray();
+            int formIndex = -1;
+            for (int i = 0; i < assets.length(); i++) {
+                if (base.equals(assets.optJSONObject(i).optString("bundle"))) { formIndex = i; break; }
+            }
+            boolean isCarrier = base.equals(meta.optString("carrierBundle", ""));
+
+            String code = PackMeta.skinCode(base);
+            String metaName = meta.isNull("name") ? null : meta.optString("name", null);
+            String metaNameReal = metaName != null && !metaName.matches("^\\d+$") ? metaName : null;
+            String codeName = jczx ? PackMeta.zhForSkin(names, code) : null;
+
+            out.put("charId", charId);
+            out.put("charName", codeName != null ? codeName : (metaNameReal == null ? JSONObject.NULL : metaNameReal));
+            out.put("charAltName", metaNameReal == null ? JSONObject.NULL : metaNameReal);
+            out.put("charCode", jczx ? code : JSONObject.NULL);
+            out.put("rarity", meta.isNull("rarity") ? JSONObject.NULL : meta.opt("rarity"));
+            out.put("group", charId);
+            out.put("formBundle", base);
+            out.put("formLabel", jczx ? code : base);
+            out.put("formIndex", jczx && formIndex >= 0 ? formIndex : JSONObject.NULL);
+            out.put("formCount", jczx ? assets.length() : JSONObject.NULL);
+            // 默认形态：JCZX 取形态表第一条；Ark 是「bundle 名 == 角色 id」那条
+            out.put("isDefaultForm", jczx ? formIndex == 0 : base.equals(charId));
+            out.put("isCarrier", isCarrier);
+
+            JSONArray statics = new JSONArray();
+            JSONArray voices = new JSONArray();
+            if (isCarrier) {
+                JSONArray src = meta.optJSONArray("statics");
+                if (src != null) {
+                    for (int i = 0; i < src.length(); i++) {
+                        JSONObject s = src.optJSONObject(i);
+                        if (s == null) continue;
+                        String f = s.optString("file", "");
+                        if (f.isEmpty()) continue;
+                        JSONObject o = new JSONObject(s.toString());
+                        o.put("url", charRel + "/" + f);
+                        statics.put(o);
+                    }
+                }
+                JSONArray vs = meta.optJSONArray("voices");
+                if (vs != null) {
+                    for (int i = 0; i < vs.length(); i++) {
+                        JSONObject v = vs.optJSONObject(i);
+                        if (v == null) continue;
+                        String f = v.optString("file", "");
+                        if (f.isEmpty()) continue;
+                        JSONObject o = new JSONObject(v.toString());
+                        o.put("url", charRel + "/" + f);
+                        voices.put(o);
+                    }
+                }
+            }
+            out.put("statics", statics);
+            out.put("voices", voices);
+        } catch (Exception e) {
+            Log.w(TAG, "buildArk: " + e.getMessage());
+        }
+        return out;
     }
 
     private static void emitEntries(Context ctx, Root root, String dirRel,
@@ -1585,6 +1744,8 @@ public final class ScanEngine {
             if (e.isDir) {
                 String n = (e.name == null ? "" : e.name.toLowerCase(Locale.ROOT));
                 if (SKIP_DIRS.contains(n)) continue;
+                // 别的游戏的素材目录一律不 walk（depth 0 也跳）—— 见 APK-fixes §4
+                if (UnpackCacheHome.isOtherGameFolder(e.name, UnpackCacheHome.folderOfMode(mode))) continue;
                 if (JczxExtractor.isCacheDirName(e.name) && !MODE_JCZX.equals(mode)) continue;
 
                 if (NikkeAbExtractor.isCacheDirName(e.name) && !MODE_NIKKE.equals(mode)) continue;

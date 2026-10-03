@@ -20,6 +20,7 @@ import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.ConsoleMessage;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -122,6 +123,46 @@ public class MainActivity extends Activity {
                 }
                 return true;
             }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                // 页面 viewport 有时会在加载后再把缩放打开。这里再锁一次，
+                // 双指只留给页面里的播放框相机，不放大整页。
+                WebSettings ws = view.getSettings();
+                ws.setSupportZoom(false);
+                ws.setBuiltInZoomControls(false);
+                ws.setDisplayZoomControls(false);
+            }
+
+            /**
+             * 渲染进程死掉（超大贴图上传、GPU 内存耗尽）时的兜底。
+             *
+             * ⚠️ **必须 return true**：返回 false（默认）等于告诉系统「我不处理」，
+             * 系统会**连同 App 一起杀掉** —— 表现就是「一读某个大图就闪退」。
+             * 返回 true 后我们自己收拾：移除并销毁死掉的 WebView，再 recreate() 一次 Activity，
+             * 最差也是回到首页，而不是进程消失。（APK-fixes §2.2）
+             */
+            @Override
+            public boolean onRenderProcessGone(WebView v, RenderProcessGoneDetail detail) {
+                Log.e(TAG, "渲染进程结束 didCrash=" + (detail == null ? "?" : detail.didCrash()));
+                try {
+                    if (v != null) {
+                        android.view.ViewParent p = v.getParent();
+                        if (p instanceof android.view.ViewGroup) ((android.view.ViewGroup) p).removeView(v);
+                        v.destroy();
+                    }
+                } catch (Throwable t) {
+                    Log.w(TAG, "清理死掉的 WebView 失败: " + t.getMessage());
+                }
+                web = null;
+                toast("渲染进程被系统回收，正在重载页面");
+                try {
+                    recreate();
+                } catch (Throwable t) {
+                    Log.w(TAG, "recreate 失败: " + t.getMessage());
+                }
+                return true;
+            }
         });
 
         web.setWebChromeClient(new WebChromeClient() {
@@ -155,12 +196,19 @@ public class MainActivity extends Activity {
 
         // 崩溃兜底：把栈存下来，下次启动直接显示在页面上。
         // 没有这个的话「选完文件夹就闪退」只能靠猜。
+        //
+        // ⚠️ **只有主线程**才把异常转交给系统处理器（那等于结束进程）。
+        // 后台线程（解包 / 扫描 / 缩略图 / 文件 IO）出任何错都不该让用户看到闪退——
+        // 尤其是 OutOfMemoryError 这类 Error：它是 Error 不是 Exception，
+        // 一个没接住的解包异常就会顺着默认处理器把整个 App 干掉（APK-fixes §2.1）。
         final Thread.UncaughtExceptionHandler sysHandler =
                 Thread.getDefaultUncaughtExceptionHandler();
         Thread.setDefaultUncaughtExceptionHandler((t, e) -> {
-            Log.e(TAG, "未捕获异常", e);
+            Log.e(TAG, "未捕获异常(" + t.getName() + ")", e);
             saveCrash(e);
-            if (sysHandler != null) sysHandler.uncaughtException(t, e);
+            if (Looper.myLooper() == Looper.getMainLooper() && sysHandler != null) {
+                sysHandler.uncaughtException(t, e);
+            }
         });
 
         // 主文档不走拦截：直接把单文件 HTML 喂给 WebView。
@@ -180,6 +228,18 @@ public class MainActivity extends Activity {
             startForegroundService(new Intent(this, KeepAliveService.class));
         } catch (Throwable t) {
             Log.w(TAG, "start keep-alive failed: " + t.getMessage());
+        }
+
+        // Android 13+：manifest 开了 enableOnBackInvokedCallback 之后 onBackPressed **不再被调用**，
+        // 系统会直接 finish() —— 必须自己注册回调，否则「按返回」就是销毁 Activity（APK-fixes §3）。
+        if (Build.VERSION.SDK_INT >= 33) {
+            try {
+                getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                        android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT,
+                        this::handleBack);
+            } catch (Throwable t) {
+                Log.w(TAG, "注册预测性返回失败: " + t.getMessage());
+            }
         }
 
         // 启动自检：脚本没跑起来时给个可见反馈，别让用户对着空白页猜
@@ -225,6 +285,13 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        // 每次回到前台都把保活服务再拉一次：被系统降级/回收过也能自愈，
+        // 这样「按返回退到桌面」之后进程还在，回来是原样而不是冷启动。
+        try {
+            startForegroundService(new Intent(this, KeepAliveService.class));
+        } catch (Throwable t) {
+            Log.w(TAG, "onResume start keep-alive failed: " + t.getMessage());
+        }
         if (bridge == null) return;
         new Handler(Looper.getMainLooper()).postDelayed(() -> {
             ScanEngine.ensureDefaults(this);
@@ -327,6 +394,22 @@ public class MainActivity extends Activity {
      */
     @Override
     public void onBackPressed() {
+        handleBack();
+    }
+
+    /** 上一次返回键的时间戳：预测性返回和新旧回调可能都到，必须防抖（不然退两次）。 */
+    private long lastBackAt = 0;
+
+    /**
+     * 返回键的唯一处理入口（新旧两条通路都打到这里）。
+     *
+     * Android 13+ 开了 `enableOnBackInvokedCallback` 之后 `onBackPressed` **不会被调用**，
+     * 所以 API 33+ 走 `OnBackInvokedDispatcher`（见 onCreate），低版本仍走 onBackPressed。
+     */
+    private void handleBack() {
+        long now = System.currentTimeMillis();
+        if (now - lastBackAt < 350) return;      // 防抖：同一次按键只处理一次
+        lastBackAt = now;
         if (web != null) {
             web.evaluateJavascript(JS_BACK, value -> {
                 String v = value == null ? "" : value.replace("\"", "").trim();
@@ -351,7 +434,9 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        stopService(new Intent(this, KeepAliveService.class));
+        // ⚠️ **不要 stopService**：划掉最近任务 / 转屏重建都可能走到 onDestroy，
+        // 一停前台服务，进程立刻降级成普通后台进程 → 被系统收掉 = 「按返回进程就没了」。
+        // 服务的生命周期交给 stopWithTask="false" 与它自己的 START_STICKY（APK-fixes §3）。
         // WebView 持有整个渲染进程与 GPU 资源，Activity 真被销毁时必须显式释放，
         // 否则会连同 Context 一起泄漏（转屏不重建 Activity，所以这里只在真正退出时走到）。
         if (web != null) {

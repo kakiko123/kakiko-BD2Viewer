@@ -32,6 +32,9 @@ const filters = argv.filter(a => !a.startsWith('--'))
 
 /** 顺序有讲究：静态/快的放前面，出问题时先看到便宜的那条。 */
 const SUITES = [
+  // R26：管道自检的「元测试」—— 它会故意把 walk() 的路径守卫改坏，验证自检**真的会报警**。
+  // 放最前面：这条红了说明「以后再出静默失败也没人告诉你」，属于最优先修的。
+  { name: 'meta_health',      file: 'meta_health.mjs',      needs: null,        data: false, desc: 'R26 管道自检：ark/jczx 元数据挂不上时必须显式报警（负面测试：故意改坏守卫验证会报警）' },
   { name: 'manifest_check',    file: 'manifest_check.mjs',    needs: null,        data: false, desc: '清单：旋转/fullUser、configChanges、minSdk' },
   { name: 'bundle_check',      file: 'bundle_check.mjs',      needs: '8137',      data: true,  desc: '单文件产物：id 一致性、内联、遮罩、无外链' },
   { name: 'bundle_firstpaint', file: 'bundle_firstpaint.mjs', needs: '8137',      data: true,  desc: '产物级首屏：第一帧就是资产页、深链可用' },
@@ -42,6 +45,10 @@ const SUITES = [
   // 自带服务端（BD2_CONFIG 指临时配置），不占 8137/8143 —— 但要用 Chrome，
   // 所以**必须排在 native_mode 之后**，别和它抢 cdp 的 9333 端口。
   { name: 'ark_mode',          file: 'ark_mode.mjs',          needs: null,        data: true,  desc: 'Ark 星陨计划档：中文名/多形态归组/立绘/语音（需 BD2_ARK_ROOT，否则跳过）' },
+  { name: 'jczx_mode',         file: 'jczx_mode.mjs',         needs: null,        data: true,  desc: '交错战线图鉴档：mod 层扫描/中文名/形态×mod 两级归组/原图↔mod 切换（需 BD2_JCZX_ROOT，否则跳过）' },
+  // 图层点选：重复点同一图层往下挪一层（列表 + 模型两个入口）。同样用 Chrome，
+  // 所以必须排在 native_mode 之后。需 BD2_JCZX_ROOT（真实骨架才有够多图层可点）。
+  { name: 'layer_pick',        file: 'layer_pick.mjs',        needs: null,        data: true,  desc: '图层点选：再次选中同一图层 → 往下一层（需 BD2_JCZX_ROOT，否则跳过）' },
 ]
 
 /** 服务端口 → 启动参数 */

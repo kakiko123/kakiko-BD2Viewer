@@ -16,6 +16,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 国产 ROM 会按「电池优化」把前台服务当空闲进程收掉 → 首次启动时请求忽略 -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
@@ -23,6 +25,7 @@
         android:allowBackup="true"
         android:hardwareAccelerated="true"
         android:largeHeap="true"
+        android:enableOnBackInvokedCallback="true"
         android:icon="@drawable/ic_app"
         android:roundIcon="@drawable/ic_app"
         android:label="@string/app_name"
@@ -53,6 +56,7 @@
         <service
             android:name=".KeepAliveService"
             android:exported="false"
+            android:stopWithTask="false"
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
