@@ -1556,6 +1556,12 @@ try {
   // 等切回上次的目录再放开——否则空窗期那几张会把「零重新渲染」的断言污染掉。
   const rootBefore = await cdp.evaluate(`return document.getElementById('rootSelect').value`)
   const profileDir = cdp.profile
+  // 这个目录下面还要接着用：Cdp.launch 没传 profile 时 profileOwned=true，
+  // close() 会把整个目录删掉 —— 「重启」拿到的是空目录，localStorage / IndexedDB
+  // 全丢，⑰ 这三条和 ㉖ 的顺序键一起红。以前靠「Chrome 退得慢、rmSync 删不掉」
+  // 这个竞态才一直是绿的（2026-09-29 踩过一次，现在把归属显式摘掉）。
+  // 目录归本套件管，收尾自己清（见文件末尾 finally）。
+  cdp.profileOwned = false
   await cdp.close()
   cdp = await Cdp.launch({ size: '1400,900', profile: profileDir })
   await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `
@@ -2277,17 +2283,20 @@ try {
     const v = window.__bd2viewer
     const rid = document.getElementById('rootSelect').value
     const out = {}
-    const btns = Array.from(document.querySelectorAll('#galMode .gm-btn'))
-    const pressedList = () => btns.filter(b => b.getAttribute('aria-pressed') === 'true')
-      .map(b => b.dataset.assetMode)
+    // 资产类型从「六个按钮」改成了**下拉条**（2026-10-04）：选项就是档位、value 就是 S.mode。
+    const modeSel = document.getElementById('galMode')
+    const modeOpts = Array.from(modeSel.querySelectorAll('option'))
+    const pickMode = m => { modeSel.value = m; modeSel.dispatchEvent(new Event('change')) }
+    const pressedList = () => [modeSel.value]
     const rels = () => v.state.items.map(x => x.relAtlas || x.id || '')
     // 只认「属于该约定的资产」：空结果也算通过（result.every 对空数组恒真）——
     // 这一条守的是「不该出现的约定一个都不许漏出来」，不是「必须有多少条」。
     const onlyBytes = arr => arr.every(r => r.endsWith('.bytes'))
 
-    out.btnCount = btns.length
-    out.btnLabels = btns.map(b => b.textContent.trim())
-    out.keepMarked = btns.every(b => b.hasAttribute('data-i18n-keep'))
+    out.btnCount = modeOpts.length
+    out.btnLabels = modeOpts.map(o => o.textContent.trim())
+    out.keepMarked = modeOpts.every(o => o.hasAttribute('data-i18n-keep'))
+    out.isSelect = modeSel.tagName === 'SELECT'
     out.groupAria = (document.getElementById('galMode') || {}).getAttribute('aria-label') || ''
     out.pressedBefore = pressedList()
     out.modeBefore = v.mode
@@ -2301,8 +2310,7 @@ try {
     out.gridCardsBefore = document.querySelectorAll('#galGrid .card').length
 
     // ① 切到 Lost Sword，等扫描收敛（结果全部符合 .bytes 约定）
-    const lsBtn = btns.find(b => b.dataset.assetMode === 'lostsword')
-    lsBtn.click()
+    pickMode('lostsword')
     out.modeRightAfterClick = v.mode
     // toast() 是同步的，点击的那一下就已经把 #toast 写好了（假桥的 __toasts 只收
     // 原生层自己弹的那几条，前端 toast() 不经过它 —— 所以要看 DOM）
@@ -2336,7 +2344,21 @@ try {
     out.sortKey = localStorage.getItem('bd2.sort.' + rid)
 
     // ② 切回 BD2，等数量复原
-    btns.find(b => b.dataset.assetMode === 'bd').click()
+    modeSel.value = 'bd'
+    modeSel.dispatchEvent(new Event('change'))
+    // ⚠️ 这里**故意不 await**：会话内快照应当在切回的那一刻就贴上
+    //    （以前走的是「强制重扫」，切回来得干等一遍；现在有 modeSnapshots）。
+    out.itemsRightAfterSwitch = v.state.items.length
+    out.cardsRightAfterSwitch = document.querySelectorAll('#galGrid .card').length
+    // ⚠️ 同一刻（**同步**读：setAssetMode 贴完快照就走 await scan(false)，
+    //    scan() 在第一个 await 之前已经把 setBusy 跑完了）：
+    //    ① 真扫描必须照常置上 S.busy —— 它是「扫描在飞」的**排重护栏**，
+    //       漏置会让解包轮询与手扫并发（2026-10-04 实测把 e2e/native_mode/ark_mode
+    //       拖成 Runtime.evaluate 超时）；
+    //    ② 但**不许**上全屏遮罩 —— 刚贴出来的快照卡片不能被盖住。
+    out.busyRightAfterSwitch = !!v.state.busy
+    const spEl = document.getElementById('spinner')
+    out.overlayRightAfterSwitch = !!(spEl && !spEl.hidden)
     for (let i = 0; i < 160; i++) {
       if (v.mode === 'bd' && v.state.items.length === out.countBefore) break
       await wait(250)
@@ -2349,8 +2371,9 @@ try {
     return out
   `, 180000)
 
-  check('㉖ 资产页有 BD2 / Lost Sword / NIKKE / JCZX / 星陨计划 五段切换，组名可翻译、游戏名保留原文',
-    modeTest.btnCount === 5 && modeTest.btnLabels.join('|') === 'BD2|Lost Sword|NIKKE|JCZX|星陨计划' &&
+  check('㉖ 资产类型是**下拉条**（不再是六个按钮），六档、组名可翻译、游戏名保留原文',
+    modeTest.isSelect === true && modeTest.btnCount === 6 &&
+    modeTest.btnLabels.join('|') === 'BD2|Lost Sword|NIKKE|JCZX|星陨计划|碧蓝航线' &&
     modeTest.keepMarked === true && modeTest.groupAria.length > 0,
     `按钮=${JSON.stringify(modeTest.btnLabels)} keep=${modeTest.keepMarked} aria="${modeTest.groupAria}"`)
   check('㉖ 默认停在 BD2，且按钮高亮就是状态本身',
@@ -2375,6 +2398,15 @@ try {
     modeTest.orderKeys.every(k => k.endsWith('.bd') || k.endsWith('.lostsword')) &&
     !modeTest.orderKeys.some(k => k.endsWith('.lostsword')) && modeTest.sortKey !== null,
     `顺序键=${JSON.stringify(modeTest.orderKeys)} sort=${modeTest.sortKey}`)
+  check('㉖ 切回 BD2 的那一刻**就已经有内容**（会话内快照，不用等扫描）',
+    (modeTest.itemsRightAfterSwitch || 0) > 0 && (modeTest.cardsRightAfterSwitch || 0) > 0,
+    `切回瞬间 items=${modeTest.itemsRightAfterSwitch} · 卡片=${modeTest.cardsRightAfterSwitch}`)
+  check('㉖ 切回来时真扫描照常发起（S.busy 排重护栏不许漏）但**不**上全屏遮罩（别盖住刚贴的卡片）',
+    modeTest.busyRightAfterSwitch === true && modeTest.overlayRightAfterSwitch === false,
+    `busy=${modeTest.busyRightAfterSwitch} · 遮罩=${modeTest.overlayRightAfterSwitch}`)
+  check('㉖ 切回那一刻真扫描照常发起（S.busy 置上，排重护栏不许漏）且**不**上全屏遮罩',
+    modeTest.busyRightAfterSwitch === true && modeTest.overlayRightAfterSwitch === false,
+    `busy=${modeTest.busyRightAfterSwitch} · 遮罩=${modeTest.overlayRightAfterSwitch}`)
   check('㉖ 切回 BD2：mode / 落盘 / 高亮 / 数量 / 卡片墙全部复原',
     modeTest.modeBack === 'bd' && modeTest.localBack === 'bd' &&
     modeTest.pressedBack.join() === 'bd' && modeTest.countBack === modeTest.countBefore &&
@@ -2466,11 +2498,11 @@ try {
       return origReq(rootId, force, mode)
     }
 
-    const btns = Array.from(document.querySelectorAll('#galMode .gm-btn'))
-    const pressed = () => btns.filter(b => b.getAttribute('aria-pressed') === 'true').map(b => b.dataset.assetMode)
-    const nkBtn = btns.find(b => b.dataset.assetMode === 'nikke')
-    out.hasNikkeBtn = !!nkBtn
-    nkBtn.click()
+    const modeSel = document.getElementById('galMode')
+    const pressed = () => [modeSel.value]
+    out.hasNikkeBtn = !!Array.from(modeSel.querySelectorAll('option')).find(o => o.value === 'nikke')
+    modeSel.value = 'nikke'
+    modeSel.dispatchEvent(new Event('change'))
     out.modeAfterClick = v.mode
     out.localAfter = localStorage.getItem('bd2.mode')
     out.pressedAfter = pressed()
@@ -2505,8 +2537,17 @@ try {
     out.poseHiddenForPlain = document.getElementById('poseGroup').hidden
 
     // 收尾：切回 BD2，等数量复原。
-    // setAssetMode 会先清空 S.items 再 await scan(true)；不能拿「清空后的 0」当收敛条件。
-    btns.find(b => b.dataset.assetMode === 'bd').click()
+    // ⚠️ 现在切回来会**先贴会话内快照**，所以 S.items 不会被清空成 0 ——
+    //    收敛条件仍然用「数量回到切换前的值」（与 ㉖ 组同口径）。
+    modeSel.value = 'bd'
+    modeSel.dispatchEvent(new Event('change'))
+    // ⚠️ 这里**故意不 await**：会话内快照应当在切回的那一刻就贴上
+    //    （以前走的是「强制重扫」，切回来得干等一遍；现在有 modeSnapshots）。
+    out.itemsRightAfterSwitch = v.state.items.length
+    out.cardsRightAfterSwitch = document.querySelectorAll('#galGrid .card').length
+    // 同 ㉖：同步读「真扫描在飞（排重护栏）+ 不上全屏遮罩」
+    out.busyRightAfterSwitch = !!v.state.busy
+    out.overlayRightAfterSwitch = !document.getElementById('spinner').hidden
     for (let i = 0; i < 200; i++) {
       if (v.mode === 'bd' && v.state.items.length > 0) break
       await wait(250)

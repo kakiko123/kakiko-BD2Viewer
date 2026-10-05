@@ -13,10 +13,12 @@
 
 /* ------------------------------------------------------ 两套 Spine 运行时
 
-   index.html 同时引入两套运行时（见那里的注释）：
+   index.html 同时引入多套运行时（见那里的注释）：
      · window.spine    —— spine-player 4.1.55，BD2 / Lost Sword 的骨架是 4.1.x 导出
      · window.spine40  —— spine-player 4.0.31，NIKKE 的骨架是 4.0.x 导出
      · window.spine42  —— spine-player 4.2.120，交错战线 (JCZX) 等 4.2.x 骨架
+     · PIXI.spine      —— pixi-spine 3.8，碧蓝航线的二进制 .skel
+     · PIXI.live2d     —— Cubism 4 / moc3，碧蓝航线的 .model3.json
 
    为什么要两套：Spine 的骨架与运行时只在 **major.minor 相同**时互通。4.1 运行时读 4.0
    骨架不会报「版本不符」，而是照 4.1 的二进制布局去读，把字节读成 4.1 才有的 sequence
@@ -169,6 +171,14 @@ const I18N_EN = {
   '全屏观看（音量键/↑↓ 切动画，☰ 换文件）': 'Fullscreen (volume keys / ↑↓ switch animation, ☰ switch file)',
   '全屏观看（音量键切动画）': 'Fullscreen (volume keys switch animation)',
   '快捷键': 'Shortcuts',
+  '更新日志': 'Changelog',
+  '图层选择模式现在支持碧蓝航线的 Spine 3.8 与 Live2D：点画面即可选中该处真正画出来的那一层，高亮框跟着缩放平移走。': 'Layer picking now works for Azur Lane Spine 3.8 and Live2D: tap the model to select the layer actually drawn there, and the highlight box follows zoom/pan.',
+  '碧蓝航线的多层骨架（同目录 _B / _M / _T）合并成一张卡并叠着渲染，不再只显示背景层。': 'Azur Lane multi-layer skeletons (_B / _M / _T in one folder) are merged into a single card and rendered stacked, instead of showing only the background layer.',
+  '修复部分 Live2D 动作出现多余的手/手臂（动作里的部件不透明度曲线以前被运行时丢弃）。': 'Fixed extra hands/arms in some Live2D motions (the part-opacity curves in motion files used to be dropped by the runtime).',
+  '恢复双击画面定点放大：2.6× → 6.8× → 12.4×，到顶再双击回到适配窗口。': 'Double-tap zoom restored: 2.6× → 6.8× → 12.4×, double-tap again at the top step to fit the window.',
+  '新增碧蓝航线档：Spine 3.8 二进制与 Live2D（moc3）播放，按角色/皮肤/形态归组。': 'New Azur Lane library: Spine 3.8 binaries and Live2D (moc3) playback, grouped by character / skin / form.',
+  '资产类型改成下拉条；切模式不再重扫（会话快照 + 缓存）。': 'Asset type is now a dropdown; switching modes no longer forces a rescan (session snapshot + cache).',
+  '完整历史见 APK 源码里的 CHANGELOG.md。': 'See CHANGELOG.md in the APK source for the full history.',
   '设置': 'Settings',
   '导出错误日志': 'Export error log',
   '把这次打开期间的载入和解包错误存成 bd2viewer-error-log.txt。': 'Saves load and unpack errors from this session as bd2viewer-error-log.txt.',
@@ -339,6 +349,13 @@ const I18N_EN = {
   '切换图层选择模式': 'Toggle layer selection mode',
   '点击模型': 'Click model',
   '图层选择模式下选中该图层': 'Select that layer in layer-selection mode',
+  '删除这个姿势？': 'Delete this pose?',
+  '只删除这个姿势自己的文件。': 'Only this pose\u2019s own files are removed.',
+  '删除这个原皮文件夹？': 'Delete this base-skin folder?',
+  '这个原皮文件夹下的全部文件都会被删除。': 'Every file in this base-skin folder will be deleted.',
+  '删除这个 mod 文件夹？': 'Delete this mod folder?',
+  '这个 mod 文件夹下的全部文件都会被删除。': 'Every file in this mod folder will be deleted.',
+  '这些是本次会话上传的资产，请到平铺页选中后移除': 'These were uploaded this session — remove them from the grid instead',
   'H': 'H',
   '隐藏选中的图层': 'Hide the selected layer',
   'U': 'U',
@@ -621,18 +638,18 @@ function saveLang(v) {
    id 必须与 server.mjs 的 FORMATS 键、ScanEngine 的 MODE_* 一致。 */
 
 const MODE_KEY = 'bd2.mode'
-const ASSET_MODES = ['bd', 'lostsword', 'nikke', 'jczx', 'ark']
+const ASSET_MODES = ['bd', 'lostsword', 'nikke', 'jczx', 'ark', 'al']
 /** 专名：中英界面都写原文，不进翻译表（R11.1） */
-const MODE_LABEL = { bd: 'BD2', lostsword: 'Lost Sword', nikke: 'NIKKE', jczx: 'JCZX', ark: '星陨计划' }
+const MODE_LABEL = { bd: 'BD2', lostsword: 'Lost Sword', nikke: 'NIKKE', jczx: 'JCZX', ark: '星陨计划', al: '碧蓝航线' }
 /** 需求 4（修正）：spine-player 的 premultipliedAlpha =「按 PMA 混合」。
  *  · BD2 图集 PNG 是直通 alpha → 需要混合开 + 上传时 UNPACK 预乘（见下）。
  *  · NIKKE / JCZX / Ark 从 Unity RGBA32 抽出的 PNG 本身已是 PMA（atlas `pma:true`）
  *    → 混合必须开；若再 UNPACK 预乘会双预乘，眼睛/半透明处发黑；关掉混合则
- *    经典「PMA 贴图 + 直通混合」黑边。故 nikke/jczx/ark 默认混合开、上传预乘关。
+ *    经典「PMA 贴图 + 直通混合」黑边。故 nikke/jczx/ark/碧蓝航线 默认混合开、上传预乘关。
  *  · lostsword 暂保持关（未确认图集 PMA）。 */
-const PREMULTIPLY_DEFAULT = { bd: true, lostsword: false, nikke: true, jczx: true, ark: true }
+const PREMULTIPLY_DEFAULT = { bd: true, lostsword: false, nikke: true, jczx: true, ark: true, al: true }
 /** 上传时 UNPACK_PREMULTIPLY：仅直通 alpha 图集需要（BD2）。已是 PMA 的切勿开。 */
-const UPLOAD_PREMULTIPLY_BY_MODE = { bd: true, lostsword: false, nikke: false, jczx: false, ark: false }
+const UPLOAD_PREMULTIPLY_BY_MODE = { bd: true, lostsword: false, nikke: false, jczx: false, ark: false, al: false }
 function defaultPremultiply(mode) {
   return ASSET_MODES.includes(mode) ? !!PREMULTIPLY_DEFAULT[mode] : true
 }
@@ -660,12 +677,13 @@ function loadMode() {
 }
 
 /** 把 S.mode 同步到分段控件（唯一的状态来源是 S.mode，控件只是它的显示） */
+/** 把 S.mode 同步到下拉条（唯一的状态来源是 S.mode，控件只是它的显示）。
+ *  ⚠️ 以前这里是六个 `.gm-btn` + `aria-pressed`，现在是 `<select>`：状态就是 `value` ——
+ *  没有「亮着但状态没变」这种半截状态的可能。 */
 function syncModeUI() {
-  const box = $('galMode')
-  if (!box) return
-  for (const b of box.querySelectorAll('.gm-btn')) {
-    b.setAttribute('aria-pressed', String(b.dataset.assetMode === S.mode))
-  }
+  const sel = $('galMode')
+  if (!sel) return
+  if (sel.value !== S.mode) sel.value = S.mode
 }
 
 /**
@@ -673,8 +691,32 @@ function syncModeUI() {
  * 重扫是必须的：S.items 是上一个模式扫出来的结论，留着就会摆出一堆
  * 不属于当前类型的卡片（点开必然报错）。
  */
+/* 会话内的「每模式结果」快照：切回来**立刻**贴上次的，不用干等一遍扫描。
+ *
+ * 与 R31 的 IndexedDB 扫描缓存是**两层**：这层只活在本次会话（切模式用，零等待），
+ * 那层跨进程（冷启动用）。两层都「只垫不替」—— 真扫描照常发，回来再整包替换，
+ * 所以磁盘上的变化照样能在几秒后被纠正。
+ *
+ * 键带 rootId：换了根目录，旧快照就不适用了。
+ * ⚠️ 之前这里是 `await scan(true)`（force）—— force 会绕开**所有**缓存（R31 垫底、
+ *    服务端 15s 缓存、原生按 (rootId,mode) 分的桶），于是每次切模式都要重扫一遍。
+ */
+const modeSnapshots = new Map()
+
+/** 存一份当前模式的结果（只留必要字段；items 直接引用，不做深拷贝）。 */
+function snapshotMode() {
+  if (!S.rootId || !S.items.length) return
+  modeSnapshots.set(`${S.rootId}|${S.mode}`, {
+    items: S.items,
+    rootPath: S.rootPath || '',
+    itemCount: S.items.length,
+    playableCount: S.items.filter(i => i.ok).length,
+  })
+}
+
 async function setAssetMode(mode) {
   if (!ASSET_MODES.includes(mode) || mode === S.mode) return
+  snapshotMode()          // 离开前把当前模式的结果记下来（切回来就不用重扫）
   S.mode = mode
   try { localStorage.setItem(MODE_KEY, mode) } catch { /* 存不下就算了 */ }
   syncModeUI()
@@ -702,16 +744,31 @@ async function setAssetMode(mode) {
     if (g) g.hidden = true
   }
   stopArkVoice()
-  // 立刻清空可见列表并刷一帧：S.items 还是上一 mode 扫出来的结论，
-  // 若等 await scan 回来才清，切换瞬间会出现「NIKKE 档亮着、格子却仍是 BD2 卡」
-  // （大目录扫描要几百毫秒到数秒，截图像素级证据就是这么来的）。
-  S.items = []
-  nikkeView = null
+  // 立刻换列表并刷一帧：S.items 还是上一 mode 扫出来的结论，若等 await scan 回来才换，
+  // 切换瞬间会出现「NIKKE 档亮着、格子却仍是 BD2 卡」。
+  // 有快照就**直接贴**（秒切）；没有就清空等扫描（第一次进这个档）。
+  const snap = modeSnapshots.get(`${S.rootId}|${mode}`)
+  if (snap && snap.items.length) {
+    S.items = snap.items
+    if (snap.rootPath) S.rootPath = snap.rootPath
+    nikkeViewFor()
+    layerViewFor()
+    $('assetCount').textContent = t('{ok}/{total} 可播放',
+      { ok: snap.playableCount, total: snap.itemCount }) + ' · ' + t('上次的结果')
+    // 已经垫上了：别让 R31 再从 IndexedDB 垫一遍（白读一次、还会覆盖同一份数据）
+    if (S.rootId) scanRestored.add(`${S.rootId}|${mode}`)
+  } else {
+    S.items = []
+    nikkeView = null
+  }
   refreshLists()
   toast(t('资产类型：{name}', { name: MODE_LABEL[mode] }))
-  // 强制重扫：① Android 自动根会按 mode 切到 BD2Viewer/{bd2,nikke,lostsword}
-  // ② force 时原生会清掉该 rootId 下所有 mode 桶（见 ScanEngine.scan）
-  await scan(true)
+  // ⚠️ **不用 force**：force 会绕开所有缓存（R31 垫底 / 服务端 15s 缓存 / 原生按
+  //    (rootId,mode) 分的桶），每次切档都要重扫一遍 —— 那正是「切回来要重新加载」的原因。
+  //    Android 的自动根按 mode 切目录也不受影响：原生/服务端的缓存都是按 (rootId, mode)
+  //    分桶的，mode 变了就是另一个桶，首次必然真扫、之后命中。
+  //    用户按「重新扫描」那条路仍然走 scan(true)，手动强刷的出口没堵。
+  await scan(false)
 }
 
 /**
@@ -840,11 +897,22 @@ function showError(msg) {
 }
 
 function clearError() { $('errorBox').hidden = true }
-function setBusy(on, text) {
+/**
+ * `S.busy` 与「全屏遮罩」是**两件事**，必须能分开：
+ * ① `S.busy` 是**「扫描在飞」的排重护栏** —— 解包轮询（`if (shouldScan && !S.busy)`）、
+ *    `unpackRescanNeeded` 的消费、以及导出那条 `if (S.busy) return` 都看它。
+ *    ⚠️ 它**永远**要跟着「有没有扫描在跑」走，不许因为「想不显示遮罩」而漏置 ——
+ *    漏了会让轮询与手扫**并发**（2026-10-04 就是这么把 e2e / native_mode / ark_mode
+ *    拖成 `Runtime.evaluate 超时`、`scan_cache` 的 busy 断言变假红的）。
+ * ② 遮罩要不要**显示**是纯视觉问题：`opts.overlay === false` 时只置状态、不显示 spinner
+ *    （已经有内容时不上全屏 spinner，否则刚垫出来的卡片被盖住，看起来像「又在重新加载」）。
+ */
+function setBusy(on, text, opts) {
   S.busy = on
   const sp = $('spinner')
   if (!sp) return
-  sp.hidden = !on
+  const overlay = !(opts && opts.overlay === false)
+  sp.hidden = !(on && overlay)
   const label = sp.querySelector('.spinner-text') || sp.querySelector('span:not(.dot)')
   if (text && label) label.textContent = text
   // 必须传 {} / 无参：setLoadProgress(null) 会因解构 null 抛
@@ -1084,10 +1152,12 @@ function applyGLTexturePatch(enabled) {
  */
 
 const NATIVE = typeof window.BD2Native !== 'undefined' && !!window.BD2Native
-/** UI / about version — keep in sync with package.json + Android versionName. */
+/** UI / about version —— 与 `package.json`、Android `versionName`（build.gradle）三处保持一致。
+ *  APK 里由原生 `BuildConfig.VERSION_NAME` 提供（NativeBridge.appVersion），
+ *  桌面版走下面这个兜底常量（改版本时**三处一起改**）。 */
 const APP_VERSION = (NATIVE && window.BD2Native.appVersion)
-  ? (window.BD2Native.appVersion() || '1.05')
-  : '1.05'
+  ? (window.BD2Native.appVersion() || '1.1')
+  : '1.1'
 
 const nativeWaiters = {}
 function nativeAsk(kind, call, timeoutMs = 120000) {
@@ -1543,7 +1613,11 @@ function setupDoubleTapZoom() {
   const host = $('stageInner')
   if (!host) return
   host.addEventListener('pointerdown', e => {
-    if (!e.isPrimary || !S.player || !S.camera) return
+    // ⚠️ pixi 播放器（碧蓝航线的 Spine 3.8 / Live2D）**没有 S.camera**，缩放是直接改 pixi
+    //    显示的 scale/x/y。以前这里只认相机，于是这两条路上双击「什么都不会发生」——
+    //    用户报的「双击放大做没了」就是它（见 doubleTapZoom 里的 pixi 分支）。
+    if (!e.isPrimary || !S.player) return
+    if (!S.camera && !S.player.__pixi) return
     const now = performance.now()
     const near = Math.abs(e.clientX - lastTap.x) < 30 && Math.abs(e.clientY - lastTap.y) < 30
     if (now - lastTap.t < 340 && near) {
@@ -1574,12 +1648,24 @@ function syncCameraViewport() {
 const ZOOM_LADDER = [2.6, 6.8, 12.4]
 const ZOOM_TOP = ZOOM_LADDER[ZOOM_LADDER.length - 1]
 
+/** 下一档：留 15% 余量 —— 手抖掉一点缩放不该让档位判定来回跳。 */
+function nextZoomStep(factor) {
+  return ZOOM_LADDER.find(s => s > factor * 1.15) || ZOOM_TOP
+}
+
+function zoomStepLabel(step) {
+  return step < 10 ? step.toFixed(1) : String(Math.round(step))
+}
+
 /** 双击：以点击处为锚点，沿 ZOOM_LADDER 逐档放大；已经是顶档才还原到铺满。
  *  注意相机的方向：cam.zoom 越小画面越放大（currentZoomRatio = cam.zoom / fit），
  *  所以「放大」是除以倍数，不是乘。 */
 function doubleTapZoom(clientX, clientY) {
   const p = S.player, cam = S.camera
-  if (!p || !cam || !S.bounds) return
+  if (!p) return
+  // pixi 播放器（AL 的 Spine 3.8 / Live2D）没有相机，走自己那条（同样是双击定点放大）
+  if (p.__pixi) return doubleTapZoomPixi(p, clientX, clientY)
+  if (!cam || !S.bounds) return
   syncCameraViewport()
   const ratio = currentZoomRatio()
   const fit = defaultZoomFor(Math.max(cam.viewportWidth, 1), Math.max(cam.viewportHeight, 1))
@@ -1588,8 +1674,7 @@ function doubleTapZoom(clientX, clientY) {
   // 到顶（或已经超出可读范围）→ 还原
   if (factor >= ZOOM_TOP * 0.9) { fitToWindow(); toast(t('已还原')); return }
 
-  // 留 15% 余量：手抖掉一点缩放不该让档位判定来回跳
-  const step = ZOOM_LADDER.find(s => s > factor * 1.15) || ZOOM_TOP
+  const step = nextZoomStep(factor)
 
   // 锚点：点击处对应的世界坐标（screenToWorld 里算过同样的归一化坐标）
   const world = screenToWorld(clientX, clientY)
@@ -1601,7 +1686,48 @@ function doubleTapZoom(clientX, clientY) {
     y: world.y - world.ny * target * vh / 2,
     z: target,
   }, world)
-  toast(t('放大 ×{step}', { step: step < 10 ? step.toFixed(1) : Math.round(step) }))
+  toast(t('放大 ×{step}', { step: zoomStepLabel(step) }))
+}
+
+/**
+ * pixi 播放器（碧蓝航线的 Spine 3.8 / Live2D）的双击定点放大。
+ *
+ * 这两条路**没有相机**（`S.camera` 为 null），缩放就是改 pixi 显示的 `scale/x/y`
+ * （与 `pixiZoomBy` / 双指捏合同一套）。所以：
+ *   · 档位用同一份 `ZOOM_LADDER`，「相对适配窗口放大了几倍」= `当前 scale / __home.s`；
+ *   · 锚点用「落点在显示局部坐标里的那一点」：先反算局部坐标，改完 scale 再让它回到原处；
+ *   · **多层要一起动**（AL 的 `_B/_M/_T` 是三套骨架叠着画，只动一层会错位）；
+ *   · 到顶档再双击 → `fitHome()` 回到适配窗口。
+ */
+function doubleTapZoomPixi(p, clientX, clientY) {
+  const layers = pixiLayersOf(p)
+  const host = $('stageInner')
+  if (!layers.length || !host) return
+  const rect = host.getBoundingClientRect()
+  if (!rect.width || !rect.height) return
+  const main = layers[layers.length - 1].spine
+  const home = main.__home
+  const cur = main.scale.x || 1
+  const factor = home && home.s ? cur / home.s : 1     // 相对「适配窗口」放大了几倍
+  if (factor >= ZOOM_TOP * 0.9) {
+    if (typeof p.fitHome === 'function') p.fitHome()
+    toast(t('已还原'))
+    return
+  }
+  const step = nextZoomStep(factor)
+  const target = ((home && home.s) || cur) * step
+  const cx = clientX - rect.left        // 落点（画布 CSS 像素）
+  const cy = clientY - rect.top
+  for (const l of layers) {
+    const d = l.spine
+    const s0 = d.scale.x || 1
+    const lx = (cx - d.x) / (s0 || 1)   // 落点在该显示局部坐标里的位置
+    const ly = (cy - d.y) / (s0 || 1)
+    d.scale.set(target)
+    d.x = cx - lx * target
+    d.y = cy - ly * target
+  }
+  toast(t('放大 ×{step}', { step: zoomStepLabel(step) }))
 }
 
 /** 相机从当前位置缓动到目标（约 200ms），到位后刷新调试信息 */
@@ -1907,6 +2033,63 @@ function renderStorageSettings(st) {
    也不去关 spinner（那是新一轮在用的）。 */
 let scanSeq = 0
 
+/* ---------------- 扫描结果缓存（冷启动先贴上次的结果） ----------------
+   手机端扫一遍几万文件的目录要几十秒，每次打开 App 都干等一遍非常难受。
+   缩略图已经在 IndexedDB 里了，这里再把**条目本身**也存一份：
+   打开 → 立刻用上次的条目 + 上次的缩略图把网格画出来（能翻、能点开看）→
+   真扫描在后台跑完再整包替换。桌面端同样受益（重启服务后不用等重扫）。
+
+   两条纪律：
+   ① 缓存只是「先垫一口」，**永远不替代真扫描**（真扫描照常发、照常替换）。
+      用户按「重新扫描」（force）时完全不读缓存。
+   ② 回填也要看代次（scanSeq）：回填期间若已经发起了新一轮，这一份直接丢。 */
+const SCAN_CACHE_V = 1
+const SCAN_CACHE_MAX_ITEMS = 20000    // 再大就不存了：结构化克隆 + 配额都不划算
+const scanRestored = new Set()        // 同一个 (rootId, mode) 一次会话只垫一次
+let scanRestores = 0
+
+function scanCacheKey() {
+  return `${S.rootId || ''}|${S.mode || 'bd'}`
+}
+
+async function saveScanCache(items) {
+  if (!S.rootId || !Array.isArray(items) || !items.length) return
+  if (items.length > SCAN_CACHE_MAX_ITEMS) return
+  let playable = 0
+  for (const it of items) if (it && it.ok) playable++
+  try {
+    await idbPut(scanCacheKey(), {
+      v: SCAN_CACHE_V,
+      savedAt: Date.now(),
+      rootPath: S.rootPath || '',
+      itemCount: items.length,
+      playableCount: playable,
+      items,
+    }, 'scan')
+  } catch { /* 存不下不影响功能，下次打开慢一点而已 */ }
+}
+
+/** @returns {boolean} 是否真的垫上了（调用方负责再看一眼代次） */
+async function loadScanCache() {
+  if (!S.rootId) return false
+  let rec = null
+  try { rec = await idbGet(scanCacheKey(), 'scan') } catch { rec = null }
+  if (!rec || rec.v !== SCAN_CACHE_V || !Array.isArray(rec.items) || !rec.items.length) return false
+  // 同一个 rootId 被重新指向了别的目录 → 这份缓存的 dir/绝对路径全是错的，别垫
+  const cfgRoot = (S.config && S.config.roots || []).find(r => r && r.id === S.rootId)
+  const wantPath = (cfgRoot && cfgRoot.path) || ''
+  if (rec.rootPath && wantPath && rec.rootPath !== wantPath) return false
+  S.items = rec.items
+  if (!S.rootPath) S.rootPath = rec.rootPath || ''
+  // 归组立刻算一次（和真扫描那条路一样）：缩略图队列、删除、深链都直接读 members / backLayer
+  nikkeViewFor()
+  layerViewFor()
+  scanRestores++
+  $('assetCount').textContent = t('{ok}/{total} 可播放',
+    { ok: rec.playableCount || 0, total: rec.itemCount || rec.items.length }) + ' · ' + t('上次的结果')
+  return true
+}
+
 /* ---------------- NIKKE mod 包解包进度（需求 1+2：优先级队列 + 真实进度条） ----------------
    解包在后台以包级并发 ≤ 10 跑；前端：
    · 常驻细进度条（done/total + 当前包名）
@@ -2166,8 +2349,32 @@ async function scan(force) {
     refreshLists()
     return
   }
-  setBusy(true, S.mode === 'jczx' ? t('正在提取 JCZX 资产…') : t('扫描中…'))
-  setScanProgress(true, S.mode === 'jczx' ? t('正在提取 JCZX 资产…') : t('扫描中…'))
+  // 先垫一口：同一个 (rootId, mode) 一次会话只垫一次。垫完照样发真扫描。
+  const ck = scanCacheKey()
+  if (!force && !scanRestored.has(ck)) {
+    scanRestored.add(ck)
+    const got = await loadScanCache()
+    if (seq !== scanSeq) return          // 期间已经发起了新一轮，这份整包丢
+    if (got) {
+      // 缩略图也一起读出来 —— 否则卡片是空的，垫了个寂寞
+      await loadThumbCache()
+      if (seq !== scanSeq) return
+      refreshLists()
+      updateThumbStatus()
+    }
+  }
+  // ⚠️ `S.busy`（「扫描在飞」的排重护栏）**永远**要置上：解包轮询
+  //    （`if (shouldScan && !S.busy)`）、`unpackRescanNeeded` 的消费、导出那条
+  //    `if (S.busy) return` 全看它，漏置会让轮询与手扫**并发**。
+  //    遮罩显不显示是**另一件事**：已经有内容（垫了快照 / R31 的 IndexedDB 缓存）时
+  //    不上全屏 spinner，否则刚贴出来的卡片被盖住，看起来就像「又要重新加载」
+  //    —— 所以这里只跳过遮罩（`opts.overlay`），不跳过状态。
+  //    ⚠️ 别写成 `if (!S.items.length) setBusy(true, …)`：那样连 `S.busy` 一起漏掉，
+  //    正是 2026-10-04 把 e2e / native_mode / ark_mode 拖成 `Runtime.evaluate 超时`、
+  //    并让 scan_cache 的 busy 断言假红的原因。
+  const scanLabel = S.mode === 'jczx' ? t('正在提取 JCZX 资产…') : t('扫描中…')
+  setBusy(true, scanLabel, { overlay: !S.items.length })
+  setScanProgress(true, scanLabel)
   // 先清掉：换了目录 / 扫描失败时不能留着上一个目录的绝对路径，
   // 否则菜单里会拿旧前缀去拼新资产的相对路径，拼出一条不存在的路径。
   S.rootPath = ''
@@ -2178,7 +2385,10 @@ async function scan(force) {
       // 只给 scan 不带 scanPage/scanCount，取回来的会是另一套资产。
       const meta = await nativeAsk('scan', () => window.BD2Native.requestScan(S.rootId, !!force, S.mode), 300000)
       const items = []
-      const PAGE = 40
+      // 一次 40 条太碎了：1625 条要走 41 趟桥，上万条要走两百多趟。每趟都是
+      // 「Java 拼 JSON 字符串 + JS 解析」，在手机上这部分开销不比 walk 小多少。
+      // 200 条 ≈ 100KB 一串，仍然远低于「几 MB 把进程压崩」那条线。
+      const PAGE = 200
       for (let from = 0; from < (meta.itemCount || 0); from += PAGE) {
         const chunk = JSON.parse(window.BD2Native.scanPage(meta.rootId, from, PAGE, S.mode) || '[]')
         for (let i = 0; i < chunk.length; i++) items.push(chunk[i])
@@ -2204,6 +2414,8 @@ async function scan(force) {
     if (!data.exists) showError(t('目录不存在：{path}', { path: data.root.path }))
     $('assetCount').textContent = t('{ok}/{total} 可播放', { ok: data.playableCount, total: data.itemCount }) +
       (data.scanMs ? ` · ${data.scanMs}ms` : '')
+    // 存一份给下次冷启动垫底。不 await：写 IndexedDB 不该挡着渲染
+    saveScanCache(S.items).catch(() => { /* 存不下就算了 */ })
     if (data.jczx) handleJczxMeta(data.jczx)
     // NIKKE 的 mod 包（UnityFS）在服务端/原生侧解包，**分批进行**：第一次扫描只解
     // 前一批（几十个包），剩下的在后台继续。这里给提示并轮询重扫，直到 pending 归零。
@@ -2256,6 +2468,10 @@ function matchesAssetMode(item) {
     || rel.includes('/bd2viewer-nikke/')
     || rel === '.bd2viewer-nikke' || rel.startsWith('.bd2viewer-nikke/')
     || rel.includes('/.bd2viewer-nikke/')
+  if (S.mode === 'al') {
+    // 碧蓝航线只认整理后的三层：角色/… 与 图鉴/…。别的游戏的骨架不混进来。
+    return rel.startsWith('角色/') || rel.startsWith('图鉴/')
+  }
   if (S.mode === 'jczx') {
     // 交错战线这一档有两种素材（2026-10-02 实测，用户两种都有）：
     //   ① 散装 jczx 资源：只认解包缓存 `bd2viewer-jczx/`
@@ -2276,7 +2492,7 @@ function matchesAssetMode(item) {
 
 function allItems() {
   const base = [...S.customItems, ...S.items].filter(matchesAssetMode)
-  if (S.mode === 'nikke' || S.mode === 'ark' || S.mode === 'jczx') {
+  if (S.mode === 'nikke' || S.mode === 'ark' || S.mode === 'jczx' || S.mode === 'al') {
     // nikke：藏姿势变体；ark：藏同一角色的其它形态；jczx：藏其它形态 **和 mod 变体**
     // （都挂在主条目 members 上，见 R18 / R25）
     //
@@ -2285,13 +2501,13 @@ function allItems() {
     // 提成 TDZ 依赖。真正需要变的是「mod 条目算不算可见」，那件事由
     // jczxViewFor() 一次性算清两组 key，allItems 只做集合判断。
     const view = nikkeViewFor()
-    if (S.mode === 'jczx' && filters.modsOnly) {
+    if ((S.mode === 'jczx' || S.mode === 'al') && filters.modsOnly) {
       // mod 档：形态仍归组（一个角色的多个皮肤一张卡），但卡片内容换成 mod 那条，
       // 原图层收起来。view.modCardKeys 给出「哪个 mod 条目当这张卡的内容」。
       const keep = view.modCardKeys
       return base.filter(i => !view.variantKeys.has(itemKey(i)) || keep.has(itemKey(i)))
     }
-    if (S.mode === 'jczx' && view.modCardKeys) {
+    if ((S.mode === 'jczx' || S.mode === 'al') && view.modCardKeys) {
       // 常规档：**两个集合都要藏**。modCardKeys 是「被折进主条目 mod 链的那些 mod」
       // （原图 → mod1 → mod2 循环切换），它们在常规档不该各占一张卡。
       // ⚠️ 早先只按 variantKeys 过滤 → 1152 个 mod 条目全露着，网格 1349 张卡里
@@ -2321,11 +2537,31 @@ function allItems() {
 
 let layerView = null   // { src, mode, hiddenKeys } —— S.items 或 S.mode 变了就重算
 
-/** `Lobby_Merlin_B` → { id: 'Lobby_Merlin', side: 'B' }；不匹配返回 null。 */
+/** Lost Sword：`Lobby_Merlin_B` → { id: 'Lobby_Merlin', side: 'B' }；不匹配返回 null。 */
 function layerPartsOf(base) {
   const m = /^(.*)_([BF])$/.exec(String(base || ''))
   return m ? { id: m[1], side: m[2] } : null
 }
+
+/* ---------------- 碧蓝航线（al）：多层骨架 `_B`/`_M`/`_T`（R40）
+   实测图鉴里 6794 个骨架中有 **16 组 BMT + 28 组 BT**，同一个目录里成组出现：
+     diliyasite_3B.skel（6 个槽位，全叫 BG-*＝背景）
+     diliyasite_3M.skel（11 个槽位＝中层）
+     diliyasite_3T.skel（109 个槽位＝人物）
+   游戏里三层叠着画。以前它们各自成一张卡，用户点开第一张（B）**只看到场景、没有人**
+   —— 这就是「的里雅斯特原皮完全没有渲染人物」的真相（跟 Live2D 无关）。
+
+   归组口径与 R19 的 Lost Sword 完全一致（同目录 + 同前缀 + 不同的层字母；只有一层时不归组）：
+   · 条目本体取**最上面那层**（T > M > B），`layerItems` 挂从下到上的成员表；
+   · 其余层从可见列表里藏掉，播放时一起渲染（见 loadSpine38Member）。 */
+
+/** AL 多层骨架的基名 → { id, layer }；认不出返回 null。
+ *  ⚠️ 字母**紧跟在名字后面**（`diliyasite_3T`），不是 `_T` 那种下划线写法。 */
+function alLayerPartsOf(base) {
+  const m = /^(.*[^BMT])([BMT])$/.exec(String(base || ''))
+  return m ? { id: m[1], layer: m[2] } : null
+}
+const AL_LAYER_ORDER = { B: 0, M: 1, T: 2 }
 
 function layerViewFor() {
   if (layerView && layerView.src === S.items && layerView.mode === S.mode) return layerView
@@ -2348,6 +2584,9 @@ function layerViewFor() {
       hiddenKeys.add(itemKey(g.B))
     }
   }
+  /* ⚠️ 碧蓝航线的多层骨架（`_B`/`_M`/`_T`）**不在这里**归组：AL 的可见性走
+     `nikkeViewFor()` 的 variantKeys / modCardKeys（filteredItems 对 al 档只读那一个），
+     放进这个只在 lostsword 生效的集合里等于没做。见 nikkeViewFor 里那段 R40 预处理。 */
   layerView = { src: S.items, mode: S.mode, hiddenKeys }
   return layerView
 }
@@ -2375,6 +2614,9 @@ function layerViewFor() {
    （server / ScanEngine / 前端）都得维护同一份分组语义；放前端一处就够了。 */
 
 let nikkeView = null   // { src, mode, variantKeys } —— S.items 或 S.mode 变了就重算
+/** R40：碧蓝航线多层骨架里「不是最上面那层」的条目（形态归组与 mod 链都要跳过它们）。
+ *  由 `nikkeViewFor()` 每次重算时先填好，`buildJczxModChains()` 读它。 */
+let alLayerSkip = new Set()
 
 /** 'c022_aim_00' → {id:'c022', pose:'aim'}；'c022_00' → {id:'c022', pose:'normal'}；
  *  认不出尾缀时整个基名就是 id（pose=normal）。id 本身可以带下划线。 */
@@ -2394,6 +2636,44 @@ function nikkeViewFor() {
     && nikkeView.modsOnly === !!filters.modsOnly) return nikkeView
   const variantKeys = new Set()
   const modCardKeys = new Set()   // 「只看 Mod」档里要当卡露出来的条目
+  /* ---------------- 碧蓝航线（al）：多层骨架 `_B`/`_M`/`_T` 先并成一条（R40）
+     同一个目录里 `<X>_B` / `<X>_M` / `<X>_T` 是**三套骨架**（B=背景、M=中层、T=人物），
+     游戏里叠着画成一张图。它们路径同目录 ⇒ `alInfoOf()` 给出的 pose 键**完全一样**，
+     下面「同 pose 只留第一条」会把 M/T 直接丢掉，留下的还是字母序最靠前的 **B**
+     （实测只有 6 个 `BG-*` 槽位）—— 用户报的「的里雅斯特原皮完全没有渲染人物、
+     只渲染了场景」就是这个：卡片点开是背景层。
+
+     所以在这里先按「目录 + 前缀」把三层并成一条：
+       · 代表取**最上面那层**（T > M > B），`layerItems` 挂从下到上的成员表；
+       · 其余层进 `alLayerSkip`（不参与形态归组、也不进 mod 链）与 `variantKeys`
+         （可见列表里不再各占一张卡）。
+     ⚠️ 必须在 `buildJczxModChains()` **之前**跑完 —— 它也要读 `alLayerSkip`。 */
+  alLayerSkip = new Set()
+  if (S.mode === 'al') {
+    const layerGroups = new Map()
+    for (const it of S.items) {
+      if (it.kind === 'live2d' || it.imageOnly) continue
+      const p = alLayerPartsOf(it.base)
+      if (!p) continue
+      const dir = String(it.relAtlas || '').split('/').slice(0, -1).join('/')
+      const gk = dir + '|' + p.id
+      let g = layerGroups.get(gk)
+      if (!g) { g = {}; layerGroups.set(gk, g) }
+      if (!g[p.layer]) g[p.layer] = it
+    }
+    for (const g of layerGroups.values()) {
+      const sides = Object.keys(g)
+      if (sides.length < 2) continue                  // 只有一层：不归组，照旧单独成卡
+      const ordered = sides.slice().sort((a, b) => AL_LAYER_ORDER[a] - AL_LAYER_ORDER[b])
+      const top = g[ordered[ordered.length - 1]]
+      top.layerItems = ordered.map(s => g[s])         // 从下到上
+      for (const s of ordered) {
+        if (g[s] === top) continue
+        alLayerSkip.add(itemKey(g[s]))
+        variantKeys.add(itemKey(g[s]))
+      }
+    }
+  }
   if (S.mode === 'nikke') {
     const groups = new Map()
     const sorted = [...S.items].sort((a, b) =>
@@ -2474,7 +2754,8 @@ function nikkeViewFor() {
   }
   // 声明在函数级：末尾要把 jczx 的中间结果挂进 nikkeView（排障用，见 __bd2viewer.jczxView）
   let modChains = null
-  if (S.mode === 'jczx') {
+  if (S.mode === 'al') annotateAlItems(S.items)
+  if (S.mode === 'jczx' || S.mode === 'al') {
     // 交错战线图鉴（R25）：**两层**归组。
     //
     //   第一层（形态）：一个角色目录下的多个 bundle 是同一角色的不同皮肤/形态
@@ -2537,6 +2818,7 @@ function nikkeViewFor() {
     for (const it of sorted) {
       const ak = it && it.ark
       if (!ak || !ak.charId) continue
+      if (alLayerSkip.has(itemKey(it))) continue     // R40：多层骨架的非顶层不参与形态归组
       const key = ak.charId
       let grp = groups.get(key)
       if (!grp) { grp = []; groups.set(key, grp) }
@@ -2579,8 +2861,80 @@ function nikkeViewFor() {
     }
   }
   nikkeView = { src: S.items, mode: S.mode, variantKeys, modCardKeys, modsOnly: !!filters.modsOnly }
-  if (S.mode === 'jczx') { nikkeView.chains = modChains.chains; nikkeView.drop = modChains.drop }
+  if (S.mode === 'jczx' || S.mode === 'al') { nikkeView.chains = modChains.chains; nikkeView.drop = modChains.drop }
   return nikkeView
+}
+
+/**
+ * 碧蓝航线整理树的路径就是归组信息，扫描端不必再挂一份元数据。
+ *   角色/<id>__<中文名>/<皮肤N>/原皮/<形态>/<文件>
+ *   角色/<id>__<中文名>/<皮肤N>/modN/<包名>@@<形态>/<文件>
+ * 同一角色收成一张卡，皮肤是形态；同皮肤同形态的原皮/mod 走 mod 链。
+ */
+function alInfoOf(rel, kindTag) {
+  const seg = String(rel || '').replace(/\\/g, '/').split('/')
+  if ((seg[0] !== '角色' && seg[0] !== '图鉴') || seg.length < 5) return null
+  const leaf = seg[1] || ''
+  const cut = leaf.indexOf('__')
+  const charId = cut >= 0 ? leaf.slice(0, cut) : leaf
+  const charName = cut >= 0 ? leaf.slice(cut + 2) : leaf
+  const skin = seg[2] || ''
+  const layer = seg[3] || ''
+  const layerKind = layer === '原皮' ? 'source' : 'mod'
+  const layerIndex = layer === '原皮' ? 0 : (parseInt(String(layer).replace(/\D/g, ''), 10) || 1)
+  let variant = ''
+  let modId = ''
+  if (seg.length > 5) {
+    const slot = seg[4]
+    if (layerKind === 'mod' && slot.includes('@@')) {
+      const i = slot.lastIndexOf('@@')
+      modId = slot.slice(0, i)
+      variant = slot.slice(i + 2)
+    } else if (layerKind === 'mod') modId = slot
+    else variant = slot
+  }
+  const num = /^皮肤(\d+)$/.exec(skin)
+  const sort = num ? num[1].padStart(3, '0') : `z-${skin}`
+  // 同一形态目录里 Spine 和 Live2D 会叠在一起。pose 带种类，避免一张卡把另一张藏掉。
+  const tag = kindTag === 'l2d' ? 'l2d' : 'spine'
+  const pose = `${sort}__${variant || 'main'}__${tag}`
+  const formLabel = (variant ? `${skin} / ${variant}` : skin) + (tag === 'l2d' ? ' · Live2D' : '')
+  return {
+    charId, charName, skin, layer, layerKind, layerIndex, variant, modId, pose, formLabel,
+    targetKey: `${charId}|${pose}`,
+  }
+}
+
+function alKindTag(it) {
+  return (it && (it.kind === 'live2d' || it.skeletonKind === 'live2d')) ? 'l2d' : 'spine'
+}
+
+function isLive2dItem(it) {
+  return !!(it && (it.kind === 'live2d' || it.skeletonKind === 'live2d'))
+}
+
+function annotateAlItems(items) {
+  for (const it of items || []) {
+    const info = alInfoOf(it && it.relAtlas, alKindTag(it))
+    if (!info) continue
+    it.ark = {
+      charId: info.charId,
+      charName: info.charName || info.charId,
+      formBundle: info.pose,
+      formLabel: info.formLabel,
+      isDefaultForm: info.layerKind === 'source' && info.skin === '皮肤1',
+      isCarrier: info.layerKind === 'source' && info.skin === '皮肤1',
+    }
+    it.jczx = {
+      layer: info.layer,
+      layerKind: info.layerKind,
+      layerIndex: info.layerIndex,
+      layerLabel: info.layer,
+      modId: info.modId,
+      targetId: info.charId,
+      targetKey: info.targetKey,
+    }
+  }
 }
 
 /* ---------------- JCZX：mod 变体链（R25） ----------------
@@ -2597,6 +2951,10 @@ function buildJczxModChains(items) {
   for (const it of items) {
     const j = it && it.jczx
     if (!j || !j.targetKey) continue
+    // ⚠️ 碧蓝航线的多层骨架（R40）是**同一套资产的三层**，不是 mod 变体：它们同名同键，
+    //    混进 mod 链会让「链里的非第一份」被当成可切 mod 藏起来（实测：T 层被塞进
+    //    modCardKeys → 卡片直接从可见列表里消失）。三层由 `layerItems` 统一带走。
+    if (alLayerSkip.has(itemKey(it))) continue
     let arr = byKey.get(j.targetKey)
     if (!arr) { arr = []; byKey.set(j.targetKey, arr) }
     arr.push(it)
@@ -3271,14 +3629,19 @@ function thumbCacheLookup(item) {
   return null
 }
 
-/* IndexedDB：缩略图比 localStorage 大得多，放这儿不会撑爆 5MB 配额 */
+/* IndexedDB：缩略图比 localStorage 大得多，放这儿不会撑爆 5MB 配额。
+   v2 起多一个 `scan` 仓库：存上一次的扫描结果，冷启动先贴出来（见 scan() 里的注释）。 */
 let idbPromise = null
 function idb() {
   if (idbPromise) return idbPromise
   idbPromise = new Promise((resolve, reject) => {
     try {
-      const rq = indexedDB.open('bd2viewer', 1)
-      rq.onupgradeneeded = () => { rq.result.createObjectStore('thumbs') }
+      const rq = indexedDB.open('bd2viewer', 2)
+      rq.onupgradeneeded = () => {
+        const db = rq.result
+        if (!db.objectStoreNames.contains('thumbs')) db.createObjectStore('thumbs')
+        if (!db.objectStoreNames.contains('scan')) db.createObjectStore('scan')
+      }
       rq.onsuccess = () => resolve(rq.result)
       rq.onerror = () => reject(rq.error)
     } catch (e) { reject(e) }
@@ -3289,22 +3652,24 @@ function idb() {
   return idbPromise
 }
 
-async function idbGet(key) {
+async function idbGet(key, store) {
   const db = await idb()
   if (!db) return null
+  const name = store || 'thumbs'
   return new Promise(resolve => {
     try {
-      const rq = db.transaction('thumbs').objectStore('thumbs').get(key)
+      const rq = db.transaction(name).objectStore(name).get(key)
       rq.onsuccess = () => resolve(rq.result || null)
       rq.onerror = () => resolve(null)
     } catch { resolve(null) }
   })
 }
 
-async function idbPut(key, value) {
+async function idbPut(key, value, store) {
   const db = await idb()
   if (!db) return
-  try { db.transaction('thumbs', 'readwrite').objectStore('thumbs').put(value, key) } catch { /* ignore */ }
+  const name = store || 'thumbs'
+  try { db.transaction(name, 'readwrite').objectStore(name).put(value, key) } catch { /* ignore */ }
 }
 
 /** 资产被删掉后把它的缩略图也清掉，不然缓存会一直攒着没用的图 */
@@ -3507,7 +3872,7 @@ function handleBack() {
     else confirm.hidden = true
     return done('confirm')
   }
-  for (const id of ['settingsModal', 'uploadModal', 'helpModal', 'cardMenu']) {
+  for (const id of ['settingsModal', 'uploadModal', 'helpModal', 'changelogModal', 'cardMenu']) {
     const m = $(id)
     if (m && !m.hidden) { m.hidden = true; return done('modal:' + id) }
   }
@@ -3709,17 +4074,20 @@ function openCardMenu(item) {
   $('cardMenu').hidden = false
 }
 
-/** 二次确认；resolve(true) = 用户确认。删除不可恢复，所以清单必须摆出来。 */
-function confirmDelete(items) {
+/** 二次确认；resolve(true) = 用户确认。删除不可恢复，所以清单必须摆出来。
+ *  `opts.title` 换标题、`opts.note` 往警告下面追加一行说明（播放页姿势 / mod 的右键删除用）。 */
+function confirmDelete(items, opts) {
   return new Promise(resolve => {
     const mask = $('confirmModal')
     const list = $('confirmList')
     const diskCount = items.filter(isDiskItem).length
 
-    $('confirmTitle').textContent = items.length === 1 ? t('删除这个资产？') : t('删除 {n} 个资产？', { n: items.length })
-    $('confirmWarn').innerHTML = diskCount
+    $('confirmTitle').textContent = (opts && opts.title) ||
+      (items.length === 1 ? t('删除这个资产？') : t('删除 {n} 个资产？', { n: items.length }))
+    $('confirmWarn').innerHTML = (diskCount
       ? t('⚠️ 此操作非常危险，可能导致不可逆的数据丢失！<br>将<b>真正删除磁盘上的 {n} 套资产文件</b>（atlas / skeleton / 贴图），无法恢复。', { n: diskCount })
-      : t('这些是本次会话上传的资产，移除后需要重新上传。')
+      : t('这些是本次会话上传的资产，移除后需要重新上传。'))
+      + ((opts && opts.note) ? '<br>' + opts.note : '')
 
     list.innerHTML = ''
     for (const it of items) {
@@ -3772,19 +4140,29 @@ function confirmDelete(items) {
 }
 
 /** 交给原生 / 服务端真删磁盘文件。两边都返回 {deleted:[relAtlas..], failed:[{relAtlas,reason}]}
- *  NIKKE 分组条目（R18）在这里摊开成成员 —— 变体的文件跟主条目一起删。 */
+ *  NIKKE 分组条目（R18）在这里摊开成成员 —— 变体的文件跟主条目一起删。
+ *  ⚠️ 碧蓝航线的多层骨架（R40 的 `_B`/`_M`/`_T`）也要在这里摊开：卡片是**一套资产**，
+ *  只删本体那层的骨架会留下背层/中层的文件残渣。按 relAtlas 去重，免得和「按目录删」
+ *  那条路（modFolderItems 已经把三层都收进来了）重复下单。 */
 async function removeItemsOnDisk(items) {
   const payload = []
+  const seen = new Set()
+  const add = (it) => {
+    if (!it) return
+    const rel = it.relAtlas || it.id || ''
+    const key = rel + '|' + (it.relSkeleton || '')
+    if (seen.has(key)) return
+    seen.add(key)
+    payload.push({
+      relAtlas: rel,
+      relSkeleton: it.relSkeleton || null,
+      relThumb: it.relThumb || null,
+      relImages: it.relImages || [],
+    })
+  }
   for (const i of items) {
-    for (const m of (Array.isArray(i.members) ? i.members : [i])) {
-      const it = m.item || m
-      payload.push({
-        relAtlas: it.relAtlas || it.id || '',
-        relSkeleton: it.relSkeleton || null,
-        relThumb: it.relThumb || null,
-        relImages: it.relImages || [],
-      })
-    }
+    for (const m of (Array.isArray(i.members) ? i.members : [i])) add(m.item || m)
+    for (const l of (Array.isArray(i.layerItems) ? i.layerItems : [])) add(l.item || l)
   }
   if (NATIVE) {
     const raw = window.BD2Native.deleteItems(S.rootId || '', JSON.stringify(payload))
@@ -3863,6 +4241,110 @@ async function runDelete(items) {
     showError(t('有 {n} 个资产没能删除：', { n: failed.length }) + failed.map(f => f.reason || f.relAtlas).join('；'))
   }
   toast(gone.size ? t('已删除 {n} 个资产', { n: gone.size }) : t('没有资产被删除'))
+}
+
+/**
+ * 「这个 mod 文件夹下的全部文件」——按**目录**收，而不是只收链上那一条。
+ * 为什么不能只删露出来的那条：①`jczxModDedupe` 会把同一个 mod 的「解包缓存版」藏起来（drop），
+ * 但它仍然躺在磁盘上；②一个 mod 目录里常常同时放了好几个形态的 atlas。
+ * 只删一条 = 目录里留一堆删不掉的残渣，下次扫描又冒出来。
+ *
+ * 原皮也能右键删（2026-10-04 用户纠正）：真实布局里 `皮肤N/` 下面 `原皮` 与 `mod3`/`mod4`
+ * 是**平行**目录，按目录删原皮只会删掉 `原皮/` 自己，不会碰到 mod。所以那条
+ * 「排除 source」**只在目标是 mod 时**才生效 —— 删 mod 不该顺手把原图删了（零成本兜底），
+ * 而删原皮时它自己就该被收进来。
+ * @returns {Array} 至少含传入的那一条（目录取不到 / 没匹配到时退回它自己）
+ */
+function modFolderItems(modItem) {
+  const dirOf = it => {
+    const r = String((it && (it.relAtlas || it.id)) || '')
+    return r.includes('/') ? r.slice(0, r.lastIndexOf('/')) : ''
+  }
+  const dir = dirOf(modItem)
+  if (!dir) return [modItem]
+  const wantSource = !!(modItem && modItem.jczx && modItem.jczx.layerKind === 'source')
+  const out = []
+  for (const it of S.items) {
+    if (!isDiskItem(it)) continue
+    if (!wantSource && it.jczx && it.jczx.layerKind === 'source') continue
+    if (dirOf(it) === dir) out.push(it)
+  }
+  return out.length ? out : [modItem]
+}
+
+/**
+ * 播放页 POSE / MOD 上的右键删除。两个入口共用一套：
+ * 先过 `confirmDelete` 那道**带文件清单**的二次确认（删除不可恢复，清单必须摆给人核对），
+ * 删完再**重算归组** —— `members` / `mods` 是挂在上一次归组结果上的，删完就旧了，
+ * 不重算会出现「卡还在、姿势条还列着刚删掉的姿势」这种半截状态。
+ */
+async function deleteLayerFromButton(items, title, note) {
+  const list = (items || []).filter(Boolean).filter(isDiskItem)
+  if (!list.length) {
+    toast(t('这些是本次会话上传的资产，请到平铺页选中后移除'))
+    return
+  }
+  if (!await confirmDelete(list, { title, note })) return
+  /* ⚠️ 删之前先把 `members` 摘掉再交给 runDelete。
+     `removeItemsOnDisk()` 对带 `members` 的条目会**摊开成全部成员**（那是「删整张卡」的口径，
+     卡片菜单 / 批量选择走的就是它）。但这两个右键的语义是「**只删这个文件夹 / 这一个姿势**」——
+     实测（2026-10-04）不摘的话，删 al 的「原皮」会把**同一张卡其它形态**的文件也列进去
+     （`皮肤1/mod3/...` 冒出来，而它根本不在原皮目录里）。 */
+  const leaves = list.map(it => (it && Array.isArray(it.members) && it.members.length)
+    ? Object.assign({}, it, { members: undefined })
+    : it)
+  await runDelete(leaves)
+  // 归组重算：`members` / `mods` 挂在上一次归组结果上，删完就旧了
+  nikkeViewFor()
+  layerViewFor()
+  renderPoseBar()
+  renderModBar()
+  resyncAfterLayerDelete()
+}
+
+/**
+ * 删完把「当前在播的那一层」扶正：姿势和 mod 各退一步到**还活着**的那一个。
+ *
+ * ⚠️ 不能简单把 `currentPose` 打回默认、`currentMod` 置 null 就完事 —— 右键删的往往
+ *    正是**你正在看的那一格**（原皮 / 某个 mod），而「退回去的那一格」也可能已经没了：
+ *    al 的 `皮肤N/` 下面 `原皮` 与 `mod3` 是平行目录，删掉原皮之后，「默认姿势」指向的
+ *    那条可能也正好是它。那样 `loadCurrent()` 会去读一个不存在的文件，界面直接报错。
+ *    所以这里逐级找「还活着的」：当前 → 默认 → 第一个。
+ */
+function resyncAfterLayerDelete() {
+  const cur = S.current
+  if (!cur) return
+  const live = new Set(S.items.map(itemKey))
+  const members = (Array.isArray(cur.members) && cur.members.length) ? cur.members : null
+  const itemOfPose = pose => {
+    if (pose === 'normal') return cur
+    const m = members ? members.find(x => x.pose === pose) : null
+    return m ? (m.item || cur) : null
+  }
+  let changed = false
+  // ① 姿势：当前的不在 → 退到第一个还活着的
+  if (members) {
+    const want = S.currentPose || defaultPoseOf(cur)
+    const use = itemOfPose(want)
+    if (!use || !live.has(itemKey(use))) {
+      const alt = members.map(m => m.pose).find(pe => {
+        const it = itemOfPose(pe)
+        return !!(it && live.has(itemKey(it)))
+      })
+      if (alt) { S.currentPose = alt; changed = true }
+    }
+  }
+  // ② mod：当前的不在 → 退到链上第一个还活着的（`null` = 原图层那条）
+  const chain = modChainOf(cur)
+  if (chain && chain.length) {
+    const curOk = !S.currentMod || live.has(String(S.currentMod))
+    if (!curOk) {
+      const alive = chain.find(m => live.has(itemKey(m)))
+      S.currentMod = alive ? itemKey(alive) : null
+      changed = true
+    }
+  }
+  if (changed) loadCurrent()
 }
 
 /** 当前选中的根是否允许从配置列表移除（安卓自动目录 __* 不可移除）。 */
@@ -4043,7 +4525,7 @@ function galleryCard(item) {
     ? t('尚未解包')
     : item.imageOnly
       ? t('CG · {n} 张', { n: (item.images || []).length })
-      : ((S.mode === 'ark' || S.mode === 'jczx') && item.ark ? arkCardSub(item)
+      : ((S.mode === 'ark' || S.mode === 'jczx' || S.mode === 'al') && item.ark ? arkCardSub(item)
         : item.base + (item.skeletonKind ? `.${item.skeletonKind}` : '') +
           t(' · {n} 图', { n: (item.images || []).length }))
 
@@ -4062,7 +4544,11 @@ function galleryCard(item) {
   // 有现成的就绝不进队列（以前缓存命中仍 observe，偶发会重渲）。
   const lookup = thumbCacheLookup(item)
   const builtin = builtinThumbUrl(item)
-  const stillUrl = item.imageOnly && item.relImages && item.relImages[0] ? assetUrl(item.relImages[0]) : null
+  // ⚠️ Live2D **不能**拿第一张贴图当卡面：那是 Cubism 的贴图集（眼睛/头发/身体拆开
+  // 铺在一张图上），贴上去是「零件图」而不是播放页里拼好的那个人。它要和正片用同一个
+  // 运行时渲一帧（makeLive2dThumb）。只有纯图片资产（imageOnly）才走这条捷径。
+  const stillUrl = item.imageOnly && item.relImages && item.relImages[0]
+    ? assetUrl(item.relImages[0]) : null
   if (lookup && lookup.url) setCardThumb(thumb, lookup.url)
   else if (lookup && lookup.failed) setCardThumbFailed(thumb)
   else if (builtin) setCardThumb(thumb, builtin)
@@ -4099,6 +4585,7 @@ function galleryCard(item) {
   })
 
   // 已有缓存 / 失败标记 / 磁盘 thumb.png / 尚未解包占位：都不进离屏渲染队列
+  // （Live2D 现在也进队列 —— 见上面 stillUrl 那条注释）
   if (!item.pendingUnpack && !item.imageOnly && !(lookup && (lookup.url || lookup.failed)) && !builtin) {
     if (thumbObserver) thumbObserver.observe(el)
     else el.__wantThumb = true
@@ -4209,6 +4696,9 @@ function setCardThumbFailed(box) {
  */
 async function makeThumb(item, size = 220) {
   const urls = urlsForItem(item)
+  // 碧蓝航线的 Live2D（Cubism moc3）：正片用的是 pixi + cubism4，卡面也必须用同一套
+  // 运行时渲一帧。第一张贴图是拆开的贴图集，贴上去是零件图（R30 ⑤ 已改）。
+  if (isLive2dItem(item)) return makeLive2dThumb(item, size)
   // 离屏播放器用到的 blob（3.x→4.x 转换产物）在本函数结束时回收 —— 缩略图队列
   // 和主播放器可能同时在跑，所以用局部数组，不碰主播放器那份。
   const thumbBlobs = []
@@ -4241,7 +4731,14 @@ async function makeThumb(item, size = 220) {
   // 旧世代的**二进制**骨架没有对应运行时：与其拿 4.x 硬读出一张坏图（还会浪费一次
   // 离屏渲染），直接判失败让卡片走「无缩略图」占位 —— 点进去时正片会给那句明确提示。
   // （JSON 的 3.x 已被上面的转换救回来，spineMinorFor 会报 4.1，不会走到这里。）
-  if (minor && !/^4\.[012]$/.test(minor)) throw new Error(t('不支持的 Spine 版本：{v}', { v: minor }))
+  if (minor && !/^4\.[012]$/.test(minor)) {
+    // 碧蓝航线的 3.8 **二进制**能播（pixi-spine），卡面也照渲，只是走另一条离屏路径
+    if (item.skeletonKind === 'skel' && minor === '3.8') {
+      for (const u of thumbBlobs) { try { URL.revokeObjectURL(u) } catch { /* ignore */ } }
+      return makeSpine38Thumb(item, urls, size)
+    }
+    throw new Error(t('不支持的 Spine 版本：{v}', { v: minor }))
+  }
   const rt = spineRuntimeForVer(minor)
 
   const host = document.createElement('div')
@@ -4380,26 +4877,162 @@ async function makeThumb(item, size = 220) {
         canvas = off
       } catch { /* 合成失败就用本体那张 */ }
     }
-    // 内存/IndexedDB 仍用 jpeg（体积小）；磁盘 thumb.png 用最终合成图的 PNG（需求 5 / R19）
-    let url = null
-    let pngUrl = null
-    try { url = canvas.toDataURL('image/jpeg', 0.62) } catch { url = null }
-    try { pngUrl = canvas.toDataURL('image/png') } catch { pngUrl = null }
-    if (!url) throw new Error(t('缩略图渲染失败'))
-    // 落盘失败不挡卡面：内存缓存照常可用；下次扫描仍会重渲
-    // ⚠️ 落盘会**往用户的资产目录里写文件**（需求 5：生成后放一个 thumb.png 免得重复加载）。
-    // 自动化测试必须关掉它（__bd2viewer.setThumbPersist(false)）—— 否则跑一次测试就在
-    // 用户的 mods 目录里多出一堆 thumb.png（2026-10-02 实测：本机被写进 124 个），
-    // 而且会改掉「有多少资产需要生成缩略图」这个前提，让测试自己把自己搞脆。
-    if (pngUrl && (thumbPersist || thumbForceWrite.has(thumbKey(item)))) {
-      thumbForceWrite.delete(thumbKey(item))
-      try { await persistThumbPng(item, pngUrl) } catch { /* ignore */ }
-    }
-    return url
+    return await finishThumbCanvas(item, canvas)
   } finally {
     try { host.__backPlayer?.dispose() } catch { /* ignore */ }
     try { host.__backHost?.remove() } catch { /* ignore */ }
     cleanup()
+  }
+}
+
+/**
+ * 缩略图最后一步：画布 → data URL（+ 按需落盘）。三条离屏路径（4.x / 3.8 / Live2D）共用，
+ * 免得「落盘开关」和「jpeg/png 双份」在三处各写一遍。
+ */
+async function finishThumbCanvas(item, canvas) {
+  // 内存/IndexedDB 仍用 jpeg（体积小）；磁盘 thumb.png 用最终合成图的 PNG（需求 5 / R19）
+  let url = null
+  let pngUrl = null
+  try { url = canvas.toDataURL('image/jpeg', 0.62) } catch { url = null }
+  try { pngUrl = canvas.toDataURL('image/png') } catch { pngUrl = null }
+  if (!url) throw new Error(t('缩略图渲染失败'))
+  // 落盘失败不挡卡面：内存缓存照常可用；下次扫描仍会重渲
+  // ⚠️ 落盘会**往用户的资产目录里写文件**（需求 5：生成后放一个 thumb.png 免得重复加载）。
+  // 自动化测试必须关掉它（__bd2viewer.setThumbPersist(false)）—— 否则跑一次测试就在
+  // 用户的 mods 目录里多出一堆 thumb.png（2026-10-02 实测：本机被写进 124 个），
+  // 而且会改掉「有多少资产需要生成缩略图」这个前提，让测试自己把自己搞脆。
+  if (pngUrl && (thumbPersist || thumbForceWrite.has(thumbKey(item)))) {
+    thumbForceWrite.delete(thumbKey(item))
+    try { await persistThumbPng(item, pngUrl) } catch { /* ignore */ }
+  }
+  return url
+}
+
+/** 把透明底的 WebGL 画布合成到「有底色的 2D 画布」上 —— 和现有卡面观感一致 */
+function flattenThumbCanvas(canvas) {
+  try {
+    const off = document.createElement('canvas')
+    off.width = canvas.width
+    off.height = canvas.height
+    const c = off.getContext('2d')
+    c.fillStyle = S.bgColor || '#1f2937'
+    c.fillRect(0, 0, off.width, off.height)
+    c.drawImage(canvas, 0, 0)
+    return off
+  } catch { return canvas }
+}
+
+/**
+ * 碧蓝航线的 Spine 3.8 二进制缩略图：和正片同一套 pixi-spine，渲一帧就销毁。
+ * 以前 makeThumb 对 3.8 直接抛「不支持的 Spine 版本」，卡片上永远是个「无法生成」占位。
+ */
+async function makeSpine38Thumb(item, urls, size = 220) {
+  const PIXI = window.PIXI
+  if (!PIXI || typeof PIXI.Application !== 'function') throw new Error(t('播放运行时没载入'))
+  if (!urls || !urls.atlasUrl || !urls.skeletonUrl) throw new Error(t('读不到骨架文件'))
+  const mounted = mountOffscreenPixiApp(size, Math.round(size * 0.72))
+  const { app, host } = mounted
+  let built = null
+  try {
+    built = await loadSpine38Skeleton(item, urls, PIXI)
+    const { spine, data } = built
+    spine.autoUpdate = false
+    const skinNames = (data.skins || []).map(s => s && s.name).filter(Boolean)
+    if (skinNames.length) {
+      const skin = skinNames.includes('default') ? 'default' : skinNames[0]
+      try {
+        spine.skeleton.setSkinByName(skin)
+        spine.skeleton.setSlotsToSetupPose()
+      } catch { /* 单皮肤失败不影响出图 */ }
+    }
+    const animNames = (data.animations || []).map(a => a && a.name).filter(Boolean)
+    app.stage.addChild(spine)
+    const name = animNames.find(n => /idle/i.test(n)) || animNames[0] || null
+    if (name) {
+      try { spine.state.setAnimation(0, name, true) } catch { /* 用绑定姿势 */ }
+    }
+    // 走进动画一点点，避开绑定姿势/起始空帧
+    spine.update(0.25)
+    fitPixiDisplay(app, spine, spine.getLocalBounds())
+    // 贴图是异步上传的：头一帧可能还没画上去，多渲几次再取
+    for (let i = 0; i < 3; i++) {
+      app.render()
+      await new Promise(r => requestAnimationFrame(r))
+    }
+    return await finishThumbCanvas(item, flattenThumbCanvas(app.view))
+  } finally {
+    if (built) { try { built.atlas.dispose() } catch { /* ignore */ } }
+    destroyPixiApp(app)
+    host.remove()
+  }
+}
+
+/**
+ * 碧蓝航线的 Live2D 动作里有 **`PartOpacity` 曲线**（实测爱宕 `mail.motion3.json`：
+ * 106 条 Parameter + **11 条 PartOpacity**，Id 是 `Part17`/`Part20`/`Part22`/…）。
+ * 那是「手/手臂/头发这些**同一部件的多套变体**只留一套」的开关：曲线把不用的那套压到 0。
+ *
+ * ⚠️⚠️ Cubism 框架里这条曲线默认**不生效**：`CubismConfig.setOpacityFromMotion = false`
+ * （见 cubism4.min.js），此时 `CubismMotion.updateParameters` 走 else 分支，把曲线值写进
+ * **同名参数**（`getParameterIndex('Part17')`）—— 而 AL 的部件叫 `PartNN`、参数叫 `Param*`，
+ * 两边对不上 ⇒ `-1 → continue` ⇒ **曲线被静默丢弃**，变体一套都没淡出。
+ * 用户截图（2026-10-05）：「爱宕 皮肤2 原皮 · mail」画面上出现**第三只手**，就是这个。
+ *
+ * 所以启动时把这个开关打开。只对**碧蓝航线档**打开：那批模型是 AL 自己导的、部件名就是
+ * `PartNN`；别的档（BD2 / Lost Sword 的 Live2D）沿用框架默认（老行为），免得它们的动作里
+ * 恰好有同名「参数」曲线时被改掉。开关是全局的，但每次动作更新都会读 → 切档时跟着变。
+ * @returns {boolean} 是否真的打开了（排障/测试要能看出来）
+ */
+function enableLive2dPartOpacityFromMotion() {
+  const PIXI = window.PIXI
+  const cfg = PIXI && PIXI.live2d && PIXI.live2d.CubismConfig
+  if (!cfg) return false
+  cfg.setOpacityFromMotion = S.mode === 'al'
+  return cfg.setOpacityFromMotion === true
+}
+
+/**
+ * 碧蓝航线 / Live2D（Cubism moc3）缩略图：和正片同一套 pixi + cubism4，渲一帧就销毁。
+ * 以前卡面直接贴 `relImages[0]`（Cubism 贴图集），看起来是「零件图」而不是拼好的人。
+ *
+ * ⚠️ `autoUpdate: false` 不能省：库的默认 true 会在 Ticker 上挂一个监听，缩略图这一帧
+ * 也要；而且 `Ticker.shared.add` 不去重，挂两次就是 2 倍速（见 loadLive2dMember 那条注释）。
+ */
+async function makeLive2dThumb(item, size = 220) {
+  const PIXI = window.PIXI
+  if (!window.Live2DCubismCore || !PIXI || !PIXI.live2d || !PIXI.live2d.Live2DModel) {
+    throw new Error(t('Live2D 运行时没载入'))
+  }
+  enableLive2dPartOpacityFromMotion()
+  const rel = item.relModel || item.relAtlas
+  const url = assetUrl(rel)
+  if (!url) throw new Error(t('读不到骨架文件：') + (rel || ''))
+  const mounted = mountOffscreenPixiApp(size, Math.round(size * 0.72))
+  const { app, host } = mounted
+  let model = null
+  try {
+    model = await PIXI.live2d.Live2DModel.from(url, { autoInteract: false, autoUpdate: false })
+    app.stage.addChild(model)
+    // 摆到 idle（没有就用动作表第一项）—— 直接渲绑定姿势的话表情/头发都是初始态
+    const table = live2dMotionTable(model, item)
+    const firstName = table.names.find(n => /^idle$/i.test(n)) || table.names[0]
+    const spec = firstName ? table.map.get(firstName) : null
+    if (spec) { try { await model.motion(spec.group, spec.index) } catch { /* 用默认姿势 */ } }
+    fitPixiDisplay(app, model, model.getLocalBounds())
+    // 库的时间推进是「update(dt) 累加 → 渲染时消费」，所以先累加再 render 才有中间帧
+    for (let i = 0; i < 3; i++) {
+      model.update(120)
+      app.render()
+      await new Promise(r => requestAnimationFrame(r))
+    }
+    return await finishThumbCanvas(item, flattenThumbCanvas(app.view))
+  } finally {
+    if (model) {
+      try { model.autoUpdate = false } catch { /* ignore */ }
+      try { model.destroy() } catch { /* ignore */ }
+    }
+    destroyPixiApp(app)
+    host.remove()
   }
 }
 
@@ -4882,7 +5515,7 @@ async function rebuildThumbs(onlyItem) {
     const item = c.__item
     if (onlyKey && (!item || itemKey(item) !== onlyKey)) continue
     const box = c.querySelector('.card-thumb')
-    if (item && (item.imageOnly || item.pendingUnpack || !item.ok)) {
+    if (item && (item.imageOnly || item.pendingUnpack || isLive2dItem(item) || !item.ok)) {
       c.__wantThumb = false
       continue
     }
@@ -4944,6 +5577,10 @@ async function persistThumbPng(item, pngDataUrl) {
 /** 资产目录里自带的缩略图（Lost Sword 的 thumb.png）。没有就返回 null。
  *  有了它就不用开离屏播放器渲一帧 —— 更快，而且不受「骨架坏 / GL 上下文用满」影响。 */
 function builtinThumbUrl(item) {
+  // ⚠️ Live2D 条目的磁盘缩略图**只能**是落盘过的 thumb.png，不能是第一张贴图
+  // （Cubism 贴图集 = 拆开的零件图）。服务端 appendAlLive2d 已经不再拿 relImages[0]
+  // 顶 relThumb；这里再挡一道，免得别的发射端（Android ScanEngine）抄了旧写法。
+  if (item && isLive2dItem(item) && item.relThumb && !/thumb\.png$/i.test(item.relThumb)) return null
   return item && item.relThumb ? assetUrl(item.relThumb) : null
 }
 
@@ -5005,6 +5642,8 @@ function urlsForItem(item) {
  *  NIKKE 解包缓存（bd2viewer-nikke，UnityFS 抽出的是 4.1 二进制）→ 4.1；
  *  其余 NIKKE（标准导出）→ 4.0；其它 → 4.1。 */
 function modeDefaultSpineMinor(item) {
+  // 碧蓝航线图鉴的 .skel 是 Spine 3.8.99。头没读到时不要丢给 4.1，否则报的是看不懂的解析错。
+  if (S.mode === 'al') return '3.8'
   if (S.mode === 'jczx') return '4.1'
   if (S.mode === 'nikke') {
     // 解包缓存是 4.1；误用 4.0 运行时读 4.1 .skel → 动画列表空 →「这个骨架里没有任何动画」
@@ -5306,6 +5945,40 @@ function applySkeletonCfg(cfg, urls, compat) {
   else if (urls.skeletonUrl) cfg.binaryUrl = urls.skeletonUrl
 }
 
+/** Spine 3.8 二进制头：变长字符串 hash 后面才是 "3.8.99"。与 server spine38MinorFromHead 同一口径。 */
+function spine38MinorFromHead(buf) {
+  if (!buf || buf.length < 8) return null
+  const readStr = (offset) => {
+    if (offset < 0 || offset >= buf.length) return null
+    let i = offset
+    let b = buf[i++]
+    let result = b & 0x7f
+    let shift = 7
+    while (b & 0x80) {
+      if (shift > 21 || i >= buf.length) return null
+      b = buf[i++]
+      result |= (b & 0x7f) << shift
+      shift += 7
+    }
+    if (result === 0 || result === 1) return { text: '', next: i }
+    const len = result - 1
+    if (len <= 0 || len > 64 || i + len > buf.length) return null
+    let s = ''
+    for (let k = 0; k < len; k++) {
+      const c = buf[i + k]
+      if (c < 32 || c > 126) return null
+      s += String.fromCharCode(c)
+    }
+    return { text: s, next: i + len }
+  }
+  const hash = readStr(0)
+  if (!hash || hash.text.length < 8) return null
+  const ver = readStr(hash.next)
+  if (!ver) return null
+  const m = /^3\.(\d+)\.\d+$/.exec(ver.text)
+  return m ? `3.${m[1]}` : null
+}
+
 async function spineMinorFor(item) {
   const jsonKind = !!(item && item.skeletonKind === 'json')
   // ⚠️ 这里**不能**对 NIKKE 缓存一律钉死 4.1。
@@ -5374,7 +6047,7 @@ async function spineMinorFor(item) {
       const reader = res.body.getReader()
       let buf = new Uint8Array(0)
       try {
-        while (buf.length < 32) {
+        while (buf.length < 64) {
           const { value, done } = await reader.read()
           if (done) break
           const merged = new Uint8Array(buf.length + value.length)
@@ -5387,7 +6060,7 @@ async function spineMinorFor(item) {
         try { await reader.cancel() } catch { /* 已经读完/已取消 */ }
       }
     } else {
-      head = new Uint8Array(await res.arrayBuffer()).slice(0, 32)
+      head = new Uint8Array(await res.arrayBuffer()).slice(0, 64)
     }
   } catch { /* 分流这条路不通（个别 WebView 对拦截响应不给 body 流）→ 下面整读兜底 */ }
 
@@ -5396,14 +6069,15 @@ async function spineMinorFor(item) {
     try {
       const res = await fetch(url)
       if (!res.ok) return (item._spineMinor = fallback())
-      head = new Uint8Array(await res.arrayBuffer()).slice(0, 32)
+      head = new Uint8Array(await res.arrayBuffer()).slice(0, 64)
     } catch {
       return (item._spineMinor = fallback())
     }
   }
 
-  // 优先按 Spine 二进制布局读： [0..7] hash、[8] 长度、[9..] "4.x.y\0"
+  // 优先按 Spine 4.x 布局读： [0..7] hash、[8] 长度、[9..] "4.x.y\0"
   // 全头正则可能被 hash 字节里碰巧出现的 "4.0.x" 误导（解包 4.1 却判成 4.0）。
+  // 3.8 不是这个布局（版本串在变长 hash 之后，常超过第 32 字节），对不上再走 spine38MinorFromHead。
   let ver = null
   if (head.length > 10) {
     // 长度字节的编码是「实际长度 + 1」：0 = null、1 = 空串。所以字符数 = head[8] - 1。
@@ -5417,9 +6091,10 @@ async function spineMinorFor(item) {
         s += String.fromCharCode(c)
       }
       const vm = /^(\d+)\.(\d+)\.\d+$/.exec(s)
-      if (vm) ver = vm[1] === '4' ? `4.${vm[2]}` : `${vm[1]}.x`
+      if (vm && vm[1] === '4') ver = `4.${vm[2]}`
     }
   }
+  if (!ver) ver = spine38MinorFromHead(head)
   // 头对不上就用模式默认值。不要在 hash 字节里再搜 "4.x.y"：
   // 解包出来的 4.1 骨架经常被碰巧的 "4.0.xx" 判成 4.0，动画列表就是空的。
   return (item._spineMinor = ver || fallback())
@@ -5569,6 +6244,706 @@ function defaultPoseOf(item) {
   return n ? 'normal' : item.members[0].pose
 }
 
+/* ------------------------------------------------------------------ pixi 播放器
+   碧蓝航线：Spine 3.8 二进制走 pixi-spine，Cubism moc3 走 pixi-live2d-display。
+   两套都不进 SpinePlayer / OrthoCamera。捏合只改播放框里的显示对象，不放大整页。 */
+
+function pixiStale(gen) { return gen !== pixiLoadGen }
+
+function destroyPixiApp(app) {
+  if (!app) return
+  try { app.destroy(true, { children: true, texture: true, baseTexture: true }) } catch { /* ignore */ }
+}
+
+function mountPixiApp() {
+  const PIXI = window.PIXI
+  if (!PIXI || typeof PIXI.Application !== 'function') throw new Error(t('播放运行时没载入'))
+  const host = $('playerHost')
+  host.innerHTML = ''
+  const app = new PIXI.Application({
+    backgroundAlpha: 0,
+    transparent: true,
+    antialias: true,
+    autoDensity: true,
+    resolution: Math.min(window.devicePixelRatio || 1, 2),
+    resizeTo: host,
+    preserveDrawingBuffer: true,
+  })
+  const canvas = app.view
+  canvas.style.backgroundColor = 'transparent'
+  canvas.style.touchAction = 'none'
+  host.appendChild(canvas)
+  try { app.resize() } catch { /* 舞台还没尺寸时下一帧再量 */ }
+  return { PIXI, app, canvas, host }
+}
+
+/** 离屏缩略图用的 pixi：固定尺寸、不挂在 #playerHost 上、透明底。
+ *  ⚠️ 每张卡渲完必须 destroyPixiApp（WebGL 上下文数量有限）。 */
+function mountOffscreenPixiApp(w, h) {
+  const PIXI = window.PIXI
+  if (!PIXI || typeof PIXI.Application !== 'function') throw new Error(t('播放运行时没载入'))
+  const host = document.createElement('div')
+  host.style.cssText = `position:fixed;left:0;top:0;width:${w}px;height:${h}px;` +
+    'pointer-events:none;opacity:0;z-index:-1'
+  document.body.appendChild(host)
+  const app = new PIXI.Application({
+    width: Math.max(w, 2),
+    height: Math.max(h, 2),
+    backgroundAlpha: 0,
+    transparent: true,
+    antialias: true,
+    autoDensity: false,
+    resolution: 1,
+    preserveDrawingBuffer: true,
+  })
+  host.appendChild(app.view)
+  return { PIXI, app, canvas: app.view, host }
+}
+
+function refitPixiWhenSized(app, display, bounds, gen) {
+  if (!app || app.screen.width >= 2 && app.screen.height >= 2) return
+  requestAnimationFrame(() => {
+    if (pixiStale(gen)) return
+    try { app.resize() } catch { /* ignore */ }
+    fitPixiDisplay(app, display, bounds)
+  })
+}
+
+/** 多层（AL 的 B/M/T）版：舞台尺寸到位后每层都要重新取景，否则只有本体对、背层歪着。 */
+function refitPixiLayersWhenSized(app, layers, bounds, gen) {
+  if (!app || app.screen.width >= 2 && app.screen.height >= 2) return
+  requestAnimationFrame(() => {
+    if (pixiStale(gen)) return
+    try { app.resize() } catch { /* ignore */ }
+    for (const l of layers) fitPixiDisplay(app, l.spine, bounds)
+  })
+}
+
+/** 多层叠着画时的取景框 = 各层 localBounds 的**并集**（背层常比本体宽，只按本体量会切掉）。 */
+function unionPixiBounds(displays) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
+  for (const d of displays) {
+    let b = null
+    try { b = d && d.getLocalBounds ? d.getLocalBounds() : null } catch { b = null }
+    if (!b || !isFinite(b.x) || !isFinite(b.y) || !isFinite(b.width) || !isFinite(b.height)) continue
+    x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y)
+    x1 = Math.max(x1, b.x + b.width); y1 = Math.max(y1, b.y + b.height)
+  }
+  if (!isFinite(x0)) return { x: 0, y: 0, width: 1, height: 1 }
+  return { x: x0, y: y0, width: Math.max(x1 - x0, 1), height: Math.max(y1 - y0, 1) }
+}
+
+function fitPixiDisplay(app, display, bounds) {
+  const w = Math.max(app.screen.width, 1)
+  const h = Math.max(app.screen.height, 1)
+  const bw = Math.max(bounds && bounds.width, 1)
+  const bh = Math.max(bounds && bounds.height, 1)
+  const s = Math.min(w / bw, h / bh) * 0.9
+  const bx = bounds && Number.isFinite(bounds.x) ? bounds.x : 0
+  const by = bounds && Number.isFinite(bounds.y) ? bounds.y : 0
+  display.scale.set(s)
+  display.x = w / 2 - (bx + bw / 2) * s
+  display.y = h / 2 - (by + bh / 2) * s
+  display.__home = { x: display.x, y: display.y, s }
+}
+
+/** pixi-spine：按 `S.hidden` 收起/放回槽位容器。
+ *  ⚠️ 必须**双向**（隐藏 + 恢复），而且要只恢复「我们自己藏过的」：
+ *   ① 旧写法只在命中时 `box.visible = false`，从不设回 true —— 取消勾选后容器仍是 invisible，
+ *      图层再也回不来（取消勾选只走 `slot.color.a` 那条路，对容器不生效）；
+ *   ② 也不能无脑 `visible = true`：pixi-spine 自己会把「没有附件的槽位」设成不可见，
+ *      那样会把空容器翻出来。
+ *  所以记一份「我藏过的下标」，只对自己的动作负责。 */
+function hidePixiSlots(spine) {
+  if (!spine || !spine.skeleton) return
+  const ours = spine.__hiddenByUs || (spine.__hiddenByUs = new Set())
+  if ((!S.hidden || !S.hidden.size) && !ours.size) return
+  const slots = spine.skeleton.slots || []
+  for (let i = 0; i < slots.length; i++) {
+    const n = slots[i].data && slots[i].data.name
+    const box = spine.slotContainers && spine.slotContainers[i]
+    if (!box || !n) continue
+    if (S.hidden.has(n)) {
+      if (box.visible) box.visible = false
+      ours.add(i)
+    } else if (ours.has(i)) {
+      box.visible = true
+      ours.delete(i)
+    }
+  }
+}
+
+/** 框内捏合：缩放比跟指距成正比，锚在两指中点。单指在捏合期间不平移。 */
+function attachPixiGestures(canvas, display) {
+  if (detachCameraGestures) { detachCameraGestures(); detachCameraGestures = null }
+  if (!canvas || !display) return () => {}
+  const host = canvas.closest('#stageInner') || canvas
+  canvas.style.touchAction = 'none'
+  host.style.touchAction = 'none'
+  const points = new Map()
+  let gesture = null
+  let mouse = null
+
+  const place = (start, midX, midY, newS) => {
+    if (!(newS > 0) || !Number.isFinite(newS)) return
+    const localX = (midX - start.x) / (start.s || 1)
+    const localY = (midY - start.y) / (start.s || 1)
+    display.scale.set(newS)
+    display.x = midX - localX * newS
+    display.y = midY - localY * newS
+  }
+  const baseline = () => {
+    const fs = [...points.values()]
+    if (fs.length >= 2) {
+      const a = fs[0], b = fs[1]
+      gesture = {
+        mode: 'pinch',
+        x: display.x, y: display.y, s: display.scale.x || 1,
+        dist: Math.hypot(b.x - a.x, b.y - a.y),
+      }
+    } else if (fs.length === 1) {
+      gesture = {
+        mode: 'pan',
+        x: display.x, y: display.y, s: display.scale.x || 1,
+        sx: fs[0].x, sy: fs[0].y,
+      }
+    } else gesture = null
+  }
+  const applyFingers = () => {
+    if (!gesture) return
+    const fs = [...points.values()]
+    if (gesture.mode === 'pinch' && fs.length >= 2) {
+      const d = Math.hypot(fs[1].x - fs[0].x, fs[1].y - fs[0].y)
+      if (!(gesture.dist > 0.5) || !(d > 0.5)) return
+      place(gesture, (fs[0].x + fs[1].x) / 2, (fs[0].y + fs[1].y) / 2, gesture.s * (d / gesture.dist))
+    } else if (gesture.mode === 'pan' && fs.length === 1) {
+      display.x = gesture.x + (fs[0].x - gesture.sx)
+      display.y = gesture.y + (fs[0].y - gesture.sy)
+    }
+  }
+  const eachTouch = (list, fn) => {
+    for (let i = 0; i < list.length; i++) fn(list.item(i))
+  }
+  const onTouchStart = (ev) => {
+    eachTouch(ev.changedTouches, tch => points.set(tch.identifier, localTouch(canvas, tch)))
+    baseline()
+    ev.preventDefault()
+  }
+  const onTouchMove = (ev) => {
+    eachTouch(ev.touches, tch => {
+      if (points.has(tch.identifier)) points.set(tch.identifier, localTouch(canvas, tch))
+    })
+    applyFingers()
+    ev.preventDefault()
+  }
+  const onTouchEnd = (ev) => {
+    eachTouch(ev.changedTouches, tch => points.delete(tch.identifier))
+    baseline()
+    ev.preventDefault()
+  }
+  const onMouseDown = (ev) => {
+    if (ev.button !== 0 || points.size) return
+    const p = localTouch(canvas, ev)
+    mouse = { x: display.x, y: display.y, sx: p.x, sy: p.y }
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
+  }
+  const onMouseMove = (ev) => {
+    if (!mouse) return
+    const p = localTouch(canvas, ev)
+    display.x = mouse.x + (p.x - mouse.sx)
+    display.y = mouse.y + (p.y - mouse.sy)
+  }
+  const onMouseUp = () => {
+    mouse = null
+    document.removeEventListener('mousemove', onMouseMove)
+    document.removeEventListener('mouseup', onMouseUp)
+  }
+  const onWheel = (ev) => {
+    if (points.size) return
+    let delta = ev.deltaY
+    if (ev.deltaMode === 1) delta *= 8
+    if (ev.deltaMode === 2) delta *= 24
+    const p = localTouch(canvas, ev)
+    const start = { x: display.x, y: display.y, s: display.scale.x || 1 }
+    place(start, p.x, p.y, start.s * Math.exp(-delta / 200))
+    ev.preventDefault()
+  }
+  host.addEventListener('touchstart', onTouchStart, { passive: false })
+  host.addEventListener('touchmove', onTouchMove, { passive: false })
+  host.addEventListener('touchend', onTouchEnd, { passive: false })
+  host.addEventListener('touchcancel', onTouchEnd, { passive: false })
+  host.addEventListener('mousedown', onMouseDown)
+  host.addEventListener('wheel', onWheel, { passive: false })
+  const detach = () => {
+    host.removeEventListener('touchstart', onTouchStart)
+    host.removeEventListener('touchmove', onTouchMove)
+    host.removeEventListener('touchend', onTouchEnd)
+    host.removeEventListener('touchcancel', onTouchEnd)
+    host.removeEventListener('mousedown', onMouseDown)
+    host.removeEventListener('wheel', onWheel)
+    document.removeEventListener('mousemove', onMouseMove)
+    document.removeEventListener('mouseup', onMouseUp)
+    if (detachCameraGestures === detach) detachCameraGestures = null
+  }
+  detachCameraGestures = detach
+  return detach
+}
+
+function pageUrlForSpine(item, urls, pageName) {
+  const raw = (urls && urls.rawDataURIs) || {}
+  if (raw[pageName]) return raw[pageName]
+  const base = String(pageName || '').split('/').pop()
+  if (base && raw[base]) return raw[base]
+  if (item && item.relAtlas && base) return assetUrl(String(item.relAtlas).replace(/[^/]+$/, base))
+  return null
+}
+
+function pixiZoomBy(display, factor) {
+  if (!display || !(factor > 0)) return
+  const canvas = display.__canvas
+  const r = canvas ? canvas.getBoundingClientRect() : { width: 1, height: 1 }
+  const midX = (r.width || 1) / 2
+  const midY = (r.height || 1) / 2
+  const start = { x: display.x, y: display.y, s: display.scale.x || 1 }
+  const newS = start.s * factor
+  const localX = (midX - start.x) / (start.s || 1)
+  const localY = (midY - start.y) / (start.s || 1)
+  display.scale.set(newS)
+  display.x = midX - localX * newS
+  display.y = midY - localY * newS
+}
+
+function finishPixiSession(shim, gen) {
+  if (pixiStale(gen)) {
+    try { shim.dispose() } catch { /* ignore */ }
+    return
+  }
+  S.player = shim
+  S.camera = null
+  S.animations = shim.animNames.slice()
+  S.skins = shim.skinNames.slice()
+  S.slots = shim.slotNames.slice()
+  renderAnimList()
+  renderSkinSelect()
+  renderPoseBar()
+  renderModBar()
+  renderArkStatics()
+  renderArkVoices()
+  renderLayerList()
+  syncStageNav()
+  const pick = pickDefaultAnimation()
+  if (pick) shim.animationState.setAnimation(0, pick, S.loop)
+  else if (shim.kind !== 'live2d') showError(t('这个骨架里没有任何动画'))
+  renderAnimList()
+  attachPixiGestures(shim.canvas, shim.display)
+  applyBgAlpha(true)
+  $('emptyState').hidden = true
+  setBusy(false)
+  setLoadProgress(null)
+  setPlaying(S.autoPlay)
+  updatePlayButton()
+  updateProgressReadout()
+}
+
+/** 3.8 二进制的「图集 + 骨架数据 + Spine 对象」：播放页和离屏缩略图共用一份（R30），
+ *  免得「怎么读 3.8 的头 / 怎么喂 DataView」在两处各写一遍。
+ *  atlas 由调用方处置（播放页随 app 一起销毁；缩略图渲完立刻 dispose）。
+ *  stale() 返回 true 表示这次加载已经过期（用户切走了）→ 返回 null，调用方负责收尾。 */async function loadSpine38Skeleton(member, urls, PIXI, stale) {
+  const ps = PIXI.spine
+  if (!ps || !ps.SkeletonBinary || !ps.TextureAtlas || !ps.Spine) {
+    throw new Error(t('Spine 3.8 运行时没载入'))
+  }
+  if (!urls || !urls.atlasUrl || !urls.skeletonUrl) throw new Error(t('读不到骨架文件'))
+  const atlasRes = await fetch(urls.atlasUrl)
+  if (!atlasRes.ok) throw new Error('atlas HTTP ' + atlasRes.status)
+  const atlasText = await atlasRes.text()
+  const skelRes = await fetch(urls.skeletonUrl)
+  if (!skelRes.ok) throw new Error('skel HTTP ' + skelRes.status)
+  // ⚠️ 必须是自己拥有 ArrayBuffer 的 Uint8Array：pixi-spine 的 DataView 不看 byteOffset，
+  // 切片视图会从头读错（bd2 的 4.x 那条路没有这个问题）。
+  const skelBytes = new Uint8Array(await skelRes.arrayBuffer())
+  if (stale && stale()) return null
+  const atlas = await new Promise((resolve, reject) => {
+    new ps.TextureAtlas(atlasText, (pageName, cb) => {
+      const url = pageUrlForSpine(member, urls, pageName)
+      if (!url) { cb(null); return }
+      const bt = PIXI.BaseTexture.from(url, {
+        alphaMode: S.premultiplied ? PIXI.ALPHA_MODES.PMA : PIXI.ALPHA_MODES.NPM,
+      })
+      const done = () => cb(bt)
+      if (bt.valid) done()
+      else {
+        bt.once('loaded', done)
+        bt.once('error', () => cb(null))
+      }
+    }, (result) => (result ? resolve(result) : reject(new Error(t('图集贴图加载失败')))))
+  })
+  if (stale && stale()) {
+    try { atlas.dispose() } catch { /* ignore */ }
+    return null
+  }
+  const parser = new ps.SkeletonBinary(new ps.AtlasAttachmentLoader(atlas))
+  const data = parser.readSkeletonData(skelBytes)
+  return { data, atlas, spine: new ps.Spine(data) }
+}
+
+/** AL（碧蓝航线）的 Spine 3.8 常常是**多层导出**：同一目录里 `<X>_B` / `<X>_M` / `<X>_T`
+ *  是三套骨架（B=背景、M=中层、T=人物/前景），游戏里叠着画成一张图（见 R40）。
+ *  单独打开任何一层都是残的 —— 实测的里雅斯特 `_3B` 只有 6 个槽位且全叫 `BG-*`，
+ *  `_3T` 才有 109 个槽位（人物）。这正是用户报的「原皮只渲染了场景」。
+ *
+ *  约定：`item.layerItems` 是**从下到上**排好的成员表（前端归组时挂上，见 layerViewFor），
+ *  `item` 自己是**最上面那层**（人物那层）。没挂就按单层处理。
+ *  @returns {object[]} member 列表，从下到上 */
+function spine38LayerPlan(member) {
+  const items = (member && Array.isArray(member.layerItems) && member.layerItems.length)
+    ? member.layerItems.slice()
+    : [member]
+  const list = items.filter(Boolean)
+  const i = list.indexOf(member)
+  if (i >= 0 && i !== list.length - 1) { list.splice(i, 1); list.push(member) }
+  return list.length ? list : [member]
+}
+
+async function loadSpine38Member(member, urls, gen) {
+  let app = null
+  try {
+    const mounted = mountPixiApp()
+    app = mounted.app
+    const PIXI = mounted.PIXI
+    if (pixiStale(gen)) { destroyPixiApp(app); return }
+    /* AL 的 Spine 3.8 常常是**多层导出**（`<X>_B/_M/_T` 三套骨架，见 R40）：
+       一起加载、按 B→M→T 的顺序加进同一个 stage（后加的画在上面）。
+       任一背层加载失败只丢那一层，本体照常（R19 ⑤）。 */
+    const plan = spine38LayerPlan(member)
+    const layers = []
+    const animNames = []
+    const slotNames = []
+    for (const m of plan) {
+      const u = (m === member && urls) ? urls : urlsForItem(m)
+      const built = await loadSpine38Skeleton(m, u, PIXI, () => pixiStale(gen))
+      if (!built) {
+        if (m === member) { destroyPixiApp(app); return }
+        continue
+      }
+      const sp = built.spine
+      sp.autoUpdate = false
+      const skins = (built.data.skins || []).map(s => s && s.name).filter(Boolean)
+      if (skins.length) {
+        const skin = skins.includes('default') ? 'default' : skins[0]
+        try {
+          sp.skeleton.setSkinByName(skin)
+          sp.skeleton.setSlotsToSetupPose()
+        } catch { /* 单皮肤失败不影响播放 */ }
+      }
+      for (const a of (built.data.animations || [])) {
+        if (a && a.name && !animNames.includes(a.name)) animNames.push(a.name)
+      }
+      for (const s of (built.data.slots || [])) {
+        if (s && s.name && !slotNames.includes(s.name)) slotNames.push(s.name)
+      }
+      sp.__canvas = mounted.canvas
+      sp.__atlas = built.atlas
+      app.stage.addChild(sp)
+      layers.push({
+        member: m,
+        spine: sp,
+        skeleton: sp.skeleton,
+        name: m.base || '',
+        data: built.data,
+        // 图层名按本层的骨架取（多层之间同名槽位会合并成一行，勾选时两层一起隐）
+        slotName: i => (sp.skeleton && sp.skeleton.slots[i] && sp.skeleton.slots[i].data
+          ? sp.skeleton.slots[i].data.name : null),
+      })
+    }
+    if (!layers.length) { destroyPixiApp(app); return }
+    // 本体（`member`）永远在最上面 —— 取景、动画进度、图层面板都以它为准
+    const primary = layers[layers.length - 1]
+    const spine = primary.spine
+    const data = primary.data
+    const skinNames = (data.skins || []).map(s => s && s.name).filter(Boolean)
+    const setAllAnim = (name, loop) => {
+      let entry = null
+      for (const l of layers) {
+        try { l.spine.state.setAnimation(0, name, !!loop) } catch { continue }
+        const e = l.spine.state.getCurrent(0)
+        if (e) e.trackTime = 0
+        if (l === primary && e) entry = e
+        l.spine.update(0)
+        hidePixiSlots(l.spine)
+      }
+      return entry
+    }
+    if (animNames.length) {
+      const first = animNames.includes('idle') ? 'idle' : animNames[0]
+      setAllAnim(first, true)                    // 取景前先摆一帧（每一层都摆）
+    }
+    // 取景用**各层并集**：背层常比本体宽，只按本体量会把背景切掉
+    const spineBounds = unionPixiBounds(layers.map(l => l.spine))
+    for (const l of layers) {
+      l.spine.update(0)
+      hidePixiSlots(l.spine)
+      fitPixiDisplay(app, l.spine, spineBounds)
+    }
+    refitPixiLayersWhenSized(app, layers, spineBounds, gen)
+    const shim = {
+      __pixi: true,
+      kind: 'spine38',
+      canvas: mounted.canvas,
+      app,
+      display: spine,
+      skeleton: spine.skeleton,
+      layers,
+      speed: S.speed || 1,
+      animNames,
+      skinNames,
+      slotNames,
+      animationState: {
+        setAnimation(_track, name, loop) { return setAllAnim(name, loop) },
+        getCurrent() { return spine.state.getCurrent(0) },
+        apply() {
+          for (const l of layers) {
+            l.spine.state.apply(l.skeleton)
+            l.skeleton.updateWorldTransform()
+            l.spine.update(0)
+            hidePixiSlots(l.spine)
+          }
+        },
+      },
+      play() { this.playing = true },
+      pause() { this.playing = false },
+      playing: false,
+      drawFrame() {
+        for (const l of layers) { l.spine.update(0); hidePixiSlots(l.spine) }
+        try { app.render() } catch { /* ignore */ }
+      },
+      onResize() { try { app.resize() } catch { /* ignore */ } },
+      // 缩放/复位要**每一层一起动**，否则多层会错位
+      zoomBy(factor) { for (const l of layers) pixiZoomBy(l.spine, factor) },
+      fitHome() {
+        for (const l of layers) {
+          const h = l.spine.__home
+          if (!h) continue
+          l.spine.scale.set(h.s)
+          l.spine.x = h.x
+          l.spine.y = h.y
+        }
+      },
+      dispose() { destroyPixiApp(app) },
+    }
+    app.ticker.add(() => {
+      // 高亮框每帧跟着 pixi 变换重画（缩放/平移/暂停都要跟）—— 见 syncPixiOverlay
+      syncPixiOverlay()
+      if (!shim.playing) return
+      const dt = (app.ticker.deltaMS / 1000) * (shim.speed || 1)
+      for (const l of layers) {
+        l.spine.update(dt)
+        hidePixiSlots(l.spine)
+      }
+      updateProgressReadout()
+    })
+    finishPixiSession(shim, gen)
+  } catch (err) {
+    destroyPixiApp(app)
+    if (pixiStale(gen)) return
+    setBusy(false)
+    setLoadProgress(null)
+    showError(t('载入失败：') + (err && err.message ? err.message : err))
+  }
+}
+
+function live2dMotionTable(model, member) {
+  const settings = model && model.internalModel && model.internalModel.settings
+  const motions = settings && settings.motions
+  const names = []
+  const map = new Map()
+  if (motions && typeof motions === 'object') {
+    for (const group of Object.keys(motions)) {
+      const arr = Array.isArray(motions[group]) ? motions[group] : []
+      if (!arr.length) {
+        names.push(group)
+        map.set(group, { group, index: 0 })
+        continue
+      }
+      arr.forEach((_m, i) => {
+        const name = arr.length > 1 ? `${group} #${i + 1}` : group
+        names.push(name)
+        map.set(name, { group, index: i })
+      })
+    }
+  }
+  if (!names.length && member && Array.isArray(member.live2dMotions)) {
+    for (const group of member.live2dMotions) {
+      names.push(group)
+      map.set(group, { group, index: 0 })
+    }
+  }
+  return { names, map }
+}
+
+async function loadLive2dMember(member, gen) {
+  let app = null
+  try {
+    const mounted = mountPixiApp()
+    app = mounted.app
+    const PIXI = mounted.PIXI
+    if (!window.Live2DCubismCore || !PIXI.live2d || !PIXI.live2d.Live2DModel) {
+      throw new Error(t('Live2D 运行时没载入'))
+    }
+    // 动作里的 PartOpacity 曲线（手部变体只留一套）必须先开开关，见函数注释
+    enableLive2dPartOpacityFromMotion()
+    const rel = member.relModel || member.relAtlas
+    const url = assetUrl(rel)
+    if (!url) throw new Error(t('读不到骨架文件：') + (rel || ''))
+    if (pixiStale(gen)) { destroyPixiApp(app); return }
+    // ⚠️ `autoUpdate: false` 不能省，也不能只写在初始化时。
+    // pixi-live2d-display 0.4.0 的 `set autoUpdate(true)` 就是一句 `Ticker.shared.add(...)`，
+    // **不去重**（pixi 6 的 _addListener 直接 connect 一个新监听），而 `autoUpdate` 的
+    // 默认值是 true → 创建时挂 1 个，finishPixiSession 的 setPlaying(true) 再挂 1 个，
+    // 一帧累加两次 deltaMS，动作/呼吸/物理一起变 2 倍（「看起来像开了倍速」）。
+    // 所以：创建时明确关掉，之后只在**当前不是**自动更新时才打开。
+    const model = await PIXI.live2d.Live2DModel.from(url, { autoInteract: false, autoUpdate: false })
+    let autoOn = false
+    if (pixiStale(gen)) {
+      try { model.destroy() } catch { /* ignore */ }
+      destroyPixiApp(app)
+      return
+    }
+    app.stage.addChild(model)
+    const b = model.getLocalBounds()
+    fitPixiDisplay(app, model, b)
+    refitPixiWhenSized(app, model, b, gen)
+    model.__canvas = mounted.canvas
+    const table = live2dMotionTable(model, member)
+    /* 图层 = Cubism 的**部件（part）**。
+       ⚠️ Framework 的 `CubismModel` 这一版**没有** `getDrawableParentPartIndex`
+       （把原型枚举出来确认过，2026-10-04），但**raw Core 的 `Model` 上有**
+       `drawables.parentPartIndices`（Int32Array）+ `parts.ids`（2026-10-05 实测），
+       「点中的网格属于哪个部件」因此是查得到的 —— 见 `pickLive2dLayersAt`。
+       部件名从 `_partIds` 取（与图层面板同源）；显隐走 `setPartOpacityByIndex(i, 0)`：
+       它会把该部件下面的 drawable 一起压到 0（实测 drawable opacity 1→0），
+       而且**不会被动作重算冲掉**（设 0 后 1.6s 仍是 0）。 */
+    const cm = model.internalModel.coreModel
+    const partNames = (Array.isArray(cm._partIds) ? cm._partIds : []).map(n => String(n || ''))
+    const partIndex = new Map()
+    partNames.forEach((n, i) => { if (n && !partIndex.has(n)) partIndex.set(n, i) })
+    /* 切动作必须显式传 FORCE 优先级 —— pixi-live2d-display 的 MotionPriority 是
+       NONE=0 / IDLE=1 / NORMAL=2 / FORCE=3，`model.motion(group, index)` 不传就是 NORMAL，
+       而 `MotionState.reserveMotion(priority)` 在 `currentPriority >= priority` 时
+       **直接返回 false**：已经有一个 NORMAL 的动作在播时，新的切动作请求会被**静默丢弃**
+       （Promise 不 reject、界面上的动画名照换），症状就是「点十次只有一次真的换动作」——
+       那一次还是上一个动作刚好播完、currentPriority 归 0 的瞬间。
+       实测（2026-10-04，绫波 皮肤10）：连续切 12 条动画，默认优先级 **0/12 生效**，
+       FORCE **12/12 生效**。 */
+    const MOTION_FORCE = (PIXI.live2d.MotionPriority && PIXI.live2d.MotionPriority.FORCE) || 3
+    const entry = { animation: { name: '', duration: 0 }, trackTime: 0, _motion: null }
+    const shim = {
+      __pixi: true,
+      kind: 'live2d',
+      canvas: mounted.canvas,
+      app,
+      display: model,
+      model,
+      speed: S.speed || 1,
+      animNames: table.names,
+      skinNames: [],
+      // 图层 = Cubism 部件名（上面那段注释解释了为什么只有名字、没有 drawable 映射）
+      slotNames: partNames.slice(),
+      parts: { names: partNames, index: partIndex, saved: new Map() },
+      _entry: entry,
+      animationState: {
+        setAnimation(_track, name, _loop) {
+          const spec = table.map.get(name)
+          entry.animation.name = name
+          entry.trackTime = 0
+          if (!spec) return entry
+          const token = pixiLoadGen
+          model.motion(spec.group, spec.index, MOTION_FORCE).then(() => {
+            if (token !== pixiLoadGen) return
+            const groups = model.internalModel && model.internalModel.motionManager
+              && model.internalModel.motionManager.motionGroups
+            const loaded = groups && groups[spec.group] && groups[spec.group][spec.index]
+            const dur = loaded && loaded._loopDurationSeconds
+            entry.animation.duration = dur > 0 ? dur : 0
+            entry._motion = loaded || null
+          }).catch((err) => {
+            if (token !== pixiLoadGen) return
+            showError(t('载入失败：') + (err && err.message ? err.message : err))
+          })
+          return entry
+        },
+        getCurrent() { return entry.animation.name ? entry : null },
+        apply() {},
+      },
+      // 只在**状态真的变了**时才去动 Ticker —— 重复设 true 会多挂一个监听（上面那条注释）
+      play() {
+        this.playing = true
+        if (autoOn) return
+        autoOn = true
+        try { model.autoUpdate = true } catch { /* ignore */ }
+      },
+      pause() {
+        this.playing = false
+        if (!autoOn) return
+        autoOn = false
+        try { model.autoUpdate = false } catch { /* ignore */ }
+      },
+      playing: false,
+      drawFrame() { try { app.render() } catch { /* ignore */ } },
+      onResize() { try { app.resize() } catch { /* ignore */ } },
+      zoomBy(factor) { pixiZoomBy(model, factor) },
+      fitHome() {
+        const h = model.__home
+        if (!h) return
+        model.scale.set(h.s)
+        model.x = h.x
+        model.y = h.y
+      },
+      seekFraction(frac) {
+        const d = entry.animation.duration || 0
+        if (!(d > 0)) return
+        entry.trackTime = Math.min(Math.max(frac, 0), 1) * d
+        const motion = entry._motion
+        if (motion && typeof motion.setOffsetTime === 'function') {
+          try { motion.setOffsetTime(entry.trackTime) } catch { /* 动作文件未必接受偏移 */ }
+        }
+      },
+      dispose() {
+        autoOn = false
+        try { model.autoUpdate = false } catch { /* ignore */ }
+        try { model.destroy() } catch { /* ignore */ }
+        destroyPixiApp(app)
+      },
+    }
+    const origUpdate = model.update.bind(model)
+    model.update = (dt) => {
+      origUpdate(dt * (shim.speed || 1))
+      // 每帧重放一次「被隐藏的部件」（R27 的教训：动作/更新会重算部件不透明度）。
+      // 只压隐藏的那些，可见部件照旧由动作驱动 —— 别反过来把可见的写回 1。
+      applyLive2dHidden(shim)
+    }
+    app.ticker.add(() => {
+      // 高亮框每帧跟着 pixi 变换重画（缩放/平移/暂停都要跟）—— 见 syncPixiOverlay
+      syncPixiOverlay()
+      if (!shim.playing) return
+      const d = entry.animation.duration || 0
+      if (d > 0) {
+        entry.trackTime += (app.ticker.deltaMS / 1000) * (shim.speed || 1)
+        if (entry.trackTime > d) entry.trackTime %= d
+      }
+      updateProgressReadout()
+    })
+    finishPixiSession(shim, gen)
+  } catch (err) {
+    destroyPixiApp(app)
+    if (pixiStale(gen)) return
+    setBusy(false)
+    setLoadProgress(null)
+    showError(t('载入失败：') + (err && err.message ? err.message : err))
+  }
+}
+
 async function loadCurrent() {
   const item = S.current
   if (!item) return
@@ -5581,7 +6956,7 @@ async function loadCurrent() {
   clearError()
   resetMeta()
 
-  $('currentName').textContent = (S.mode === 'ark' || S.mode === 'jczx') ? displayNameOf(item) : item.folder
+  $('currentName').textContent = (S.mode === 'ark' || S.mode === 'jczx' || S.mode === 'al') ? displayNameOf(item) : item.folder
   if (item.imageOnly) {
     const n = (item.relImages || []).length
     $('currentSub').textContent = [item.group, t('CG · {n} 张', { n })].filter(Boolean).join(' · ')
@@ -5595,8 +6970,8 @@ async function loadCurrent() {
   // NIKKE 姿势变体：副标题里写明当前加载的是哪个成员（c022_aim_00），别让人以为还在本体上
   // ⚠️ JCZX 是**两级**（形态 × mod 层），真正要播的条目是 activeSpineItemOf。
   // 后面所有 urlsForItem / 版本嗅探 / 缩略图都必须用「它」，不是 activeMemberOf。
-  const member = S.mode === 'jczx' ? activeSpineItemOf(item) : activeMemberOf(item)
-  const modLabel = S.mode === 'jczx' ? currentModLabel(item) : null
+  const member = (S.mode === 'jczx' || S.mode === 'al') ? activeSpineItemOf(item) : activeMemberOf(item)
+  const modLabel = (S.mode === 'jczx' || S.mode === 'al') ? currentModLabel(item) : null
   $('currentSub').textContent = S.mode === 'ark'
     // Ark：形态切换后副标题要跟着换（member 可能是另一个 bundle），形态名用 formLabel
     ? (() => {
@@ -5605,7 +6980,7 @@ async function loadCurrent() {
           ? t('{n} 个形态', { n: item.members.length }) : ''
         return [arkCurrentSub(Object.assign({}, item, { ark: mk })), forms].filter(Boolean).join(' · ')
       })()
-    : S.mode === 'jczx'
+    : (S.mode === 'jczx' || S.mode === 'al')
       // JCZX：形态数 + 当前 mod 层（图鉴那边叫「原spine / modN」）
       ? (() => {
           const mk = member && member.ark ? member.ark : item.ark
@@ -5621,6 +6996,12 @@ async function loadCurrent() {
   setBusy(true, t('载入中…'))
   setLoadProgress({ stage: t('阶段：加载骨架'), indeterminate: true })
 
+  const loadGen = pixiLoadGen
+  if (isLive2dItem(member)) {
+    await loadLive2dMember(member, loadGen)
+    return
+  }
+
   const urls = urlsForItem(member)
   // 手机 WebView 的 XHR arraybuffer 会把拦截到的 .skel 截断，4.1 运行时就读出空动画。
   // 二进制改走 data URI，播放器内部不再发 XHR。
@@ -5631,6 +7012,12 @@ async function loadCurrent() {
   // 是异步回调，期间用户可能已经切到别的资产并把 S.spine 改成另一套，只有实例上
   // 的那份不会错。__spineMinor 供 onLoaded 对照骨架自报版本，错世代时重载一次。
   const spineMinor = await spineMinorFor(member)
+  if (loadGen !== pixiLoadGen) return
+  // 碧蓝航线的二进制是 Spine 3.8。4.x 的 SkeletonBinary 读不了，改走 pixi-spine。
+  if (member.skeletonKind === 'skel' && spineMinor === '3.8') {
+    await loadSpine38Member(member, urls, loadGen)
+    return
+  }
   // 旧世代的**二进制**骨架：4.x 的 SkeletonBinary 读不了（会抛一句看不懂的话），
   // 与其给用户一条无从下手的报错，不如在初始化前说清楚。
   //
@@ -6058,7 +7445,11 @@ function stopArkVoice() {
   for (const b of document.querySelectorAll('#arkVoiceList .btn')) b.textContent = t('播放')
 }
 
+let pixiLoadGen = 0
+
 function disposePlayer() {
+  // 作废还在飞的 pixi 加载。晚到的成功回调不许再把播放器装回去。
+  pixiLoadGen++
   // 手势监听挂在 document 上（拖出画布也要继续跟手）。先拆掉，
   // 否则切资产后旧监听还按上一台相机改位置。
   if (detachCameraGestures) { detachCameraGestures(); detachCameraGestures = null }
@@ -6091,6 +7482,8 @@ function resetMeta() {
   S.selectedLayer = null
   // 换了资产/骨头，上一次「点选往下挪」的记忆必须清掉 —— 否则换了图还按旧 key 继续往下数
   resetLayerPickMemory()
+  // 「点中的是哪一块槽位」也跟着作废（它引用的是上一套骨架里的对象）
+  pickedSlotRefs = null
   S.bounds = null
   $('animList').innerHTML = ''
   $('skinSelect').innerHTML = ''
@@ -6464,7 +7857,11 @@ function syncBackLayer() {
 }
 
 function applyLayerVisibility(skeleton) {
-  if (!skeleton || !S.hidden.size) return
+  if (!S.hidden.size) return
+  // Live2D 的图层是 Cubism 部件，不走 skeleton.slots（见 loadLive2dMember 里那段说明）
+  const pl = S.player
+  if (pl && pl.kind === 'live2d') { applyLive2dHidden(pl); return }
+  if (!skeleton) return
   for (const slot of skeleton.slots) {
     const n = slot.data && slot.data.name
     if (!n || !S.hidden.has(n)) continue
@@ -6473,7 +7870,41 @@ function applyLayerVisibility(skeleton) {
   }
 }
 
+/** Live2D：把 `S.hidden` 里的部件不透明度压到 0。**幂等**，可以每帧重放。
+ *  隐藏前先记下原值 —— 部件的「默认不透明度」不一定是 1，恢复时要还回去。 */
+function applyLive2dHidden(shim) {
+  const cm = shim && shim.model && shim.model.internalModel && shim.model.internalModel.coreModel
+  const parts = shim && shim.parts
+  if (!cm || !parts || !S.hidden.size) return
+  for (const name of S.hidden) {
+    const i = parts.index.get(name)
+    if (i === undefined) continue
+    if (!parts.saved.has(name)) {
+      let cur = 1
+      try { cur = cm.getPartOpacityByIndex(i) } catch { /* 读不到就按 1 还 */ }
+      parts.saved.set(name, typeof cur === 'number' ? cur : 1)
+    }
+    try { cm.setPartOpacityByIndex(i, 0) } catch { /* 部件索引失效就算了 */ }
+  }
+}
+
+/** 把某个 Live2D 部件恢复成隐藏前的值。
+ *  @returns {boolean} false = 这不是 Live2D 的图层名（交给 Spine 那条路继续找） */
+function restoreLive2dAlpha(name) {
+  const shim = S.player
+  const cm = shim && shim.model && shim.model.internalModel && shim.model.internalModel.coreModel
+  const parts = shim && shim.parts
+  if (!cm || !parts) return false
+  const i = parts.index.get(name)
+  if (i === undefined) return false
+  const back = parts.saved.has(name) ? parts.saved.get(name) : 1
+  parts.saved.delete(name)
+  try { cm.setPartOpacityByIndex(i, back) } catch { /* ignore */ }
+  return true
+}
+
 function restoreLayerAlpha(name) {
+  if (restoreLive2dAlpha(name)) return
   const skeleton = S.player?.skeleton
   if (!skeleton) return
   const slot = skeleton.slots.find(s => s.data && s.data.name === name)
@@ -6530,7 +7961,7 @@ function playAnimation(name) {
  */
 function refitBounds(keepUserZoom) {
   const p = S.player
-  if (!p || !p.skeleton) return
+  if (!p || !p.skeleton || p.__pixi) return
   const ratio = keepUserZoom ? currentZoomRatio() : 1
   const cam = S.camera
   // 用户已经自己缩放或拖过视角：切动画时别把镜头拽回新动画的中心
@@ -6692,6 +8123,39 @@ function composeSkin(rt, data, name) {
 
 const POSE_LABEL = { normal: '普通', aim: '瞄准', cover: '掩体' }
 
+/* 「右键 / 长按」的等价入口 ----------------------------------------------------
+   播放页的姿势、MOD 按钮上右键能删层。**触屏上根本没有右键**，等价手势是长按
+   （项目里卡片早就是这个约定，R14：PC 右键 ≡ 触屏长按）。阈值也跟卡片那套靠齐。 */
+const ALT_HOLD_MS = 500
+const ALT_SLOP = 8
+let altFiredAt = 0
+/**
+ * 给一个按钮挂上「PC 右键 / 触屏长按」→ 同一个回调。
+ * ⚠️ 鼠标按住不动**不算**长按（那是选择文字/拖拽的手势，PC 上不该弹删除窗）；
+ *    只有 `pointerType !== 'mouse'` 才起长按计时。
+ * @param {HTMLElement} el
+ * @param {Function} fn 触发回调（弹删除确认窗）
+ */
+function bindAltAction(el, fn) {
+  el.oncontextmenu = e => { e.preventDefault(); e.stopPropagation(); altFiredAt = Date.now(); fn() }
+  let timer = null, sx = 0, sy = 0
+  const cancel = () => { if (timer) { clearTimeout(timer); timer = null } }
+  el.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'mouse') return
+    sx = e.clientX; sy = e.clientY
+    cancel()
+    timer = setTimeout(() => { timer = null; altFiredAt = Date.now(); fn() }, ALT_HOLD_MS)
+  })
+  el.addEventListener('pointermove', e => {
+    // 手指挪开就当滚动/滑走，放弃长按（与卡片的 MOVE_SLOP 同一套）
+    if (timer && Math.hypot(e.clientX - sx, e.clientY - sy) > ALT_SLOP) cancel()
+  })
+  el.addEventListener('pointerup', cancel)
+  el.addEventListener('pointercancel', cancel)
+}
+/** 长按刚触发后，抬手那一下 click 要吃掉 —— 否则会顺手把姿势/mod 也切了。 */
+function altActionSwallowed() { return Date.now() - altFiredAt < 800 }
+
 function renderPoseBar() {
   const bar = $('poseBar')
   const fsBar = $('fsPoseBar')
@@ -6718,7 +8182,14 @@ function renderPoseBar() {
       const raw = (m.form && m.form.formLabel) || POSE_LABEL[m.pose] || m.pose
       b.textContent = t(raw)
       b.title = m.form ? `${m.form.formBundle}（${m.form.animationCount == null ? '?' : m.form.animationCount} 个动画）` : ''
-      b.onclick = () => switchPose(m.pose)   // 全屏按钮也只调它，不要自己 loadCurrent
+      b.onclick = () => {
+        if (altActionSwallowed()) return   // 长按刚弹过删除窗，抬手那一下 click 不算
+        switchPose(m.pose)                 // 全屏按钮也只调它，不要自己 loadCurrent
+      }
+      // 右键（PC）/ 长按（触屏）= 删这个姿势。只删它自己那一套文件，不动同目录的其它姿势 ——
+      // NIKKE 的 `<id>_00` / `_aim_00` 就在同一个目录里，按目录删会把本体一起干掉。
+      bindAltAction(b, () => deleteLayerFromButton(
+        [m.item || S.current], t('删除这个姿势？'), t('只删除这个姿势自己的文件。')))
       return b
     }
     bar.appendChild(mkBtn())
@@ -6758,7 +8229,16 @@ function renderModBar() {
       const label = (m.jczx && m.jczx.layerLabel) || (isSrc ? '原图' : 'mod')
       b.textContent = t(label)
       b.title = m.relAtlas || ''
-      b.onclick = () => switchMod(k)
+      b.onclick = () => {
+        if (altActionSwallowed()) return   // 长按刚弹过删除窗，抬手那一下 click 不算
+        switchMod(k)
+      }
+      // 右键（PC）/ 长按（触屏）= 删这个**文件夹**下的全部文件。原皮那格同样给 ——
+      // 皮肤N/ 下面「原皮」与 mod3/mod4 是**平行**目录，按目录删原皮不会牵连任何 mod。
+      bindAltAction(b, () => deleteLayerFromButton(modFolderItems(m),
+        isSrc ? t('删除这个原皮文件夹？') : t('删除这个 mod 文件夹？'),
+        isSrc ? t('这个原皮文件夹下的全部文件都会被删除。')
+          : t('这个 mod 文件夹下的全部文件都会被删除。')))
       return b
     }
     bar.appendChild(mkBtn())
@@ -6795,6 +8275,16 @@ function renderSkinSelect() {
 function applySkin(name, opts) {
   const p = S.player
   if (!p || !p.skeleton) return
+  if (p.__pixi) {
+    try {
+      p.skeleton.setSkinByName(name)
+      p.skeleton.setSlotsToSetupPose()
+      if (p.drawFrame) p.drawFrame(false)
+    } catch (err) {
+      showError(t('切换皮肤失败：') + err.message)
+    }
+    return
+  }
   const redraw = !(opts && opts.redraw === false)
   const rt = p.__spineRt || activeSpine()
   try {
@@ -6958,6 +8448,8 @@ function renderLayerList() {
     row.onclick = e => {
       if (e.target.tagName === 'INPUT') return
       // 再点已选中的这一行 → 改选列表里它下面一行；继续点就继续往下。
+      // 从列表选：没有「点中的是哪一块」的实例信息 → 高亮框按名字框（drawPixiSpineOverlay 的退化路径）
+      pickedSlotRefs = null
       const idx = layerPickIndex(`list:${name}`, names, names.indexOf(name))
       S.selectedLayer = idx >= 0 ? names[idx] : null
       updateLayerToast()
@@ -6989,6 +8481,9 @@ function setLayerHidden(name, hidden) {
   }
   updateLayerToast()
   renderLayerList()
+  // 暂停时 `model.update` 不会跑，部件不透明度不会自己重算 —— 这里立刻落一次再画。
+  // （Spine 那条路是每帧 applyLayerVisibility，重调一次也是幂等的。）
+  applyLayerVisibility(S.player && S.player.skeleton)
   S.player?.drawFrame(false)
 }
 
@@ -7002,6 +8497,44 @@ function updateLayerToast() {
 }
 
 /* ------------------------------------------------------------------ 点选图层 */
+
+/** 点是否落在**这个附件**里。
+ *
+ *  ⚠️ 不能对所有附件都用射线法：`MeshAttachment` 的顶点是**按网格排布**的（不是环绕多边形），
+ *  拿它当简单多边形算「内外」得到的是完全错误的结果 —— 这是「图层选择位置和实际位置不一致」
+ *  的根因（2026-10-04 定案）：点脸上选到衣服、点身体选到背景，高亮框也画成一团乱线。
+ *  离线验过：3×3 网格的 441 个采样点里，射线法有 **277 个判错**。
+ *  判据：带 `triangles`（网格索引）就用**逐三角形**判定；否则（region 只有 4 个顶点）才用射线法。
+ *  先用包围盒粗筛 —— 网格动辄上千顶点，不粗筛的话 400 多个 slot 全遍历会明显卡手。 */
+function isPointInAttachment(px, py, v, att) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (let i = 0; i + 1 < v.length; i += 2) {
+    if (v[i] < minX) minX = v[i]
+    if (v[i] > maxX) maxX = v[i]
+    if (v[i + 1] < minY) minY = v[i + 1]
+    if (v[i + 1] > maxY) maxY = v[i + 1]
+  }
+  if (px < minX || px > maxX || py < minY || py > maxY) return false
+  const tri = att && att.triangles
+  if (tri && tri.length >= 3) {
+    for (let i = 0; i + 2 < tri.length; i += 3) {
+      const a = tri[i] * 2, b = tri[i + 1] * 2, c = tri[i + 2] * 2
+      if (pointInTriangle(px, py, v[a], v[a + 1], v[b], v[b + 1], v[c], v[c + 1])) return true
+    }
+    return false
+  }
+  return isPointInPolygon(px, py, v)
+}
+
+/** 点在三角形内（含边上）—— 三次叉积同号。 */
+function pointInTriangle(px, py, ax, ay, bx, by, cx, cy) {
+  const d1 = (px - bx) * (ay - by) - (ax - bx) * (py - by)
+  const d2 = (px - cx) * (by - cy) - (bx - cx) * (py - cy)
+  const d3 = (px - ax) * (cy - ay) - (cx - ax) * (py - ay)
+  const hasNeg = d1 < 0 || d2 < 0 || d3 < 0
+  const hasPos = d1 > 0 || d2 > 0 || d3 > 0
+  return !(hasNeg && hasPos)
+}
 
 function isPointInPolygon(px, py, v) {
   let inside = false
@@ -7044,6 +8577,9 @@ function screenToWorld(clientX, clientY) {
  */
 function pickLayersAt(clientX, clientY) {
   const p = S.player
+  if (p && p.kind === 'live2d') return pickLive2dLayersAt(p, clientX, clientY)
+  // AL 的 Spine 3.8 走 pixi-spine，没有相机：命中判定要用 pixi 自己的变换
+  if (p && p.__pixi) return pickPixiSpineLayersAt(p, clientX, clientY)
   const pt = screenToWorld(clientX, clientY)
   if (!p || !pt || !p.skeleton) return []
   const slots = p.skeleton.drawOrder
@@ -7058,13 +8594,624 @@ function pickLayersAt(clientX, clientY) {
     if (!n) continue
     const verts = new Float32Array(n)
     try { att.computeWorldVertices(slot, 0, n, verts, 0, 2) } catch { continue }
-    if (isPointInPolygon(pt.x, pt.y, verts)) hits.push(name)
+    if (isPointInAttachment(pt.x, pt.y, verts, att)) hits.push(name)
   }
   return hits
 }
 
 function pickLayerAt(clientX, clientY) {
   return pickLayersAt(clientX, clientY)[0] || null
+}
+
+/* ------------------------------------------------- 点选图层：Live2D（Cubism）
+ *
+ * Live2D 的「图层」是 Cubism 的**部件**（part），跟 Spine 的 slot 是两套模型：
+ *   · 部件名 = Core 的 `parts.ids`（图层面板、显隐、命中判定**同源**，见 loadLive2dMember）；
+ *   · 「这块网格属于哪个部件」= `drawables.parentPartIndices[i]`（Core 自带的 Int32Array）；
+ *   · 绘制顺序 = `drawables.renderOrders[i]`（**数值大的画在上面**）。
+ *
+ * ⚠️ 坐标链是**实测**出来的，别照渲染器源码猜（2026-10-05，安克雷奇 14MB moc3、536 网格）：
+ *     画布 CSS 像素 = worldTransform ∘ localTransform ∘ internalModel.getDrawableVertices(i)
+ *   其中 `getDrawableVertices` 已经把 core 顶点换算成「原图像素空间、y 向下」
+ *   （`x*ppu + W/2`、`-y*ppu + H/2`）。
+ *   实测手段：把单个 drawable 的原始顶点整体 +1 个 core 单位，量屏幕上「变化像素」的重心位移 ——
+ *   得到 kx = +ppu×world.a、ky = −ppu×world.a（**y 反号**）。拿「渲染器内部那条链去掉 projection」
+ *   （centeringTransform 不翻 y）去对撞渲染像素，命中率明显更低（24/169 vs 67/169）。
+ *
+ * ⚠️ **光有几何命中还不够**：moc3 里有一批「可见标志为真、opacity 也是 1，但一个像素都不画」的
+ *   drawable —— 触摸命中区（TouchHead / TouchDrag…）在贴图里是全透明的，几何上却压在最上面。
+ *   只按几何选，点脸会选到 TouchHead（实测：169 个采样点里 102 个选错，全是这类）。
+ *   所以：几何筛出候选（按部件归并、按渲染顺序自上而下）之后，**再用真实渲染确认一遍** ——
+ *   把这个部件临时压成透明、渲染一帧、看这个像素有没有变；变了才算「它真的画在这里」。
+ *   这一条同时把「被遮罩裁掉的部分」也挡掉了。
+ *   代价是每次点击多渲几帧（只有点选模式下的点击会走这条路），换来的是「选中的就是眼睛看到的」。
+ */
+
+/** 每次点选最多往下探几层（在大图上把几十个部件挨个渲染一遍太浪费）。
+ *  Spine 3.8（pixi-spine）那条路用同一份：见 `pickPixiSpineLayersAt`。 */
+const PICK_MAX_LAYERS = 8
+/** 像素比较阈值：**任何一个通道差一点就算「画到了」**（见 `pixelDiffers`）。 */
+const PICK_PIXEL_EPS = 0
+
+/** Live2D 的 raw Core `Model`：Framework 的 `CubismModel` 把它挂在 `_model` 上。
+ *  `drawables.parentPartIndices` / `parts.ids` 这些**只有 raw Core 才有**
+ *  （Framework 这一版没有 `getDrawableParentPartIndex`）。 */
+function live2dCoreModel(shim) {
+  const im = shim && shim.model && shim.model.internalModel
+  const cm = im && im.coreModel
+  if (!cm) return null
+  return cm._model || cm
+}
+
+/** 部件名 → 部件下标（与图层面板同一份 `shim.parts.index`）。 */
+function live2dPartIndexOf(shim, name) {
+  const parts = shim && shim.parts
+  if (!parts || !parts.index) return undefined
+  return parts.index.get(name)
+}
+
+/** 这个 drawable 现在会不会被画出来（可见标志 + 不透明度）。
+ *  ⚠️ 过了这一关**不等于**它真的画了东西：触摸命中区就是「可见但没有像素」，
+ *  那种只能靠 `live2dPartPaintsAt` 的渲染确认筛掉。 */
+function live2dDrawableVisible(core, d) {
+  const op = core.drawables.opacities[d]
+  if (typeof op === 'number' && op <= 0.01) return false
+  const flags = core.drawables.dynamicFlags
+  const U = typeof Live2DCubismCore !== 'undefined' && Live2DCubismCore.Utils
+  if (!flags || !U || typeof U.hasIsVisibleBit !== 'function') return true
+  try { return !!U.hasIsVisibleBit(flags[d]) } catch { return true }
+}
+
+/** Core 顶点 → 「原图像素空间」（x 向右、y **向下**，单位 = 原图像素）。
+ *  优先用 pixi-live2d-display 自己的 `getDrawableVertices`（它本来就是干这个的），
+ *  换版本拿不到就按同一公式手算 —— 两条实测等价。 */
+function live2dDrawableVerts(shim, core, d) {
+  const im = shim && shim.model && shim.model.internalModel
+  if (!im) return null
+  if (typeof im.getDrawableVertices === 'function') {
+    try { return im.getDrawableVertices(d) } catch { /* 换手算 */ }
+  }
+  const pos = core.drawables.vertexPositions && core.drawables.vertexPositions[d]
+  if (!pos) return null
+  const ppu = Number(im.pixelsPerUnit) || 1
+  const ox = (Number(im.originalWidth) || 0) / 2
+  const oy = (Number(im.originalHeight) || 0) / 2
+  const out = new Float32Array(pos.length)
+  for (let i = 0; i + 1 < pos.length; i += 2) {
+    out[i] = pos[i] * ppu + ox
+    out[i + 1] = -pos[i + 1] * ppu + oy
+  }
+  return out
+}
+
+/** 矩阵作用在一点上。pixi 的 `Matrix` 与 pixi-live2d-display 的 `Matrix` 都是 a/b/c/d/tx/ty，
+ *  这里自己算 —— 免得两套 `apply` 的差异埋在中间。 */
+function live2dAffine(m, x, y, out) {
+  const a = m ? m.a : 1, b = m ? m.b : 0, c = m ? m.c : 0, d = m ? m.d : 1
+  const tx = m ? m.tx : 0, ty = m ? m.ty : 0
+  out[0] = a * x + c * y + tx
+  out[1] = b * x + d * y + ty
+  return out
+}
+
+/** 「画布 CSS 像素」→「client 坐标」的那点换算（量一次，别在每个顶点上量 DOM）。
+ *  `app.screen` 是画布的**逻辑**尺寸（pixi 的 worldTransform 就落在这一套坐标里），
+ *  所以这里用 rect / screen 得到「画布被 CSS 拉伸了多少」。
+ *  ⚠️ pixi 播放器（AL 的 Spine 3.8 / Live2D）**没有 SpinePlayer 的相机**：缩放/平移直接改
+ *  pixi 显示的 `scale/x/y`。所以这两条路的命中判定与高亮框都必须走 pixi 自己的变换
+ *  （`worldTransform`），不能走 `screenToWorld` / `worldToClient`（那两个读 `S.camera`，
+ *  对这两条路恒为 null —— 「spine 图层选不中、高亮框不跟着缩放平移」就是这个根因）。 */
+function pixiCanvasToClient(shim) {
+  const canvas = shim && shim.canvas
+  if (!canvas || typeof canvas.getBoundingClientRect !== 'function') return null
+  const rect = canvas.getBoundingClientRect()
+  if (!rect.width || !rect.height) return null
+  const app = shim.app
+  const sw = (app && app.screen && app.screen.width) || canvas.clientWidth || rect.width
+  const sh = (app && app.screen && app.screen.height) || canvas.clientHeight || rect.height
+  return {
+    left: rect.left,
+    top: rect.top,
+    sx: rect.width / Math.max(sw, 1),
+    sy: rect.height / Math.max(sh, 1),
+  }
+}
+
+/** 「原图像素空间」的顶点 → client 坐标。命中判定与高亮框**共用这一份**：两处各写一套，
+ *  迟早出现「框和点选对不上」。 */
+function live2dVertsToClient(shim, verts, toClient) {
+  const im = shim.model && shim.model.internalModel
+  const world = shim.model && shim.model.worldTransform
+  const local = im && im.localTransform
+  const out = new Float64Array(verts.length)
+  const tmp = [0, 0]
+  for (let i = 0; i + 1 < verts.length; i += 2) {
+    live2dAffine(local, verts[i], verts[i + 1], tmp)
+    live2dAffine(world, tmp[0], tmp[1], tmp)
+    out[i] = toClient.left + tmp[0] * toClient.sx
+    out[i + 1] = toClient.top + tmp[1] * toClient.sy
+  }
+  return out
+}
+
+/**
+ * 点这个位置**几何上**压着的全部部件，按绘制顺序**自上而下**。
+ * 只做几何（含可见性与包围盒粗筛），不管「它到底画没画像素」—— 那是调用方用渲染确认的事。
+ * @returns {Array<{index:number,name:string,order:number}>}
+ */
+function live2dPartsAt(shim, clientX, clientY) {
+  const core = live2dCoreModel(shim)
+  const im = shim && shim.model && shim.model.internalModel
+  const names = shim && shim.parts && shim.parts.names
+  const toClient = pixiCanvasToClient(shim)
+  if (!core || !im || !names || !toClient) return []
+  const drawables = core.drawables
+  const byPart = new Map()
+  for (let d = 0; d < drawables.count; d++) {
+    const pi = drawables.parentPartIndices[d]
+    const name = names[pi]
+    if (!name || S.hidden.has(name)) continue
+    if (!live2dDrawableVisible(core, d)) continue
+    const verts = live2dDrawableVerts(shim, core, d)
+    if (!verts || verts.length < 6) continue
+    // 包围盒粗筛：先把「原图像素空间」的包围盒四角换算过去，再拿它的包围盒挡一下。
+    // 网格动辄上千顶点，不筛的话每次点击都要把 500 多个网格全量换算一遍。
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
+    for (let i = 0; i + 1 < verts.length; i += 2) {
+      if (verts[i] < x0) x0 = verts[i]
+      if (verts[i] > x1) x1 = verts[i]
+      if (verts[i + 1] < y0) y0 = verts[i + 1]
+      if (verts[i + 1] > y1) y1 = verts[i + 1]
+    }
+    // 仿射变换后矩形会变成平行四边形，取四角的包围盒是**保守**的（不会漏）
+    const corners = live2dVertsToClient(shim, [x0, y0, x1, y0, x1, y1, x0, y1], toClient)
+    let cx0 = Infinity, cy0 = Infinity, cx1 = -Infinity, cy1 = -Infinity
+    for (let i = 0; i + 1 < corners.length; i += 2) {
+      if (corners[i] < cx0) cx0 = corners[i]
+      if (corners[i] > cx1) cx1 = corners[i]
+      if (corners[i + 1] < cy0) cy0 = corners[i + 1]
+      if (corners[i + 1] > cy1) cy1 = corners[i + 1]
+    }
+    if (clientX < cx0 || clientX > cx1 || clientY < cy0 || clientY > cy1) continue
+    const idx = drawables.indices && drawables.indices[d]
+    if (!idx || idx.length < 3) continue     // 没有索引 = 没有三角形 = 画不出东西
+    const cv = live2dVertsToClient(shim, verts, toClient)
+    let hit = false
+    for (let i = 0; i + 2 < idx.length; i += 3) {
+      const a = idx[i] * 2, b = idx[i + 1] * 2, e = idx[i + 2] * 2
+      if (pointInTriangle(clientX, clientY, cv[a], cv[a + 1], cv[b], cv[b + 1], cv[e], cv[e + 1])) {
+        hit = true
+        break
+      }
+    }
+    if (!hit) continue
+    const ro = drawables.renderOrders[d] || 0
+    let ent = byPart.get(pi)
+    if (!ent) { ent = { index: pi, name, order: ro, drawables: [] }; byPart.set(pi, ent) }
+    if (ro > ent.order) ent.order = ro
+    ent.drawables.push(d)
+  }
+  return [...byPart.values()].sort((a, b) => b.order - a.order)
+}
+
+/** 读画布上的一个像素（client 坐标 → 设备像素）。读的是**上一次 `app.render()` 的结果**：
+ *  `mountPixiApp` 开着 `preserveDrawingBuffer`，所以它还在。
+ *  @returns {Uint8Array|null} 4 字节 RGBA */
+function pixiReadPixel(shim, clientX, clientY) {
+  const app = shim && shim.app
+  const gl = app && app.renderer && app.renderer.gl
+  const canvas = app && app.renderer && app.renderer.view
+  if (!gl || !canvas || typeof gl.readPixels !== 'function') return null
+  const rect = canvas.getBoundingClientRect()
+  if (!rect.width || !rect.height) return null
+  const px = Math.round((clientX - rect.left) * (canvas.width / rect.width))
+  const py = Math.round((clientY - rect.top) * (canvas.height / rect.height))
+  if (px < 0 || py < 0 || px >= canvas.width || py >= canvas.height) return null
+  const buf = new Uint8Array(4)
+  try { gl.readPixels(px, canvas.height - 1 - py, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, buf) } catch { return null }
+  return buf
+}
+
+/** 两个像素是否「不一样」。阈值 0 是有意的（2026-10-05 实测踩过）：暗部常常是几层颜色
+ *  几乎一样的图层叠着，把最上面那层藏掉，底下那层颜色相近 → 像素「看起来没变」。阈值一大，
+ *  这一层就被判成「没画」，症状是点暗部一点反应都没有。渲染是确定性的（同一份顶点 + 同一张
+ *  贴图），不画这个像素的层藏掉它时像素是**逐位相同**的，所以 0 阈值不会误判。 */
+function pixelDiffers(a, b) {
+  if (!a || !b) return false
+  for (let i = 0; i < 4; i++) if (Math.abs(a[i] - b[i]) > PICK_PIXEL_EPS) return true
+  return false
+}
+
+/** 这个部件**真的画在这个像素上**吗？
+ *  做法：把它临时压成透明再渲染一帧，看该像素变没变（触摸命中区、被遮罩裁掉的都不会变）。
+ *  ⚠️ 两条都要做，缺一不可：
+ *    · `setPartOpacityByIndex(pi, 0)` —— 与图层面板勾选**同一套语义**（部件不透明度）；
+ *    · 再把它那几块 drawable 的 `opacities` 直接写 0 —— 部件不透明度要等 Core 下一次
+ *      `update()` 才会传导到 drawable，而确认要的是**立刻**看到差别（渲染器直接读 drawable 的）。
+ *  ⚠️ `parts.saved` 是「用户手动隐藏」的账本，这里**不许碰** —— 自己存、自己还。
+ *  读不到像素（没有 WebGL / 读失败）时返回 true：宁可多选一层，也不要静默漏掉。 */
+function live2dPartPaintsAt(shim, cand, clientX, clientY, baseline) {
+  const cm = shim && shim.model && shim.model.internalModel && shim.model.internalModel.coreModel
+  const core = live2dCoreModel(shim)
+  if (!cm || !core) return true
+  const okPart = typeof cm.setPartOpacityByIndex === 'function'
+  if (!okPart && !cand.drawables.length) return true
+  let cur = 1
+  if (okPart) {
+    try { cur = cm.getPartOpacityByIndex(cand.index) } catch { /* 读不到就按 1 还 */ }
+    if (typeof cur !== 'number') cur = 1
+    try { cm.setPartOpacityByIndex(cand.index, 0) } catch { /* 下面还有 drawable 那条 */ }
+  }
+  const ops = core.drawables.opacities
+  const saved = []
+  for (const d of cand.drawables) {
+    saved.push(ops[d])
+    ops[d] = 0
+  }
+  let after = null
+  try {
+    shim.app.render()
+    after = pixiReadPixel(shim, clientX, clientY)
+  } finally {
+    for (let i = 0; i < cand.drawables.length; i++) ops[cand.drawables[i]] = saved[i]
+    if (okPart) { try { cm.setPartOpacityByIndex(cand.index, cur) } catch { /* ignore */ } }
+  }
+  if (!after || !baseline) return true
+  return pixiCandidatePaints(baseline, after)
+}
+
+/**
+ * Live2D 版 `pickLayersAt`：几何候选 → 渲染确认，返回**部件名**（= 图层名），自上而下。
+ * 与 Spine 那条路同一个口径，所以点选/下钻/提示三处都不用分叉。
+ */
+function pickLive2dLayersAt(shim, clientX, clientY) {
+  const cands = live2dPartsAt(shim, clientX, clientY)
+  if (!cands.length) return []
+  const baseline = pixiReadPixel(shim, clientX, clientY)
+  // 没有 WebGL / 读不到像素：退回纯几何（至少能选，别什么都不做）
+  if (!baseline || !shim.app || typeof shim.app.render !== 'function') return cands.map(c => c.name)
+  const hits = []
+  for (const c of cands) {
+    if (hits.length >= PICK_MAX_LAYERS) break
+    if (live2dPartPaintsAt(shim, c, clientX, clientY, baseline)) hits.push(c.name)
+  }
+  // 上面每确认一层都渲染过一帧（那一帧里该部件是透明的），最后必须补一帧还原画面
+  try { shim.app.render() } catch { /* ignore */ }
+  if (hits.length) return hits
+  // 一个都没确认，但这个像素上**确实有东西**（不透明）：宁可把几何最上层交给用户，
+  // 也不要「点了没反应」。透明像素不走这条路 —— 那说明这儿本来就没东西，该清空选中。
+  return baseline[3] > 8 ? cands.map(c => c.name) : []
+}
+
+/** 高亮「当前选中的 Live2D 部件」：把它**全部** drawable 的三角形填一遍。
+ *  用的是与命中判定同一个 `live2dVertsToClient` —— 所以框一定落在点中的地方。 */
+function drawLive2dOverlay(ctx, shim, hostRect, dpr) {
+  const core = live2dCoreModel(shim)
+  const toClient = pixiCanvasToClient(shim)
+  const pi = live2dPartIndexOf(shim, S.selectedLayer)
+  if (!core || !toClient || pi === undefined || pi === null) return
+  if (S.hidden.has(S.selectedLayer)) return
+  const toScreen = (cx, cy) => [(cx - hostRect.left) * dpr, (cy - hostRect.top) * dpr]
+  const drawables = core.drawables
+  ctx.beginPath()
+  for (let d = 0; d < drawables.count; d++) {
+    if (drawables.parentPartIndices[d] !== pi) continue
+    if (!live2dDrawableVisible(core, d)) continue
+    const verts = live2dDrawableVerts(shim, core, d)
+    if (!verts || verts.length < 6) continue
+    const idx = drawables.indices && drawables.indices[d]
+    if (!idx || idx.length < 3) continue
+    const cv = live2dVertsToClient(shim, verts, toClient)
+    // 与 Spine 的 mesh 一样**只填充不描边**：网格有成百上千个三角形，描边会画成一团乱线
+    for (let i = 0; i + 2 < idx.length; i += 3) {
+      const a = idx[i] * 2, b = idx[i + 1] * 2, e = idx[i + 2] * 2
+      const A = toScreen(cv[a], cv[a + 1])
+      const B = toScreen(cv[b], cv[b + 1])
+      const C = toScreen(cv[e], cv[e + 1])
+      ctx.moveTo(A[0], A[1]); ctx.lineTo(B[0], B[1]); ctx.lineTo(C[0], C[1]); ctx.closePath()
+    }
+  }
+  ctx.fillStyle = 'rgba(99,102,241,0.35)'
+  ctx.fill()
+}
+
+/* ------------------------------------------- 点选图层：pixi 播放器（AL 的 Spine 3.8）
+ *
+ * 碧蓝航线档的 Spine 3.8 走 pixi-spine（不是 SpinePlayer），**没有 `S.camera`**：
+ * 缩放/平移是 `pixiZoomBy(display, factor)` 与捏合手势直接改 pixi 显示的 `scale/x/y`。
+ * 所以命中判定与高亮框都不能用 `screenToWorld` / `worldToClient`（那两个读 `S.camera`，
+ * 对这条路恒返回 null —— 症状正是「spine 文件的图层选不中」「高亮框不跟缩放平移」）。
+ *
+ * 做法：**直接用 pixi 自己的对象和变换**。pixi-spine 把每块附件做成 slotContainer 里的
+ * pixi 对象：
+ *   · 网格附件 = `SpineMesh`（pixi `SimpleMesh`）：`vertices` 是**骨架世界坐标**（每帧由
+ *     `computeWorldVerticesOld` 写进去），对象自身的 `worldTransform` 就是「骨架世界 → 屏幕」；
+ *   · 区域附件 = `SpineSprite`：拿它的 localBounds 四角当四边形，乘自己的 `worldTransform`。
+ * 这样缩放/平移/适配天然跟着走，不用自己推骨架矩阵（pixi-spine 3.8 的 `settings.yDown = true`，
+ * 骨架世界坐标已经是 y 向下，与 pixi 同一套，不需要再翻一次）。
+ */
+
+/** 这套播放器要一起画的层（AL 的 `_B`/`_M`/`_T` 是**三套骨架**叠着画，见 R40）。
+ *  单层资产就是它自己。
+ *  @returns {Array<{spine:object,skeleton:object,name:string,slotName:function}>} 从下到上 */
+function pixiLayersOf(shim) {
+  if (shim && Array.isArray(shim.layers) && shim.layers.length) return shim.layers
+  if (!shim || !shim.display) return []
+  return [{
+    spine: shim.display,
+    skeleton: shim.skeleton,
+    name: '',
+    slotName: i => (shim.skeleton && shim.skeleton.slots[i] && shim.skeleton.slots[i].data
+      ? shim.skeleton.slots[i].data.name : null),
+  }]
+}
+
+/** 一个槽位当前真正画出来的形状（**client 坐标** + 三角形索引）。
+ *  与 Live2D 那条一样：命中判定与高亮框共用这一份，绝不各写一套。
+ *  @returns {Array<{verts:Float64Array, indices:ArrayLike<number>}>|null} */
+function pixiSlotShapes(spine, index, toClient) {
+  const box = spine && spine.slotContainers && spine.slotContainers[index]
+  if (!box || !box.children || !toClient) return null
+  const out = []
+  const p = { x: 0, y: 0 }
+  for (const child of box.children) {
+    if (!child || child.visible === false || child.renderable === false) continue
+    const wt = child.worldTransform
+    if (!wt || typeof wt.apply !== 'function') continue
+    const vs = child.vertices
+    const idx = child.indices ||
+      (child.geometry && child.geometry.indexBuffer && child.geometry.indexBuffer.data)
+    if (vs && vs.length >= 6 && idx && idx.length >= 3) {
+      const n = vs.length / 2
+      const verts = new Float64Array(n * 2)
+      for (let i = 0; i < n; i++) {
+        p.x = vs[i * 2]; p.y = vs[i * 2 + 1]
+        wt.apply(p, p)
+        verts[i * 2] = toClient.left + p.x * toClient.sx
+        verts[i * 2 + 1] = toClient.top + p.y * toClient.sy
+      }
+      out.push({ verts, indices: idx })
+      continue
+    }
+    // 区域附件（SpineSprite）：localBounds 四角，乘自己的 worldTransform 就是屏幕四边形
+    let lb = null
+    try { lb = typeof child.getLocalBounds === 'function' ? child.getLocalBounds() : null } catch { lb = null }
+    if (!lb || !(lb.width > 0) || !(lb.height > 0)) continue
+    const local = [[lb.x, lb.y], [lb.x + lb.width, lb.y],
+      [lb.x + lb.width, lb.y + lb.height], [lb.x, lb.y + lb.height]]
+    const verts = new Float64Array(8)
+    for (let i = 0; i < 4; i++) {
+      p.x = local[i][0]; p.y = local[i][1]
+      wt.apply(p, p)
+      verts[i * 2] = toClient.left + p.x * toClient.sx
+      verts[i * 2 + 1] = toClient.top + p.y * toClient.sy
+    }
+    out.push({ verts, indices: [0, 1, 2, 0, 2, 3] })
+  }
+  return out
+}
+
+/** client 坐标下的逐三角形命中（与 Spine 那条用同一个 `pointInTriangle`）。 */
+function pixiShapesHit(shapes, x, y) {
+  if (!shapes) return false
+  for (const s of shapes) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
+    for (let i = 0; i + 1 < s.verts.length; i += 2) {
+      if (s.verts[i] < x0) x0 = s.verts[i]
+      if (s.verts[i] > x1) x1 = s.verts[i]
+      if (s.verts[i + 1] < y0) y0 = s.verts[i + 1]
+      if (s.verts[i + 1] > y1) y1 = s.verts[i + 1]
+    }
+    if (x < x0 || x > x1 || y < y0 || y > y1) continue
+    const idx = s.indices, v = s.verts
+    for (let i = 0; i + 2 < idx.length; i += 3) {
+      const a = idx[i] * 2, b = idx[i + 1] * 2, e = idx[i + 2] * 2
+      if (pointInTriangle(x, y, v[a], v[a + 1], v[b], v[b + 1], v[e], v[e + 1])) return true
+    }
+  }
+  return false
+}
+
+/** 「容器 → 槽位下标」映射。绘制顺序取 pixi 的 `children` 顺序 —— 那才是真正决定谁压着谁的。 */
+function pixiSlotIndexMap(spine) {
+  const map = new Map()
+  const boxes = spine && spine.slotContainers
+  if (!boxes) return map
+  for (let i = 0; i < boxes.length; i++) map.set(boxes[i], i)
+  return map
+}
+
+/** pixi-spine 的**剪裁附件**（Spine 3.8 的 Clipping）不是「图层」：它不画颜色，只当遮罩
+ *  （pixi-spine 给它建的是 Graphics + 剪裁容器）。把它当图层选会有两个坏处：
+ *  ①点空白处会被它「确认」—— 藏掉它反而让被剪裁的内容露出来，像素变了，看着像它画了；
+ *  ②选中的框画出来是一块和画面无关的图形。所以候选阶段就跳过它。 */
+function pixiClipAttachmentType() {
+  const PIXI = window.PIXI
+  const T = PIXI && PIXI.spine && PIXI.spine.AttachmentType
+  return (T && typeof T.Clipping === 'number') ? T.Clipping : 6
+}
+
+/** 该槽位当前挂的是不是剪裁附件。 */
+function pixiSlotIsClipping(spine, index) {
+  const slot = spine && spine.skeleton && spine.skeleton.slots && spine.skeleton.slots[index]
+  if (!slot || typeof slot.getAttachment !== 'function') return false
+  let att = null
+  try { att = slot.getAttachment() } catch { return false }
+  return !!(att && att.type === pixiClipAttachmentType())
+}
+
+/** 点画面命中的**具体槽位实例**。
+ *
+ *  ⚠️ 多层骨架（AL 的 `_B`/`_M`/`_T`）里**同名槽位是两码事**：B 层的 `jz3` 和 T 层的 `jz3`
+ *  是各自骨架里的两个槽位（实测 B 层自己还有 `lc5`/`lc6` 这类剪裁网格）。图层面板按**名字**
+ *  列一行（勾选时三层一起隐，那是刻意的），但高亮框必须只框**点中的那一块** ——
+ *  否则点一下会同时框出好几处，用户看到的就是「选中的层和实际位置不符」。
+ *  从列表点选时没有实例信息 → 退回「按名字框全部」。 */
+let pickedSlotRefs = null
+
+/** 藏掉候选之后，「它到底画没画这个像素」？
+ *
+ *  变了一定算画了吗？—— 不，有两个反例（实测踩到过）：
+ *   ① 基准是透明的、藏掉它反而变不透明 → 它在给别人当**遮罩**（藏掉遮罩，被裁的内容露出来）；
+ *   ② 基准是透明的、藏掉它只有 RGB 变了（预乘 alpha 的残值）→ 仍然是遮罩类效应。
+ *  统一判据：**基准透明 ⇒ 这里没有「画」可言**，任何变化都只能来自遮罩级联。
+ *  @returns {boolean} true = 它真的在这个像素上画了颜色 */
+function pixiCandidatePaints(baseline, after) {
+  if (!after || !baseline) return true          // 读不到像素：宁可多选一层，不要静默漏掉
+  if (baseline[3] <= 8) return false            // 空白处：藏谁都不该算「画在这里」
+  if (!pixelDiffers(after, baseline)) return false
+  if (after[3] > 8) return true
+  // 基准有像素、藏掉后变透明 → 它确实是这一像素的贡献者
+  return true
+}
+
+/** pixi-spine 版点选：**几何候选 + 渲染确认**，返回槽位名，按绘制顺序自上而下
+ *  （与 Spine / Live2D 同一个口径，点选/下钻/提示三处都不用分叉）。
+ *
+ *  ⚠️ 光有几何不够：Spine 3.8 的背景槽位是个**铺满画面的大四边形**，贴图里大部分是透明的
+ *  —— 只按几何选，点空白处会「选中背景那一层」（实测 16 个采样点里就有 1 个）。
+ *  所以候选选出来之后，跟 Live2D 一样把它藏掉渲染一帧，看这个像素变没变。 */
+function pickPixiSpineLayersAt(shim, clientX, clientY) {
+  const toClient = pixiCanvasToClient(shim)
+  if (!toClient) return []
+  const layers = pixiLayersOf(shim)
+  const cands = []
+  const byName = new Map()
+  for (let li = layers.length - 1; li >= 0; li--) {
+    const layer = layers[li]
+    const spine = layer.spine
+    const idxOf = pixiSlotIndexMap(spine)
+    const kids = (spine && spine.children) || []
+    for (let ci = kids.length - 1; ci >= 0; ci--) {
+      const si = idxOf.get(kids[ci])
+      if (si === undefined) continue
+      const name = layer.slotName ? layer.slotName(si) : null
+      if (!name || S.hidden.has(name)) continue
+      if (pixiSlotIsClipping(spine, si)) continue      // 剪裁附件不是图层（见上）
+      const ent = byName.get(name)
+      const hit = pixiShapesHit(pixiSlotShapes(spine, si, toClient), clientX, clientY)
+      if (hit && !ent) {
+        // boxes：同名槽位（可能横跨多层）全都要藏，确认才准；
+        // hitRefs：**几何上真的覆盖这个点**的那几块 —— 高亮框只框它们（见 pickedSlotRefs）
+        const ref = { spine, index: si }
+        const e = { name, boxes: [kids[ci]], refs: [ref], hitRefs: [ref] }
+        byName.set(name, e)
+        cands.push(e)
+        continue
+      }
+      // 同名槽位可能横跨多层：确认时要一起藏，否则另一层还在画
+      if (ent) {
+        if (!ent.boxes.includes(kids[ci])) ent.boxes.push(kids[ci])
+        const ref = { spine, index: si }
+        if (!ent.refs.some(r => r.spine === spine && r.index === si)) ent.refs.push(ref)
+        if (hit && !ent.hitRefs.some(r => r.spine === spine && r.index === si)) ent.hitRefs.push(ref)
+      }
+    }
+  }
+  if (!cands.length) return []
+  const baseline = pixiReadPixel(shim, clientX, clientY)
+  // 没有 WebGL / 读不到像素：退回纯几何（至少能选，别什么都不做）
+  if (!baseline || !shim.app || typeof shim.app.render !== 'function') return cands.map(c => c.name)
+  const hits = []
+  let topRefs = null
+  for (const c of cands) {
+    if (hits.length >= PICK_MAX_LAYERS) break
+    const saved = c.boxes.map(b => b.visible)
+    let after = null
+    try {
+      for (const b of c.boxes) b.visible = false
+      shim.app.render()
+      after = pixiReadPixel(shim, clientX, clientY)
+    } finally {
+      c.boxes.forEach((b, i) => { b.visible = saved[i] })
+    }
+    if (pixiCandidatePaints(baseline, after)) {
+      hits.push(c.name)
+      if (!topRefs) topRefs = c.hitRefs && c.hitRefs.length ? c.hitRefs : c.refs
+    }
+  }
+  // 上面每确认一层都渲染过一帧（那一帧里该槽位是藏起来的），最后必须补一帧还原画面
+  try { shim.app.render() } catch { /* ignore */ }
+  if (hits.length) {
+    // 记下「点中的到底是哪一块」，高亮框只框它（见 pickedSlotRefs 的说明）
+    pickedSlotRefs = topRefs ? { name: hits[0], refs: topRefs } : null
+    return hits
+  }
+  // 一个都没确认但这个像素上确实有东西：宁可给几何最上层，也不要「点了没反应」
+  pickedSlotRefs = null
+  return baseline[3] > 8 ? cands.map(c => c.name) : []
+}
+
+/** 高亮当前选中的 pixi-spine 槽位（同样用 `pixiSlotShapes`，所以框一定落在点中的地方）。
+ *  点画面选中时只框**点中的那个实例**；从图层列表选中时不知道是哪一个 → 按名字框全部。 */
+function drawPixiSpineOverlay(ctx, shim, hostRect, dpr) {
+  const toClient = pixiCanvasToClient(shim)
+  if (!toClient || S.hidden.has(S.selectedLayer)) return
+  const toScreen = (cx, cy) => [(cx - hostRect.left) * dpr, (cy - hostRect.top) * dpr]
+  const picked = (pickedSlotRefs && pickedSlotRefs.name === S.selectedLayer) ? pickedSlotRefs.refs : null
+  const targets = []
+  if (picked && picked.length) {
+    for (const r of picked) targets.push({ spine: r.spine, index: r.index })
+  } else {
+    for (const layer of pixiLayersOf(shim)) {
+      const boxes = (layer.spine && layer.spine.slotContainers) || []
+      for (let si = 0; si < boxes.length; si++) {
+        const name = layer.slotName ? layer.slotName(si) : null
+        if (name === S.selectedLayer) targets.push({ spine: layer.spine, index: si })
+      }
+    }
+  }
+  ctx.beginPath()
+  let any = false
+  for (const t of targets) {
+    const shapes = pixiSlotShapes(t.spine, t.index, toClient)
+    if (!shapes) continue
+    for (const s of shapes) {
+      const idx = s.indices, v = s.verts
+      // 与 R36 的 mesh 口径一致：逐三角形填充，不描边（描边会把每个三角形的边都画出来）
+      for (let i = 0; i + 2 < idx.length; i += 3) {
+        const a = idx[i] * 2, b = idx[i + 1] * 2, e = idx[i + 2] * 2
+        const A = toScreen(v[a], v[a + 1])
+        const B = toScreen(v[b], v[b + 1])
+        const C = toScreen(v[e], v[e + 1])
+        ctx.moveTo(A[0], A[1]); ctx.lineTo(B[0], B[1]); ctx.lineTo(C[0], C[1]); ctx.closePath()
+        any = true
+      }
+    }
+  }
+  if (!any) return
+  ctx.fillStyle = 'rgba(99,102,241,0.35)'
+  ctx.fill()
+}
+
+/** 点选模式下的高亮框必须**每帧**重画：缩放/平移改的是 pixi 显示的变换，
+ *  不重画的话框就停在旧位置上（用户报的「框不跟缩放平移」正是这个）。
+ *  没开点选 / 没选层时不画 —— 省掉每帧清一次整张 overlay。 */
+function syncPixiOverlay() {
+  if (S.layerSelect && S.selectedLayer) drawOverlay()
+}
+
+/**
+ * 世界坐标 → **屏幕 client 坐标**（高亮框和测试共用这一份，别再写第二套）。
+ *
+ * ⚠️ 与 Spine 官方 `OrthoCamera.worldToScreen(coords, screenWidth, screenHeight)` **逐位一致**
+ *    （2026-10-04 拿真实骨架对撞过，差 0px）：正交投影的可见宽就是 `zoom * viewportWidth`
+ *    （读的 spine-player 源码 `projection.ortho(±zoom*viewportWidth/2, ...)`）。
+ *    官方那个返回的 y 是「从屏幕下沿往上」，这里统一成 y 向下（与 client 坐标一致）。
+ * @returns {{x:number,y:number}|null}
+ */
+function worldToClient(wx, wy) {
+  const cam = S.camera
+  const p = S.player
+  if (!cam || !p) return null
+  const rect = $('stageInner').getBoundingClientRect()
+  if (!rect.width || !rect.height) return null
+  const canvas = p.canvas
+  const cw = canvas.clientWidth || rect.width
+  const ch = canvas.clientHeight || rect.height
+  const nx = ((wx - cam.position.x) / cam.zoom) / (cam.viewportWidth / 2)
+  const ny = ((wy - cam.position.y) / cam.zoom) / (cam.viewportHeight / 2)
+  return { x: rect.left + (nx + 1) / 2 * cw, y: rect.top + (1 - (ny + 1) / 2) * ch }
 }
 
 function drawOverlay() {
@@ -7080,7 +9227,12 @@ function drawOverlay() {
   const ctx = canvas.getContext('2d')
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.clearRect(0, 0, w, h)
-  if (!S.selectedLayer || !S.layerSelect || !p.skeleton) return
+  if (!S.selectedLayer || !S.layerSelect) return
+  // Live2D 的图层是 Cubism 部件，不是 skeleton.slots —— 走自己那条（同样是「选中什么就框什么」）
+  if (p.kind === 'live2d') { drawLive2dOverlay(ctx, p, rect, dpr); return }
+  // AL 的 Spine 3.8 走 pixi-spine（没有相机）：框要用 pixi 自己的变换，否则不跟缩放平移
+  if (p.__pixi) { drawPixiSpineOverlay(ctx, p, rect, dpr); return }
+  if (!p.skeleton) return
 
   const slot = p.skeleton.slots.find(s => s.data && s.data.name === S.selectedLayer)
   if (!slot || S.hidden.has(S.selectedLayer)) return
@@ -7091,20 +9243,33 @@ function drawOverlay() {
   const verts = new Float32Array(n)
   try { att.computeWorldVertices(slot, 0, n, verts, 0, 2) } catch { return }
 
-  const cam = S.camera
-  const canvasEl = p.canvas
-  const cw = canvasEl.clientWidth || rect.width
-  const ch = canvasEl.clientHeight || rect.height
-  const kx = rect.width / cw, ky = rect.height / ch
-
+  // 与「命中判定 / 测试」共用同一份换算，只把 client 坐标换成 canvas 像素坐标
+  const toScreen = (wx, wy) => {
+    const c = worldToClient(wx, wy)
+    if (!c) return [0, 0]
+    return [(c.x - rect.left) * dpr, (c.y - rect.top) * dpr]
+  }
+  const tri = att.triangles
+  if (tri && tri.length >= 3) {
+    /* mesh：顶点按网格排布，**依次 lineTo 连成一个多边形会画出一团乱线**（「框位置/形状不对」
+       的来源之一）。按 triangles 逐个填充才画出它的真实形状。描边会把每个三角形的边都画出来
+       （太乱），所以 mesh 只填充。 */
+    ctx.beginPath()
+    for (let i = 0; i + 2 < tri.length; i += 3) {
+      const a = tri[i] * 2, b = tri[i + 1] * 2, c = tri[i + 2] * 2
+      const A = toScreen(verts[a], verts[a + 1])
+      const B = toScreen(verts[b], verts[b + 1])
+      const C = toScreen(verts[c], verts[c + 1])
+      ctx.moveTo(A[0], A[1]); ctx.lineTo(B[0], B[1]); ctx.lineTo(C[0], C[1]); ctx.closePath()
+    }
+    ctx.fillStyle = 'rgba(99,102,241,0.35)'
+    ctx.fill()
+    return
+  }
   ctx.beginPath()
   for (let i = 0; i < verts.length; i += 2) {
-    const wx = verts[i], wy = verts[i + 1]
-    const nx = ((wx - cam.position.x) / cam.zoom) / (cam.viewportWidth / 2)
-    const ny = ((wy - cam.position.y) / cam.zoom) / (cam.viewportHeight / 2)
-    const sx = ((nx + 1) / 2 * cw) * kx * dpr
-    const sy = ((1 - (ny + 1) / 2) * ch) * ky * dpr
-    if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy)
+    const ss = toScreen(verts[i], verts[i + 1])
+    if (i === 0) ctx.moveTo(ss[0], ss[1]); else ctx.lineTo(ss[0], ss[1])
   }
   ctx.closePath()
   ctx.strokeStyle = '#a5b4fc'
@@ -7387,6 +9552,18 @@ function attachCameraGestures(canvas, cam) {
  */
 function currentZoomRatio() {
   const cam = S.camera
+  /* pixi 播放器（AL 的 Spine 3.8 / Live2D）没有相机：缩放比 = 适配窗口那一档 / 当前 scale。
+     ⚠️ 方向必须与相机那条一致：**数值越小画面越大**（相机是 `cam.zoom / fit`，
+     `__bd2viewer.zoomRatio` 与 `zoomFactor = 1/ratio` 两个指标全项目共用一套含义）。 */
+  const pl = S.player
+  if ((!cam || !S.bounds) && pl && pl.__pixi) {
+    const layers = pixiLayersOf(pl)
+    const main = layers.length ? layers[layers.length - 1].spine : null
+    const home = main && main.__home
+    const cur = main ? (main.scale.x || 1) : 1
+    const base = home && home.s ? home.s : cur
+    return cur > 0 && Number.isFinite(cur) && base > 0 ? base / cur : 1
+  }
   if (!cam || !S.bounds) return 1
   const fit = defaultZoomFor(Math.max(cam.viewportWidth, 1), Math.max(cam.viewportHeight, 1))
   if (!(fit > 0) || !Number.isFinite(cam.zoom) || !(cam.zoom > 0)) return 1
@@ -7452,6 +9629,7 @@ function debugDump() {
 
 function resetCamera() {
   const p = S.player, cam = S.camera
+  if (p && p.__pixi) { p.fitHome(); return }
   if (!p || !cam) return
   cam.position.x = S.defaultPos.x
   cam.position.y = S.defaultPos.y
@@ -7464,6 +9642,18 @@ function resetCamera() {
  *  仅防极端值；真正「保留用户缩放」的路径（切动画 / 转屏）不走这里。 */
 const ZOOM_BTN_RATIO_MIN = 0.02   // ≈50× 放大
 const ZOOM_BTN_RATIO_MAX = 8      // ≈0.125× 缩小
+
+function zoomInStep() {
+  const p = S.player
+  if (p && p.__pixi) { p.zoomBy(1.2); return }
+  setZoom(S.camera ? S.camera.zoom / 1.2 : 1)
+}
+
+function zoomOutStep() {
+  const p = S.player
+  if (p && p.__pixi) { p.zoomBy(1 / 1.2); return }
+  setZoom(S.camera ? S.camera.zoom * 1.2 : 1)
+}
 
 function setZoom(z) {
   const p = S.player, cam = S.camera
@@ -7483,6 +9673,10 @@ function setZoom(z) {
 function onStageResize() {
   layoutBgImage()
   const p = S.player
+  if (p && p.__pixi) {
+    try { p.onResize() } catch { /* ignore */ }
+    return
+  }
   const cam = S.camera
   if (!p || !cam) { if (p && !S.busy) p.drawFrame(false); return }
   const ratio = currentZoomRatio()          // 必须用旧视口算，读完再改 viewport
@@ -7508,6 +9702,12 @@ function onStageResize() {
 function applyBgAlpha(alwaysTransparentCanvas = true) {
   const p = S.player
   if (!p) return
+  if (p.__pixi) {
+    if (p.canvas) p.canvas.style.backgroundColor = 'transparent'
+    $('bgLayer').style.background = S.bgColor
+    layoutBgImage()
+    return
+  }
   // canvas 始终透明，视觉背景由 DOM 层负责（与原站一致）
   p.config.backgroundColor = '00000000'
   try { p.bg.setFromString('00000000') } catch { /* ignore */ }
@@ -7670,7 +9870,18 @@ function composeToCanvas(source, transparent, targetW, targetH) {
 
 async function screenshot(transparent, sizeOverride) {
   const p = S.player
-  if (!p || !S.camera) { showError(t('还没有载入任何资产')); return }
+  if (!p) { showError(t('还没有载入任何资产')); return }
+  if (p.__pixi && p.canvas) {
+    try {
+      const blob = await new Promise(r => p.canvas.toBlob(r, 'image/png'))
+      const name = `screenshot_${safeName(S.current?.folder)}_${safeName(currentAnimation()?.name)}.png`
+      if (blob) download(blob, name)
+    } catch (err) {
+      showError(t('截图失败：') + err.message)
+    }
+    return
+  }
+  if (!S.camera) { showError(t('还没有载入任何资产')); return }
   if (S.busy) return
   S.busy = true
   try {
@@ -7707,7 +9918,9 @@ async function screenshot(transparent, sizeOverride) {
 
 async function exportWebm(transparent) {
   const p = S.player
-  if (!p || !S.camera) { showError(t('还没有载入任何资产')); return }
+  if (!p) { showError(t('还没有载入任何资产')); return }
+  if (p.__pixi) { showError(t('这个播放器暂时不能导出')); return }
+  if (!S.camera) { showError(t('还没有载入任何资产')); return }
   const anim = currentAnimation()
   if (!anim) { showError(t('没有可导出的动画')); return }
   if (S.busy) return
@@ -7852,7 +10065,9 @@ async function exportWebm(transparent) {
 
 async function exportFrames(transparent) {
   const p = S.player
-  if (!p || !S.camera) { showError(t('还没有载入任何资产')); return }
+  if (!p) { showError(t('还没有载入任何资产')); return }
+  if (p.__pixi) { showError(t('这个播放器暂时不能导出')); return }
+  if (!S.camera) { showError(t('还没有载入任何资产')); return }
   const anim = currentAnimation()
   if (!anim) { showError(t('没有可导出的动画')); return }
   if (S.busy) return
@@ -8105,12 +10320,7 @@ function bindUI() {
   if (galRebuild) galRebuild.onclick = () => rebuildThumbs()
   // 资产类型：BD2 / Lost Sword（全局单一切换，切完按新规则重扫）
   const galMode = $('galMode')
-  if (galMode) {
-    galMode.addEventListener('click', e => {
-      const b = e.target.closest('.gm-btn')
-      if (b && b.dataset.assetMode) setAssetMode(b.dataset.assetMode)
-    })
-  }
+  if (galMode) galMode.onchange = () => setAssetMode(galMode.value)
   // 播放顺序：手动 / 名称 / 日期 + 升降序
   const galSort = $('galSort')
   if (galSort) {
@@ -8171,7 +10381,7 @@ function bindUI() {
   if (cardMenuRebuildThumb) cardMenuRebuildThumb.onclick = () => {
     const it = menuItem
     $('cardMenu').hidden = true
-    if (!it || it.pendingUnpack || it.imageOnly || !it.ok) {
+    if (!it || it.pendingUnpack || it.imageOnly || isLive2dItem(it) || !it.ok) {
       toast(t('这张没有可重建的缩略图'))
       return
     }
@@ -8217,6 +10427,12 @@ function bindUI() {
   }
   $('btnHelp').onclick = () => { $('helpModal').hidden = false }
   $('btnSettings').onclick = () => { $('settingsModal').hidden = false }
+  // 更新日志：版本号不写死在 HTML 里（APK 读原生 VERSION_NAME，桌面版读 APP_VERSION）
+  $('btnChangelog').onclick = () => {
+    const ver = $('changelogVer')
+    if (ver) ver.textContent = 'v' + APP_VERSION
+    $('changelogModal').hidden = false
+  }
   // 错误提示点一下就关，别挡着下面的操作
   $('errorBox').onclick = clearError
 
@@ -8259,8 +10475,8 @@ function bindUI() {
   }
 
   // 视图
-  $('btnZoomIn').onclick = () => setZoom(S.camera ? S.camera.zoom / 1.2 : 1)
-  $('btnZoomOut').onclick = () => setZoom(S.camera ? S.camera.zoom * 1.2 : 1)
+  $('btnZoomIn').onclick = () => zoomInStep()
+  $('btnZoomOut').onclick = () => zoomOutStep()
   $('btnResetCam').onclick = resetCamera
   $('btnFit').onclick = () => { refitBounds(); fitToWindow() }
   $('chkUseCam').onchange = e => { S.useCurrentCamera = e.target.checked }
@@ -8385,6 +10601,7 @@ function bindUI() {
     if (moved > 5) return
     // 命中栈从上到下。再点到当前这一层（或仍从这一层往下点）就改选它下面一层。
     // 锚点用最上层的名字，不用像素：手指挪开几个像素仍算同一次往下钻。
+    // （Live2D 走 pickLayersAt 里的另一条实现：几何候选 + 渲染确认，见那段注释。）
     const hits = pickLayersAt(e.clientX, e.clientY)
     if (!hits.length) {
       S.selectedLayer = null
@@ -8583,6 +10800,13 @@ function bindUI() {
     if (!p || !entry || !entry.animation) return
     const d = entry.animation.duration || 0
     if (d <= 0) return
+    if (p.__pixi && p.kind === 'live2d') {
+      p.pause()
+      S.playing = false
+      updatePlayButton()
+      if (p.seekFraction) p.seekFraction(Number(e.target.value))
+      return
+    }
     p.pause()
     S.playing = false
     updatePlayButton()
@@ -8614,8 +10838,8 @@ window.__bd2viewer = {
   fitToWindow,
   resetCamera,
   refitBounds,
-  zoomIn: () => setZoom(S.camera ? S.camera.zoom / 1.2 : 1),
-  zoomOut: () => setZoom(S.camera ? S.camera.zoom * 1.2 : 1),
+  zoomIn: () => zoomInStep(),
+  zoomOut: () => zoomOutStep(),
   playAnimation,
   setPlaying,
   get animation() { return currentAnimation()?.name || null },
@@ -8643,6 +10867,51 @@ window.__bd2viewer = {
   pickLayerAt,
   // 命中栈（从上到下）：重复点同一处会依次穿透，回归断言要能读到整条栈
   pickLayersAt,
+  /** Live2D 专用：几何候选（只有坐标，不做渲染确认）。测试拿它验「候选集合必须包含真值」，
+   *  这样才能把「坐标链算错」和「透明命中区被筛掉」两类问题分开定位。 */
+  live2dPartsAt: (clientX, clientY) =>
+    (S.player && S.player.kind === 'live2d') ? live2dPartsAt(S.player, clientX, clientY) : [],
+  /** 排障/测试：动作里的 PartOpacity 曲线开关是否真的打开（R41）。
+   *  关着 = 手部变体不会淡出（爱宕 `mail` 的「三只手」）。变异测试靠它做对照。 */
+  live2dOpacityFromMotion() {
+    const PIXI = window.PIXI
+    return !!(PIXI && PIXI.live2d && PIXI.live2d.CubismConfig
+      && PIXI.live2d.CubismConfig.setOpacityFromMotion === true)
+  },
+  /** Live2D 专用：某个 drawable 的顶点在 client 坐标下的位置（排障/对撞用）。 */
+  live2dDrawableVertsClient(d) {
+    const shim = S.player
+    if (!shim || shim.kind !== 'live2d') return null
+    const core = live2dCoreModel(shim)
+    const toClient = pixiCanvasToClient(shim)
+    if (!core || !toClient) return null
+    const v = live2dDrawableVerts(shim, core, d)
+    return v ? Array.from(live2dVertsToClient(shim, v, toClient)) : null
+  },
+  /** 读画布上的一个像素（client 坐标）—— 与点选确认用的是同一个口径。
+   *  ⚠️ 别按 kind 收窄：spine38 和 Live2D 都是 pixi 播放器，这份读法两条路共用。 */
+  pixiReadPixel: (clientX, clientY) =>
+    (S.player && S.player.__pixi) ? pixiReadPixel(S.player, clientX, clientY) : null,
+  /** 重画高亮框（测试要在不给状态「加戏」的前提下验证框的位置）。 */
+  drawOverlay,
+  /** 排障：点画面命中的**具体槽位实例**（多层骨架里同名槽位是两码事，见 pickedSlotRefs）。
+   *  返回 `{ name, refs: [{ index, layerName }] }` —— 只给测试/排障看，别在业务里依赖。 */
+  get pickedSlotRefs() {
+    if (!pickedSlotRefs) return null
+    const layers = S.player ? pixiLayersOf(S.player) : []
+    const nameOf = sp => {
+      const hit = layers.find(l => l.spine === sp)
+      return hit ? hit.name : ''
+    }
+    return {
+      name: pickedSlotRefs.name,
+      refs: pickedSlotRefs.refs.map(r => ({ index: r.index, layerName: nameOf(r.spine) })),
+    }
+  },
+  /** 世界 → 屏幕 client 坐标（图层点选的测试要用它把「几何上必然命中」的点算出来）。 */
+  worldToClient,
+  /** 附件命中判定（纯函数：喂顶点数组 + 附件对象即可，不用真骨架）。 */
+  isPointInAttachment,
   nextLayerPick,
   // R27：档位默认关闭的图层。`thumbLayerHide` 让测试能断言**离屏缩略图那条路真的执行了**
   // （比比对两张缩略图可靠 —— 两次渲染的动画时刻不同，图必然不同，比了说明不了问题）。
@@ -8679,6 +10948,30 @@ window.__bd2viewer = {
   makeThumb,
   get thumbStats() {
     return { cached: thumbCache.size, done: thumbDone, running: thumbRunning }
+  },
+  // 扫描结果缓存（冷启动垫底）：测试要能读到「存了什么」和「垫了几次」
+  get scanCacheStats() { return { restores: scanRestores, key: scanCacheKey() } },
+  readScanCache: () => idbGet(scanCacheKey(), 'scan'),
+  clearScanCache: async () => {
+    const db = await idb()
+    if (db) {
+      // ⚠️ 必须**等事务提交**再返回。`clear()` 只是把请求排进事务队列，立刻 return 的话
+      // 调用方紧接着重载页面就可能读到**还没被清掉**的旧缓存（2026-10-04 实测：
+      // scan_cache 的「清掉缓存后不再垫底」偶发红成 `restores=1`，看着像缓存没清掉，
+      // 其实是清完还没落地就重载了 —— 以前靠「事务几毫秒就提交完」侥幸绿）。
+      await new Promise(res => {
+        try {
+          const tx = db.transaction('scan', 'readwrite')
+          tx.objectStore('scan').clear()
+          tx.oncomplete = () => res()
+          tx.onerror = () => res()
+          tx.onabort = () => res()
+        } catch { res() }
+      })
+    }
+    scanRestored.clear()
+    scanRestores = 0
+    return true
   },
   commitCardOrder,
   // 播放顺序：排序方式 + 升降序（同时决定平铺页、左列表、◀▶ 的走向）
@@ -8783,6 +11076,8 @@ window.__bd2viewer = {
   },
   runDelete,
   confirmDelete,
+  /** 右键删 mod 时要删的「整个文件夹」口径（纯函数，测试直接喂假条目）。 */
+  modFolderItems,
   runRemoveRoot,
   confirmRemoveRoot,
   canRemoveRoot,

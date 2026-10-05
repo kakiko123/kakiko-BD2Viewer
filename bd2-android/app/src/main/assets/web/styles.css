@@ -15,29 +15,29 @@
   --danger: #ef4444;
   --ok: #34d399;
   --radius: 6px;
-  /* 动效：统一的曲线与时长。UI 动效一律 <300ms，进场/退出用 ease-out。 */
+  /* 鍔ㄦ晥锛氱粺涓€鐨勬洸绾夸笌鏃堕暱銆俇I 鍔ㄦ晥涓€寰?<300ms锛岃繘鍦?閫€鍑虹敤 ease-out銆?*/
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
-  --dur-press: 120ms;    /* 按压反馈 */
-  --dur-quick: 160ms;    /* 小控件状态切换 */
-  --dur-move: 200ms;     /* 屏幕上 A→B 的位移 */
+  --dur-press: 120ms;    /* 鎸夊帇鍙嶉 */
+  --dur-quick: 160ms;    /* 灏忔帶浠剁姸鎬佸垏鎹?*/
+  --dur-move: 200ms;     /* 灞忓箷涓?A鈫払 鐨勪綅绉?*/
 }
 
 * { box-sizing: border-box; }
 
 html {
-  /* 触屏点按不再闪一层灰色高亮（那是「网页感」最响的信号），
-     代价是每个可点元素必须自己给 :active 反馈。 */
+  /* 瑙﹀睆鐐规寜涓嶅啀闂竴灞傜伆鑹查珮浜紙閭ｆ槸銆岀綉椤垫劅銆嶆渶鍝嶇殑淇″彿锛夛紝
+     浠ｄ环鏄瘡涓彲鐐瑰厓绱犲繀椤昏嚜宸辩粰 :active 鍙嶉銆?*/
   -webkit-tap-highlight-color: transparent;
-  -webkit-text-size-adjust: 100%;   /* 横屏时不要放大正文字号 */
+  -webkit-text-size-adjust: 100%;   /* 妯睆鏃朵笉瑕佹斁澶ф鏂囧瓧鍙?*/
 }
 
 html, body {
   margin: 0;
   height: 100%;
   overflow: hidden;
-  overscroll-behavior: none;        /* 应用外壳自己滚动，不要下拉刷新/整页橡皮筋 */
-  /* 双指只许放大播放框里的角色。整页禁止捏合缩放，滚动仍可用。 */
+  overscroll-behavior: none;        /* 搴旂敤澶栧３鑷繁婊氬姩锛屼笉瑕佷笅鎷夊埛鏂?鏁撮〉姗＄毊绛?*/
+  /* 鍙屾寚鍙鏀惧ぇ鎾斁妗嗛噷鐨勮鑹层€傛暣椤电姝㈡崗鍚堢缉鏀撅紝婊氬姩浠嶅彲鐢ㄣ€?*/
   touch-action: pan-x pan-y;
 }
 
@@ -49,16 +49,16 @@ body {
 
 .hidden { display: none !important; }
 
-/* 必须放在组件规则之前也不够，用 !important 兜住所有 display 覆盖 */
+/* 蹇呴』鏀惧湪缁勪欢瑙勫垯涔嬪墠涔熶笉澶燂紝鐢?!important 鍏滀綇鎵€鏈?display 瑕嗙洊 */
 [hidden] { display: none !important; }
 
-/* ------------------------------------------------------------ 布局 */
+/* ------------------------------------------------------------ 甯冨眬 */
 
 .app {
   display: flex;
   flex-direction: column;
-  height: 100vh;   /* 老浏览器兜底 */
-  height: 100dvh;  /* 地址栏收起/展开时跟着变，底部按钮不会被压到屏幕外 */
+  height: 100vh;   /* 鑰佹祻瑙堝櫒鍏滃簳 */
+  height: 100dvh;  /* 鍦板潃鏍忔敹璧?灞曞紑鏃惰窡鐫€鍙橈紝搴曢儴鎸夐挳涓嶄細琚帇鍒板睆骞曞 */
 }
 
 .nav {
@@ -101,7 +101,7 @@ body {
   justify-content: flex-end;
 }
 
-/* APK 模式顶部的目录/权限提示条 */
+/* APK 妯″紡椤堕儴鐨勭洰褰?鏉冮檺鎻愮ず鏉?*/
 .storage-bar {
   display: flex;
   flex-wrap: wrap;
@@ -157,7 +157,7 @@ body {
   background: var(--g900);
 }
 
-/* ------------------------------------------------------------ 通用控件 */
+/* ------------------------------------------------------------ 閫氱敤鎺т欢 */
 
 .btn {
   appearance: none;
@@ -173,18 +173,18 @@ body {
               border-color var(--dur-press) var(--ease-out),
               transform var(--dur-press) var(--ease-out);
   white-space: nowrap;
-  /* 单击不等 300ms，同时禁止双指把整页放大。滚动仍可用。 */
+  /* 鍗曞嚮涓嶇瓑 300ms锛屽悓鏃剁姝㈠弻鎸囨妸鏁撮〉鏀惧ぇ銆傛粴鍔ㄤ粛鍙敤銆?*/
   touch-action: pan-x pan-y;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
 }
-/* 触屏上没有真正的 hover：不门控的话点一下就会「粘」在 hover 态上 */
+/* 瑙﹀睆涓婃病鏈夌湡姝ｇ殑 hover锛氫笉闂ㄦ帶鐨勮瘽鐐逛竴涓嬪氨浼氥€岀矘銆嶅湪 hover 鎬佷笂 */
 @media (hover: hover) and (pointer: fine) {
   .btn:hover { background: var(--g600); }
   .btn.primary:hover { background: var(--indigo-l); }
 }
-/* 按压反馈在 pointerdown 那一刻就给（不用等 click） */
+/* 鎸夊帇鍙嶉鍦?pointerdown 閭ｄ竴鍒诲氨缁欙紙涓嶇敤绛?click锛?*/
 .btn:active { transform: scale(.97); }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
 .btn:disabled:active { transform: none; }
@@ -238,7 +238,7 @@ input[type="range"] {
 .link { color: var(--indigo-300); text-decoration: underline; cursor: pointer; }
 .count { color: var(--g400); font-size: 12px; }
 
-/* ------------------------------------------------------------ 左侧栏 */
+/* ------------------------------------------------------------ 宸︿晶鏍?*/
 
 .tabs {
   display: flex;
@@ -304,9 +304,7 @@ input[type="range"] {
 .anim-list { max-height: 30vh; }
 .layer-list { flex: 1; min-height: 120px; }
 
-/* Ark（星陨计划）：立绘/图标缩略网格 + 语音列表。
-   立绘是竖幅大图（实测 264x640 这类），所以缩略图固定 2:3 比例居中，
-   否则一堆横向裁切的小图看不出是什么。 */
+/* Ark锛堟槦闄ㄨ鍒掞級锛氱珛缁?鍥炬爣缂╃暐缃戞牸 + 璇煶鍒楄〃銆?   绔嬬粯鏄珫骞呭ぇ鍥撅紙瀹炴祴 264x640 杩欑被锛夛紝鎵€浠ョ缉鐣ュ浘鍥哄畾 2:3 姣斾緥灞呬腑锛?   鍚﹀垯涓€鍫嗘í鍚戣鍒囩殑灏忓浘鐪嬩笉鍑烘槸浠€涔堛€?*/
 .ark-static-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
@@ -387,7 +385,7 @@ input[type="range"] {
   padding: 6px 9px;
 }
 
-/* ------------------------------------------------------------ 舞台 */
+/* ------------------------------------------------------------ 鑸炲彴 */
 
 .stage-inner {
   position: relative;
@@ -396,7 +394,7 @@ input[type="range"] {
   border-radius: var(--radius);
   overflow: hidden;
   background: #000;
-  /* 播放框自己处理捏合/拖动，不交给浏览器做整页缩放。 */
+  /* 鎾斁妗嗚嚜宸卞鐞嗘崗鍚?鎷栧姩锛屼笉浜ょ粰娴忚鍣ㄥ仛鏁撮〉缂╂斁銆?*/
   touch-action: none;
 }
 
@@ -423,16 +421,15 @@ input[type="range"] {
 
 .player-host canvas {
   display: block;
-  /* 捏合/拖动由我们自己算。manipulation 会把双指交给浏览器页面缩放，
-     和相机缩放叠在一起就是「手指动了画面不跟着走」。 */
+  /* 鎹忓悎/鎷栧姩鐢辨垜浠嚜宸辩畻銆俶anipulation 浼氭妸鍙屾寚浜ょ粰娴忚鍣ㄩ〉闈㈢缉鏀撅紝
+     鍜岀浉鏈虹缉鏀惧彔鍦ㄤ竴璧峰氨鏄€屾墜鎸囧姩浜嗙敾闈笉璺熺潃璧般€嶃€?*/
   touch-action: none;
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
 }
 
-/* Lost Sword 的「两层角色」（R19）：背层 `_B` 用第二个播放器，压在主体（`_F`）下面。
-   它不接任何指针事件 —— 交互（相机拖动、点图层）全归主体那一层。 */
+/* Lost Sword 鐨勩€屼袱灞傝鑹层€嶏紙R19锛夛細鑳屽眰 `_B` 鐢ㄧ浜屼釜鎾斁鍣紝鍘嬪湪涓讳綋锛坄_F`锛変笅闈€?   瀹冧笉鎺ヤ换浣曟寚閽堜簨浠?鈥斺€?浜や簰锛堢浉鏈烘嫋鍔ㄣ€佺偣鍥惧眰锛夊叏褰掍富浣撻偅涓€灞傘€?*/
 .player-host-back {
   position: absolute;
   inset: 0;
@@ -503,7 +500,7 @@ input[type="range"] {
   z-index: 7;
   white-space: pre-wrap;
   word-break: break-all;
-  cursor: pointer;   /* 点一下就关 */
+  cursor: pointer;   /* 鐐逛竴涓嬪氨鍏?*/
 }
 
 .empty-state {
@@ -528,7 +525,7 @@ input[type="range"] {
   accent-color: var(--indigo-l);
 }
 
-/* ------------------------------------------------------------ 右侧资产列表 */
+/* ------------------------------------------------------------ 鍙充晶璧勪骇鍒楄〃 */
 
 .side-head {
   display: flex;
@@ -540,9 +537,7 @@ input[type="range"] {
   flex: none;
 }
 
-/* 搜索框外壳：输入框 + 清空键叠在一起（清空键绝对定位在右端）。
-   原来输入框是 .side-right 的直接子元素，加了外壳之后那条 `>` 选择器就匹配不到了 ——
-   所以这里把同样的外边距/宽度规则改挂在 .search-box 上（一个真相只留一处）。 */
+/* 鎼滅储妗嗗澹筹細杈撳叆妗?+ 娓呯┖閿彔鍦ㄤ竴璧凤紙娓呯┖閿粷瀵瑰畾浣嶅湪鍙崇锛夈€?   鍘熸潵杈撳叆妗嗘槸 .side-right 鐨勭洿鎺ュ瓙鍏冪礌锛屽姞浜嗗澹充箣鍚庨偅鏉?`>` 閫夋嫨鍣ㄥ氨鍖归厤涓嶅埌浜?鈥斺€?   鎵€浠ヨ繖閲屾妸鍚屾牱鐨勫杈硅窛/瀹藉害瑙勫垯鏀规寕鍦?.search-box 涓婏紙涓€涓湡鐩稿彧鐣欎竴澶勶級銆?*/
 .search-box { flex: none; position: relative; margin: 0 10px; width: calc(100% - 20px); }
 .search-box > .text-input { width: 100%; margin: 0; padding-right: 32px; }
 .search-box .search-clear {
@@ -562,10 +557,8 @@ input[type="range"] {
   .search-box .search-clear:hover { color: var(--g200); }
 }
 
-/* 平铺页头部那份搜索框：和抽屉里那份结构相同（所以复用 .search-box 的内部规则），
-   但不是满宽块，而是 gal-head 里的一格 —— 关键是**不能主动撑大**（grow:0），
-   否则英文下会把后面的排序控件挤换行，中英文头部高度就差一截。
-   基准 180，被挤时能缩到 100，最多 220。手机上另起一行占满。 */
+/* 骞抽摵椤靛ご閮ㄩ偅浠芥悳绱㈡锛氬拰鎶藉眽閲岄偅浠界粨鏋勭浉鍚岋紙鎵€浠ュ鐢?.search-box 鐨勫唴閮ㄨ鍒欙級锛?   浣嗕笉鏄弧瀹藉潡锛岃€屾槸 gal-head 閲岀殑涓€鏍?鈥斺€?鍏抽敭鏄?*涓嶈兘涓诲姩鎾戝ぇ**锛坓row:0锛夛紝
+   鍚﹀垯鑻辨枃涓嬩細鎶婂悗闈㈢殑鎺掑簭鎺т欢鎸ゆ崲琛岋紝涓嫳鏂囧ご閮ㄩ珮搴﹀氨宸竴鎴€?   鍩哄噯 180锛岃鎸ゆ椂鑳界缉鍒?100锛屾渶澶?220銆傛墜鏈轰笂鍙﹁捣涓€琛屽崰婊°€?*/
 .gal-search { flex: 0 1 180px; width: auto; min-width: 100px; max-width: 220px; margin: 0; }
 .filters { padding: 6px 10px; justify-content: space-between; flex: none; }
 
@@ -577,8 +570,8 @@ input[type="range"] {
   color: var(--g500);
   text-transform: uppercase;
   letter-spacing: .05em;
-  /* 必须不透明：半透明底会让滚动到标题下面的资产名透出来，
-     看起来就是「字体重叠」（2026-09-24 用户截图实测） */
+  /* 蹇呴』涓嶉€忔槑锛氬崐閫忔槑搴曚細璁╂粴鍔ㄥ埌鏍囬涓嬮潰鐨勮祫浜у悕閫忓嚭鏉ワ紝
+     鐪嬭捣鏉ュ氨鏄€屽瓧浣撻噸鍙犮€嶏紙2026-09-24 鐢ㄦ埛鎴浘瀹炴祴锛?*/
   background: #263244;
   position: sticky;
   top: 0;
@@ -594,7 +587,7 @@ input[type="range"] {
 .asset-item.bad { opacity: .62; }
 .asset-item .ai-warn { color: #fca5a5; font-size: 11px; margin-top: 2px; }
 
-/* ------------------------------------------------------------ 弹窗 */
+/* ------------------------------------------------------------ 寮圭獥 */
 
 .modal-mask {
   position: fixed;
@@ -668,10 +661,9 @@ table.keys td:first-child {
   width: 40%;
 }
 
-/* ------------------------------------------------- 删除 / 批量选择 */
+/* ------------------------------------------------- 鍒犻櫎 / 鎵归噺閫夋嫨 */
 
-/* 危险动作（删除）在视觉上必须先声夺人：这是不可逆的操作，
-   颜色是唯一在点下去之前能提醒用户的东西。 */
+/* 鍗遍櫓鍔ㄤ綔锛堝垹闄わ級鍦ㄨ瑙変笂蹇呴』鍏堝０澶轰汉锛氳繖鏄笉鍙€嗙殑鎿嶄綔锛?   棰滆壊鏄敮涓€鍦ㄧ偣涓嬪幓涔嬪墠鑳芥彁閱掔敤鎴风殑涓滆タ銆?*/
 .btn.danger {
   background: transparent;
   border-color: rgba(239, 68, 68, .62);
@@ -680,10 +672,10 @@ table.keys td:first-child {
 @media (hover: hover) and (pointer: fine) {
   .btn.danger:hover { background: rgba(239, 68, 68, .16); border-color: var(--danger); color: #fff; }
 }
-/* 填满整行的按钮：菜单里只有两三个选项，撑满是给手指用的 */
+/* 濉弧鏁磋鐨勬寜閽細鑿滃崟閲屽彧鏈変袱涓変釜閫夐」锛屾拺婊℃槸缁欐墜鎸囩敤鐨?*/
 .btn.block { display: block; width: 100%; text-align: center; min-height: 42px; font-size: 14px; }
 
-/* 批量选择操作条。默认不占位，进入选择模式才展开。 */
+/* 鎵归噺閫夋嫨鎿嶄綔鏉°€傞粯璁や笉鍗犱綅锛岃繘鍏ラ€夋嫨妯″紡鎵嶅睍寮€銆?*/
 .gal-selbar {
   display: flex;
   align-items: center;
@@ -698,8 +690,8 @@ table.keys td:first-child {
 .gal-selbar-spacer { flex: 1; }
 .gal-selbar .row.small span { font-size: 12.5px; }
 
-/* 卡片上的选择圈：平时完全不存在（不占位、不可见），
-   进入选择模式才让出一点位置 —— 不做动画，避免和拖动的 FLIP 抢 GPU。 */
+/* 鍗＄墖涓婄殑閫夋嫨鍦堬細骞虫椂瀹屽叏涓嶅瓨鍦紙涓嶅崰浣嶃€佷笉鍙锛夛紝
+   杩涘叆閫夋嫨妯″紡鎵嶈鍑轰竴鐐逛綅缃?鈥斺€?涓嶅仛鍔ㄧ敾锛岄伩鍏嶅拰鎷栧姩鐨?FLIP 鎶?GPU銆?*/
 .card-check {
   display: none;
   position: absolute;
@@ -728,20 +720,16 @@ body.card-select .card { cursor: pointer; }
 body.card-select .card.sel { border-color: var(--indigo); box-shadow: 0 0 0 2px var(--indigo); }
 body.card-select .card.sel .card-check { border-color: var(--indigo); background: var(--indigo); }
 body.card-select .card.sel .card-check::after { background: #fff; }
-/* 选择模式下拖动把手没有意义（拖不了），藏掉免得误导 */
+/* 閫夋嫨妯″紡涓嬫嫋鍔ㄦ妸鎵嬫病鏈夋剰涔夛紙鎷栦笉浜嗭級锛岃棌鎺夊厤寰楄瀵?*/
 body.card-select .card-drag { display: none; }
 
-/* 按名称 / 日期排序时同理：那两个顺序是算出来的，拖动无处可存，把手也藏掉。
-   类名由 applySortUI() 挂（随**数据**变 → JS 挂类名，见 ARCHITECTURE R1）。
-   注意：只藏把手，卡片本身的 pointerdown 仍然进 startCardDrag ——
-   那里还要负责触屏长按弹菜单（跟排序模式无关）。 */
+/* 鎸夊悕绉?/ 鏃ユ湡鎺掑簭鏃跺悓鐞嗭細閭ｄ袱涓『搴忔槸绠楀嚭鏉ョ殑锛屾嫋鍔ㄦ棤澶勫彲瀛橈紝鎶婃墜涔熻棌鎺夈€?   绫诲悕鐢?applySortUI() 鎸傦紙闅?*鏁版嵁**鍙?鈫?JS 鎸傜被鍚嶏紝瑙?ARCHITECTURE R1锛夈€?   娉ㄦ剰锛氬彧钘忔妸鎵嬶紝鍗＄墖鏈韩鐨?pointerdown 浠嶇劧杩?startCardDrag 鈥斺€?   閭ｉ噷杩樿璐熻矗瑙﹀睆闀挎寜寮硅彍鍗曪紙璺熸帓搴忔ā寮忔棤鍏筹級銆?*/
 body.sort-locked .card-drag { display: none; }
 
-/* 长按菜单里的资产名 */
+/* 闀挎寜鑿滃崟閲岀殑璧勪骇鍚?*/
 .menu-title { font-size: 14px; font-weight: 600; word-break: break-all; }
 
-/* 卡片菜单里的绝对路径：等宽、允许任意位置换行（Windows 路径又长又没有空格），
-   并且**必须可选中** —— 复制失败时用户还能手动划选。 */
+/* 鍗＄墖鑿滃崟閲岀殑缁濆璺緞锛氱瓑瀹姐€佸厑璁镐换鎰忎綅缃崲琛岋紙Windows 璺緞鍙堥暱鍙堟病鏈夌┖鏍硷級锛?   骞朵笖**蹇呴』鍙€変腑** 鈥斺€?澶嶅埗澶辫触鏃剁敤鎴疯繕鑳芥墜鍔ㄥ垝閫夈€?*/
 .menu-path {
   margin: 2px 0 4px;
   padding: 7px 9px;
@@ -756,7 +744,7 @@ body.sort-locked .card-drag { display: none; }
   user-select: text;
 }
 
-/* 确认弹窗：警告文案 + 待删清单 */
+/* 纭寮圭獥锛氳鍛婃枃妗?+ 寰呭垹娓呭崟 */
 .danger-note {
   margin: 0;
   padding: 9px 11px;
@@ -790,11 +778,7 @@ body.sort-locked .card-drag { display: none; }
 }
 .modal.narrow { max-width: 420px; }
 
-/* ============================================================ 手机布局（APK）
-   竖屏只有一列：舞台铺满，左右两栏改成从底部升起的抽屉，用底部标签切换。
-   这些规则全部挂在 body.is-touch 上 —— 该类只在 APK（有 BD2Native）时添加，
-   桌面版无论窗口多窄都不会受影响。
-   ------------------------------------------------------------------------ */
+/* ============================================================ 鎵嬫満甯冨眬锛圓PK锛?   绔栧睆鍙湁涓€鍒楋細鑸炲彴閾烘弧锛屽乏鍙充袱鏍忔敼鎴愪粠搴曢儴鍗囪捣鐨勬娊灞夛紝鐢ㄥ簳閮ㄦ爣绛惧垏鎹€?   杩欎簺瑙勫垯鍏ㄩ儴鎸傚湪 body.is-touch 涓?鈥斺€?璇ョ被鍙湪 APK锛堟湁 BD2Native锛夋椂娣诲姞锛?   妗岄潰鐗堟棤璁虹獥鍙ｅ绐勯兘涓嶄細鍙楀奖鍝嶃€?   ------------------------------------------------------------------------ */
 
 .mnow, .mquick, .mtabs { display: none; }
 .sheet-scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); z-index: 35; }
@@ -807,13 +791,13 @@ body.is-touch .nav-actions .select { min-height: 38px; font-size: 13px; }
 
 body.is-touch .storage-bar { font-size: 11.5px; padding: 6px 10px; }
 body.is-touch .storage-bar .btn.tiny { min-height: 34px; padding: 5px 12px; font-size: 12.5px; }
-/* 手机首页不放目录条：内容搬进「设置 → 文件目录」，首页只留舞台 */
+/* 鎵嬫満棣栭〉涓嶆斁鐩綍鏉★細鍐呭鎼繘銆岃缃?鈫?鏂囦欢鐩綍銆嶏紝棣栭〉鍙暀鑸炲彴 */
 body.is-touch .storage-bar { display: none !important; }
 
 body.is-touch .body { position: relative; }
 body.is-touch .stage { padding: 6px; }
 
-/* 当前资产名：手机上左侧栏收进抽屉了，舞台下面补一行 */
+/* 褰撳墠璧勪骇鍚嶏細鎵嬫満涓婂乏渚ф爮鏀惰繘鎶藉眽浜嗭紝鑸炲彴涓嬮潰琛ヤ竴琛?*/
 body.is-touch .mnow {
   display: block;
   flex: none;
@@ -826,7 +810,7 @@ body.is-touch .mnow {
   text-overflow: ellipsis;
 }
 
-/* 快捷播放条 */
+/* 蹇嵎鎾斁鏉?*/
 body.is-touch .mquick {
   display: flex;
   gap: 8px;
@@ -837,7 +821,7 @@ body.is-touch .mquick {
 }
 body.is-touch .mquick .btn { flex: 1; min-height: 46px; font-size: 15px; }
 
-/* 底部标签 */
+/* 搴曢儴鏍囩 */
 body.is-touch .mtabs {
   display: flex;
   gap: 6px;
@@ -864,7 +848,7 @@ body.is-touch .mtabs {
 }
 .mtab.active { background: var(--indigo); color: #fff; }
 
-/* 两栏 → 底部抽屉 */
+/* 涓ゆ爮 鈫?搴曢儴鎶藉眽 */
 body.is-touch .side {
   position: absolute;
   left: 0;
@@ -897,7 +881,7 @@ body.is-touch .side::before {
 body.is-touch .side-left .tabs { display: none; }
 body.is-touch .pane { padding: 18px 12px 26px; }
 
-/* 触摸目标放大：Android 无障碍建议最小 48px，这里按钮取 44~48 */
+/* 瑙︽懜鐩爣鏀惧ぇ锛欰ndroid 鏃犻殰纰嶅缓璁渶灏?48px锛岃繖閲屾寜閽彇 44~48 */
 body.is-touch .btn { min-height: 44px; padding: 8px 12px; font-size: 14px; }
 body.is-touch .nav-actions .btn { min-height: 38px; padding: 6px 10px; }
 body.is-touch .select,
@@ -913,22 +897,21 @@ body.is-touch .row { gap: 8px; }
 body.is-touch .modal { max-height: 90vh; }
 body.is-touch .modal-body { gap: 12px; }
 
-/* ------------------------------------------------------------ 滚动条 */
+/* ------------------------------------------------------------ 婊氬姩鏉?*/
 
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .16); border-radius: 5px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, .3); }
 
-/* ------------------------------------------------------------ 窄屏 */
+/* ------------------------------------------------------------ 绐勫睆 */
 
 @media (max-width: 1180px) {
   .side-right { width: 250px; }
   .side-left { width: 236px; }
 }
 @media (max-width: 900px) {
-  /* 手机 / 窄屏：舞台在上、控制在中、资产列表在下，整页滚动。
-     注意不能给三块都设 max-height 之和 > 100vh，否则内容被裁掉且无法滚动。 */
+  /* 鎵嬫満 / 绐勫睆锛氳垶鍙板湪涓娿€佹帶鍒跺湪涓€佽祫浜у垪琛ㄥ湪涓嬶紝鏁撮〉婊氬姩銆?     娉ㄦ剰涓嶈兘缁欎笁鍧楅兘璁?max-height 涔嬪拰 > 100vh锛屽惁鍒欏唴瀹硅瑁佹帀涓旀棤娉曟粴鍔ㄣ€?*/
   .body { flex-direction: column; overflow-y: auto; }
   .stage { order: 1; flex: none; height: 50vh; min-height: 240px; }
   .side { width: 100%; border: none; flex: none; max-height: none; }
@@ -948,18 +931,16 @@ body.is-touch .modal-body { gap: 12px; }
   .side-left .group h4 { font-size: 12px; }
 }
 
-/* APK / 触屏模式：手机上没有键盘，所有按键提示换成触摸说法 */
+/* APK / 瑙﹀睆妯″紡锛氭墜鏈轰笂娌℃湁閿洏锛屾墍鏈夋寜閿彁绀烘崲鎴愯Е鎽歌娉?*/
 .touch-only { display: none; }
 body.is-touch .kb-only { display: none; }
 body.is-touch .touch-only { display: inline; }
 
-/* ------------------------------------------------------------ 平铺浏览（主界面）
-   主界面不直接播动画，而是一张张卡片平铺；点卡片进播放页。
-   播放顺序有三种来源（见 app.js 的 loadSort / orderedList）：
-     · 手动 —— 拖动卡片调整（长按卡片，或按住左上角 ⠿ 立刻拖）
-     · 名称 —— 按文件名升/降序
-     · 日期 —— 按文件改动时间升/降序
-   排序结果同时决定左列表和播放页 ◀▶ 的走向，不只是画面顺序。 */
+/* ------------------------------------------------------------ 骞抽摵娴忚锛堜富鐣岄潰锛?   涓荤晫闈笉鐩存帴鎾姩鐢伙紝鑰屾槸涓€寮犲紶鍗＄墖骞抽摵锛涚偣鍗＄墖杩涙挱鏀鹃〉銆?   鎾斁椤哄簭鏈変笁绉嶆潵婧愶紙瑙?app.js 鐨?loadSort / orderedList锛夛細
+     路 鎵嬪姩 鈥斺€?鎷栧姩鍗＄墖璋冩暣锛堥暱鎸夊崱鐗囷紝鎴栨寜浣忓乏涓婅 鉅?绔嬪埢鎷栵級
+     路 鍚嶇О 鈥斺€?鎸夋枃浠跺悕鍗?闄嶅簭
+     路 鏃ユ湡 鈥斺€?鎸夋枃浠舵敼鍔ㄦ椂闂村崌/闄嶅簭
+   鎺掑簭缁撴灉鍚屾椂鍐冲畾宸﹀垪琛ㄥ拰鎾斁椤?鈼€鈻?鐨勮蛋鍚戯紝涓嶅彧鏄敾闈㈤『搴忋€?*/
 
 .gallery {
   flex: 1;
@@ -972,16 +953,15 @@ body.is-touch .touch-only { display: inline; }
 }
 body.view-grid .gallery { display: flex; }
 body.view-grid .stage { display: none; }
-/* 平铺页不播动画：当前资产名 / 快捷播放条一并收起（进度条在 .stage 里，跟着一起隐藏） */
-/* 平铺首页不是播放页：舞台下方的资产名、快捷播放条，以及底部那四个标签
-   （资产 / 播放 / 图层 / 设置）整条都不该出现，抽屉也没地方打开。
-   注意「设置」因此少了一个入口 —— 由顶栏那颗补上，
-   见 app.js 的 syncTouchSettingsEntry()。 */
+/* 骞抽摵椤典笉鎾姩鐢伙細褰撳墠璧勪骇鍚?/ 蹇嵎鎾斁鏉′竴骞舵敹璧凤紙杩涘害鏉″湪 .stage 閲岋紝璺熺潃涓€璧烽殣钘忥級 */
+/* 骞抽摵棣栭〉涓嶆槸鎾斁椤碉細鑸炲彴涓嬫柟鐨勮祫浜у悕銆佸揩鎹锋挱鏀炬潯锛屼互鍙婂簳閮ㄩ偅鍥涗釜鏍囩
+   锛堣祫浜?/ 鎾斁 / 鍥惧眰 / 璁剧疆锛夋暣鏉￠兘涓嶈鍑虹幇锛屾娊灞変篃娌″湴鏂规墦寮€銆?   娉ㄦ剰銆岃缃€嶅洜姝ゅ皯浜嗕竴涓叆鍙?鈥斺€?鐢遍《鏍忛偅棰楄ˉ涓婏紝
+   瑙?app.js 鐨?syncTouchSettingsEntry()銆?*/
 body.view-grid .mnow,
 body.view-grid .mquick,
 body.view-grid .mtabs { display: none !important; }
 
-/* 标题行。窄屏自动折成两行：上行标题+提示，下行排序控件。 */
+/* 鏍囬琛屻€傜獎灞忚嚜鍔ㄦ姌鎴愪袱琛岋細涓婅鏍囬+鎻愮ず锛屼笅琛屾帓搴忔帶浠躲€?*/
 .gal-head {
   display: flex;
   align-items: center;
@@ -1000,11 +980,11 @@ body.view-grid .mtabs { display: none !important; }
 .gal-head-tools {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;          /* 窄屏上宁可折行，也不要顶出屏幕 */
+  flex-wrap: wrap;          /* 绐勫睆涓婂畞鍙姌琛岋紝涔熶笉瑕侀《鍑哄睆骞?*/
   justify-content: flex-end;
   gap: 6px;
   flex: none;
-  max-width: 100%;          /* 折行时按容器宽度收窄（否则 flex:none 会取 max-content 撑破） */
+  max-width: 100%;          /* 鎶樿鏃舵寜瀹瑰櫒瀹藉害鏀剁獎锛堝惁鍒?flex:none 浼氬彇 max-content 鎾戠牬锛?*/
   min-width: 0;
   margin-left: auto;
 }
@@ -1012,12 +992,10 @@ body.view-grid .mtabs { display: none !important; }
 .gal-thumb { font-size: 12px; color: var(--indigo-300); white-space: nowrap; }
 .gal-hint { flex: 1; min-width: 0; font-size: 12px; color: var(--g500); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* 排序切换（手动 / 名称 / 日期）。
-   滑块指示器靠 transform 平移 —— 只动 transform，不触发布局。
-   这个控件一天要被点几十次，所以动效刻意压到很短（160ms），只是让状态变化可读。 */
+/* 鎺掑簭鍒囨崲锛堟墜鍔?/ 鍚嶇О / 鏃ユ湡锛夈€?   婊戝潡鎸囩ず鍣ㄩ潬 transform 骞崇Щ 鈥斺€?鍙姩 transform锛屼笉瑙﹀彂甯冨眬銆?   杩欎釜鎺т欢涓€澶╄琚偣鍑犲崄娆★紝鎵€浠ュ姩鏁堝埢鎰忓帇鍒板緢鐭紙160ms锛夛紝鍙槸璁╃姸鎬佸彉鍖栧彲璇汇€?*/
 .gal-sort {
-  --i: 0;                /* 当前选中项的下标，JS 更新 */
-  --gs-w: 46px;          /* 每格宽度（三个按钮等宽，滑块才能按格平移） */
+  --i: 0;                /* 褰撳墠閫変腑椤圭殑涓嬫爣锛孞S 鏇存柊 */
+  --gs-w: 46px;          /* 姣忔牸瀹藉害锛堜笁涓寜閽瓑瀹斤紝婊戝潡鎵嶈兘鎸夋牸骞崇Щ锛?*/
   --gs-pad: 3px;
   position: relative;
   display: flex;
@@ -1063,7 +1041,7 @@ body.view-grid .mtabs { display: none !important; }
   .gs-btn:hover { color: var(--text); }
 }
 
-/* 升降序切换。手动模式下点它 = 反转当前顺序，所以三种模式都能用。 */
+/* 鍗囬檷搴忓垏鎹€傛墜鍔ㄦā寮忎笅鐐瑰畠 = 鍙嶈浆褰撳墠椤哄簭锛屾墍浠ヤ笁绉嶆ā寮忛兘鑳界敤銆?*/
 .gs-dir {
   appearance: none;
   flex: none;
@@ -1092,18 +1070,38 @@ body.view-grid .mtabs { display: none !important; }
 }
 .gs-dir:active { transform: scale(.94); }
 
-/* 资产类型切换（BD2 / Lost Sword）。
-   不沿用上面 .gal-sort 的滑块指示器：那两个按钮文案长度差一倍（BD2 vs Lost Sword），
-   滑块要等宽才好平移，硬凑会把 BD2 那格撑得很空。改成「选中的那颗按钮自己上底色」，
-   宽度随文案自适应。视觉语言（深底、圆角、indigo 高亮）与排序控件保持一致。 */
-.gal-mode {
-  display: flex;
+/* 璧勪骇绫诲瀷鍒囨崲锛圔D2 / Lost Sword锛夈€?   涓嶆部鐢ㄤ笂闈?.gal-sort 鐨勬粦鍧楁寚绀哄櫒锛氶偅涓や釜鎸夐挳鏂囨闀垮害宸竴鍊嶏紙BD2 vs Lost Sword锛夛紝
+   婊戝潡瑕佺瓑瀹芥墠濂藉钩绉伙紝纭噾浼氭妸 BD2 閭ｆ牸鎾戝緱寰堢┖銆傛敼鎴愩€岄€変腑鐨勯偅棰楁寜閽嚜宸变笂搴曡壊銆嶏紝
+   瀹藉害闅忔枃妗堣嚜閫傚簲銆傝瑙夎瑷€锛堟繁搴曘€佸渾瑙掋€乮ndigo 楂樹寒锛変笌鎺掑簭鎺т欢淇濇寔涓€鑷淬€?*/
+/* 璧勪骇绫诲瀷涓嬫媺鏉★紙鏇夸唬鍘熸潵鐨勫叚涓苟鎺掓寜閽細灏忓睆鎶婃爣棰樿鎸ょ垎浜嗭級 */
+.gal-mode-sel {
+  appearance: none;
+  -webkit-appearance: none;
   flex: none;
-  gap: 3px;
-  padding: 3px;
+  max-width: 46vw;
+  padding: 6px 26px 6px 10px;
   border-radius: 9px;
   background: var(--g850);
+  background-image: linear-gradient(45deg, transparent 50%, var(--g400) 50%),
+                    linear-gradient(135deg, var(--g400) 50%, transparent 50%);
+  background-position: right 12px center, right 7px center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
   border: 1px solid rgba(255, 255, 255, .08);
+  color: var(--g400);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  text-overflow: ellipsis;
+}
+.gal-mode-sel:hover { color: var(--text); }
+/* 瑙﹀睆锛氬師鐢熼€夋嫨鍣紝鍋氬ぇ涓€鐐瑰ソ鐐?*/
+body.is-touch .gal-mode-sel {
+  min-height: 34px;
+  padding: 8px 30px 8px 12px;
+  font-size: 13px;
+  max-width: 52vw;
 }
 .gm-btn {
   appearance: none;
@@ -1140,9 +1138,7 @@ body.view-grid .mtabs { display: none !important; }
   overscroll-behavior: contain;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
-  /* 关键：卡片带 overflow:hidden，作为网格项时「自动最小尺寸」会算成 0，
-     于是 auto 行高塌成 2px（只剩边框），卡片互相重叠。用 max-content 让行高
-     直接取该行内容高度（缩略图 + 文字），卡片再拉伸填满行，行内高度统一。 */
+  /* 鍏抽敭锛氬崱鐗囧甫 overflow:hidden锛屼綔涓虹綉鏍奸」鏃躲€岃嚜鍔ㄦ渶灏忓昂瀵搞€嶄細绠楁垚 0锛?     浜庢槸 auto 琛岄珮濉屾垚 2px锛堝彧鍓╄竟妗嗭級锛屽崱鐗囦簰鐩搁噸鍙犮€傜敤 max-content 璁╄楂?     鐩存帴鍙栬琛屽唴瀹归珮搴︼紙缂╃暐鍥?+ 鏂囧瓧锛夛紝鍗＄墖鍐嶆媺浼稿～婊¤锛岃鍐呴珮搴︾粺涓€銆?*/
   grid-auto-rows: max-content;
   gap: 10px;
   align-content: start;
@@ -1158,8 +1154,8 @@ body.view-grid .mtabs { display: none !important; }
   border-radius: 10px;
   overflow: hidden;
   cursor: pointer;
-  /* 卡片是控件不是正文：长按不应该选中标题文字 / 弹分享菜单，
-     否则会跟「长按抬起卡片」打架。正文该能选的地方（播放页标题）没动。 */
+  /* 鍗＄墖鏄帶浠朵笉鏄鏂囷細闀挎寜涓嶅簲璇ラ€変腑鏍囬鏂囧瓧 / 寮瑰垎浜彍鍗曪紝
+     鍚﹀垯浼氳窡銆岄暱鎸夋姮璧峰崱鐗囥€嶆墦鏋躲€傛鏂囪鑳介€夌殑鍦版柟锛堟挱鏀鹃〉鏍囬锛夋病鍔ㄣ€?*/
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
@@ -1169,30 +1165,29 @@ body.view-grid .mtabs { display: none !important; }
 @media (hover: hover) and (pointer: fine) {
   .card:hover { border-color: rgba(255, 255, 255, .2); }
 }
-/* 点按反馈：立刻变边框（不用等 click），又不和「长按抬起」打架 */
+/* 鐐规寜鍙嶉锛氱珛鍒诲彉杈规锛堜笉鐢ㄧ瓑 click锛夛紝鍙堜笉鍜屻€岄暱鎸夋姮璧枫€嶆墦鏋?*/
 .card:active { border-color: rgba(255, 255, 255, .3); }
 .card.active { border-color: var(--indigo); box-shadow: 0 0 0 1px var(--indigo); }
 .card.bad { opacity: .62; }
 
-/* 拖动中的卡片：脱离子网格、固定定位到视口，靠 transform 跟手。
-   transition 必须关掉，否则跟手会有一帧延迟（手感发飘）。 */
+/* 鎷栧姩涓殑鍗＄墖锛氳劚绂诲瓙缃戞牸銆佸浐瀹氬畾浣嶅埌瑙嗗彛锛岄潬 transform 璺熸墜銆?   transition 蹇呴』鍏虫帀锛屽惁鍒欒窡鎵嬩細鏈変竴甯у欢杩燂紙鎵嬫劅鍙戦锛夈€?*/
 .card.dragging {
   position: fixed;
   left: 0;
   top: 0;
   z-index: 60;
   margin: 0;
-  pointer-events: none;      /* 否则 elementFromPoint 只能摸到自己，落点算不准 */
+  pointer-events: none;      /* 鍚﹀垯 elementFromPoint 鍙兘鎽稿埌鑷繁锛岃惤鐐圭畻涓嶅噯 */
   cursor: grabbing;
   transition: none;
   will-change: transform;
   border-color: var(--indigo-l);
   box-shadow: 0 18px 40px rgba(0, 0, 0, .6), 0 0 0 1px rgba(99, 102, 241, .7);
 }
-/* 松手回位：只在这 200ms 里给 transform 过渡（FLIP 的收尾） */
+/* 鏉炬墜鍥炰綅锛氬彧鍦ㄨ繖 200ms 閲岀粰 transform 杩囨浮锛團LIP 鐨勬敹灏撅級 */
 .card.settling { transition: transform var(--dur-move) var(--ease-out); }
 
-/* 拖动时留在网格里的空位：位置就是落点，其他卡片围着它流开 */
+/* 鎷栧姩鏃剁暀鍦ㄧ綉鏍奸噷鐨勭┖浣嶏細浣嶇疆灏辨槸钀界偣锛屽叾浠栧崱鐗囧洿鐫€瀹冩祦寮€ */
 .card-ph {
   border-radius: 10px;
   border: 1px dashed rgba(99, 102, 241, .55);
@@ -1200,7 +1195,7 @@ body.view-grid .mtabs { display: none !important; }
 }
 
 body.card-dragging { cursor: grabbing; }
-/* 拖动期间不要让浏览器顺手把页面也滚了（自动滚动由 JS 的 rAF 循环负责） */
+/* 鎷栧姩鏈熼棿涓嶈璁╂祻瑙堝櫒椤烘墜鎶婇〉闈篃婊氫簡锛堣嚜鍔ㄦ粴鍔ㄧ敱 JS 鐨?rAF 寰幆璐熻矗锛?*/
 body.card-dragging .gal-grid { overscroll-behavior: none; }
 
 .card-thumb {
@@ -1216,14 +1211,14 @@ body.card-dragging .gal-grid { overscroll-behavior: none; }
 }
 .card-thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .card-thumb.pending::after {
-  content: '生成缩略图…';
+  content: '鐢熸垚缂╃暐鍥锯€?;
   font-size: 11px;
   color: var(--g500);
   animation: pulse 1.4s infinite ease-in-out;
 }
-/* 坏文件/超时：明确告诉用户这张生成不了，队列会跳过它继续 */
+/* 鍧忔枃浠?瓒呮椂锛氭槑纭憡璇夌敤鎴疯繖寮犵敓鎴愪笉浜嗭紝闃熷垪浼氳烦杩囧畠缁х画 */
 .card-thumb.failed::after {
-  content: '无法生成缩略图';
+  content: '鏃犳硶鐢熸垚缂╃暐鍥?;
   font-size: 11px;
   color: var(--g500);
 }
@@ -1240,8 +1235,7 @@ body.card-dragging .gal-grid { overscroll-behavior: none; }
   word-break: break-all;
 }
 .card-sub { font-size: 11px; color: var(--g400); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* 搜索结果里，命中的是内部资源文件（不是卡片上显示的名字）时补的这一行。
-   用主题色区分于普通副标题 —— 它解释的是「为什么这条在结果里」，不是资产属性。 */
+/* 鎼滅储缁撴灉閲岋紝鍛戒腑鐨勬槸鍐呴儴璧勬簮鏂囦欢锛堜笉鏄崱鐗囦笂鏄剧ず鐨勫悕瀛楋級鏃惰ˉ鐨勮繖涓€琛屻€?   鐢ㄤ富棰樿壊鍖哄垎浜庢櫘閫氬壇鏍囬 鈥斺€?瀹冭В閲婄殑鏄€屼负浠€涔堣繖鏉″湪缁撴灉閲屻€嶏紝涓嶆槸璧勪骇灞炴€с€?*/
 .card-hit {
   font-size: 11px;
   margin-top: 3px;
@@ -1251,9 +1245,7 @@ body.card-dragging .gal-grid { overscroll-behavior: none; }
   text-overflow: ellipsis;
 }
 
-/* 拖动把手：伸手就往左上角摸，所以放左上。
-   touch-action: none —— 从把手起手一定是拖动，不可能变成滚动，所以按下即拖、不用长按等待。
-   卡片其它地方是 touch-action: pan-x pan-y（允许滚动，不允许整页捏合），靠长按 180ms 进入拖动。 */
+/* 鎷栧姩鎶婃墜锛氫几鎵嬪氨寰€宸︿笂瑙掓懜锛屾墍浠ユ斁宸︿笂銆?   touch-action: none 鈥斺€?浠庢妸鎵嬭捣鎵嬩竴瀹氭槸鎷栧姩锛屼笉鍙兘鍙樻垚婊氬姩锛屾墍浠ユ寜涓嬪嵆鎷栥€佷笉鐢ㄩ暱鎸夌瓑寰呫€?   鍗＄墖鍏跺畠鍦版柟鏄?touch-action: pan-x pan-y锛堝厑璁告粴鍔紝涓嶅厑璁告暣椤垫崗鍚堬級锛岄潬闀挎寜 180ms 杩涘叆鎷栧姩銆?*/
 .card-drag {
   position: absolute;
   top: 5px;
@@ -1274,8 +1266,8 @@ body.card-dragging .gal-grid { overscroll-behavior: none; }
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
-  /* 把手是二段提示：平时半透明，给卡片缩略图让路；
-     一按下就实心高亮 —— 反馈在 pointerdown 那一刻给，不等 click。 */
+  /* 鎶婃墜鏄簩娈垫彁绀猴細骞虫椂鍗婇€忔槑锛岀粰鍗＄墖缂╃暐鍥捐璺紱
+     涓€鎸変笅灏卞疄蹇冮珮浜?鈥斺€?鍙嶉鍦?pointerdown 閭ｄ竴鍒荤粰锛屼笉绛?click銆?*/
   opacity: .55;
   transition: opacity var(--dur-quick) var(--ease-out),
               background var(--dur-press) var(--ease-out),
@@ -1285,7 +1277,7 @@ body.card-dragging .gal-grid { overscroll-behavior: none; }
   .card:hover .card-drag { opacity: 1; }
 }
 .card-drag:active { cursor: grabbing; background: rgba(79, 70, 229, .85); color: #fff; opacity: 1; }
-/* 拖动中的卡片：把手跟着一起动，没必要留着 */
+/* 鎷栧姩涓殑鍗＄墖锛氭妸鎵嬭窡鐫€涓€璧峰姩锛屾病蹇呰鐣欑潃 */
 .card.dragging .card-drag { opacity: 0; }
 
 .card-fs {
@@ -1316,33 +1308,33 @@ body.card-dragging .gal-grid { overscroll-behavior: none; }
   .card-fs:hover { background: var(--indigo); color: #fff; }
 }
 
-/* 触屏：卡片再小一点，两列排得下；把手/全屏钮放大到好按 */
+/* 瑙﹀睆锛氬崱鐗囧啀灏忎竴鐐癸紝涓ゅ垪鎺掑緱涓嬶紱鎶婃墜/鍏ㄥ睆閽斁澶у埌濂芥寜 */
 body.is-touch .gallery { padding: 6px; }
 body.is-touch .gal-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
 body.is-touch .gal-head { gap: 6px 8px; }
-body.is-touch .gal-head-main { flex: 1 1 100%; }        /* 标题占满一行，控件换到第二行 */
+body.is-touch .gal-head-main { flex: 1 1 100%; }        /* 鏍囬鍗犳弧涓€琛岋紝鎺т欢鎹㈠埌绗簩琛?*/
 body.is-touch .gal-head-tools { margin-left: 0; }
-body.is-touch .gal-hint { display: none; }              /* 手机上提示文案省掉，把宽度让给排序控件 */
-body.is-touch .gal-search { flex: 1 1 100%; max-width: none; }  /* 手机上搜索框独占一行 */
+body.is-touch .gal-hint { display: none; }              /* 鎵嬫満涓婃彁绀烘枃妗堢渷鎺夛紝鎶婂搴﹁缁欐帓搴忔帶浠?*/
+body.is-touch .gal-search { flex: 1 1 100%; max-width: none; }  /* 鎵嬫満涓婃悳绱㈡鐙崰涓€琛?*/
 body.is-touch .card { border-radius: 8px; }
 body.is-touch .card-drag, body.is-touch .card-fs { width: 34px; height: 34px; font-size: 15px; }
-/* 手指按住不动就是在「抬起」卡片，把手不需要常驻可见 —— 手机上默认淡一点，长按后整张卡浮起 */
+/* 鎵嬫寚鎸変綇涓嶅姩灏辨槸鍦ㄣ€屾姮璧枫€嶅崱鐗囷紝鎶婃墜涓嶉渶瑕佸父椹诲彲瑙?鈥斺€?鎵嬫満涓婇粯璁ゆ贰涓€鐐癸紝闀挎寜鍚庢暣寮犲崱娴捣 */
 body.is-touch .card-drag { opacity: .4; }
-/* 排序控件在手机上放大到 34px 高（鼠标 27px 够用，手指不够） */
+/* 鎺掑簭鎺т欢鍦ㄦ墜鏈轰笂鏀惧ぇ鍒?34px 楂橈紙榧犳爣 27px 澶熺敤锛屾墜鎸囦笉澶燂級 */
 body.is-touch .gal-sort { --gs-w: 54px; --gs-pad: 4px; }
 body.is-touch .gs-btn { padding: 8px 0; font-size: 13px; }
 body.is-touch .gs-dir { width: 34px; height: 34px; font-size: 14px; }
-/* 资产类型控件同步放大（可点目标 ≥34px） */
-body.is-touch .gm-btn { padding: 8px 11px; min-height: 34px; font-size: 13px; }
+/* 璧勪骇绫诲瀷鎺т欢鍚屾鏀惧ぇ锛堝彲鐐圭洰鏍?鈮?4px锛?*/
+/* 瑙﹀睆涓婇暱鎸夋寜閽?= 鍒犻櫎鍏ュ彛锛堣 app.js 鐨?bindAltAction锛夛細涓嶈閫変腑鏂囧瓧銆佷笉璁稿脊绯荤粺鑿滃崟锛?   鍚﹀垯闀挎寜鍒颁竴鍗婃祻瑙堝櫒鍏堝脊鍑恒€屽鍒?鍏ㄩ€夈€嶏紝鍒犻櫎绐楁案杩滅瓑涓嶅埌銆?*/
+body.is-touch .gm-btn { padding: 8px 11px; min-height: 34px; font-size: 13px;
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 
-/* 播放页左上角「回到平铺」图标 */
+/* 鎾斁椤靛乏涓婅銆屽洖鍒板钩閾恒€嶅浘鏍?*/
 body.is-touch:not(.view-grid) .grid-fab { display: flex; }
 .grid-fab { left: 10px; right: auto; }
 
-/* PC 播放页左上角的「返回列表」。
-   和上面那个 ⊞ 悬浮键是同一件事的两套入口，按指针类型二选一 ——
-   .kb-only 在触屏下 display:none（见文件上方的 .kb-only 规则），
-   所以手机上不会多出一个按钮。只在播放页出现、全屏时让位给画面。 */
+/* PC 鎾斁椤靛乏涓婅鐨勩€岃繑鍥炲垪琛ㄣ€嶃€?   鍜屼笂闈㈤偅涓?鈯?鎮诞閿槸鍚屼竴浠朵簨鐨勪袱濂楀叆鍙ｏ紝鎸夋寚閽堢被鍨嬩簩閫変竴 鈥斺€?   .kb-only 鍦ㄨЕ灞忎笅 display:none锛堣鏂囦欢涓婃柟鐨?.kb-only 瑙勫垯锛夛紝
+   鎵€浠ユ墜鏈轰笂涓嶄細澶氬嚭涓€涓寜閽€傚彧鍦ㄦ挱鏀鹃〉鍑虹幇銆佸叏灞忔椂璁╀綅缁欑敾闈€?*/
 .stage-back {
   display: flex;
   align-items: center;
@@ -1361,8 +1353,7 @@ body.is-immersive .stage-back { display: none; }
   .stage-back:hover { background: var(--g600); border-color: rgba(255, 255, 255, .18); }
 }
 
-/* 系统开了「减少动态效果」：去掉位移/缩放，只保留帮助理解的透明度与颜色变化。
-   拖动排序本身照常工作，只是落位的飞入动画变成瞬移。 */
+/* 绯荤粺寮€浜嗐€屽噺灏戝姩鎬佹晥鏋溿€嶏細鍘绘帀浣嶇Щ/缂╂斁锛屽彧淇濈暀甯姪鐞嗚В鐨勯€忔槑搴︿笌棰滆壊鍙樺寲銆?   鎷栧姩鎺掑簭鏈韩鐓у父宸ヤ綔锛屽彧鏄惤浣嶇殑椋炲叆鍔ㄧ敾鍙樻垚鐬Щ銆?*/
 @media (prefers-reduced-motion: reduce) {
   .card,
   .btn,
@@ -1378,12 +1369,10 @@ body.is-immersive .stage-back { display: none; }
   .card.dragging { box-shadow: 0 6px 18px rgba(0, 0, 0, .5), 0 0 0 1px rgba(99, 102, 241, .7); }
 }
 
-/* ------------------------------------------------------------ 全屏（沉浸）模式
-   屏幕上只剩舞台：顶栏 / 状态条 / 侧栏 / 进度条 / 底部标签全部收起，
-   顶部留一条半透明操作条（☰ 文件列表、◀▶ 切换资产、✕ 退出），
-   底部留一条动画切换条（◀▶ 切动画），静置几秒后一起淡出。 */
+/* ------------------------------------------------------------ 鍏ㄥ睆锛堟矇娴革級妯″紡
+   灞忓箷涓婂彧鍓╄垶鍙帮細椤舵爮 / 鐘舵€佹潯 / 渚ф爮 / 杩涘害鏉?/ 搴曢儴鏍囩鍏ㄩ儴鏀惰捣锛?   椤堕儴鐣欎竴鏉″崐閫忔槑鎿嶄綔鏉★紙鈽?鏂囦欢鍒楄〃銆佲梹鈻?鍒囨崲璧勪骇銆佲湑 閫€鍑猴級锛?   搴曢儴鐣欎竴鏉″姩鐢诲垏鎹㈡潯锛堚梹鈻?鍒囧姩鐢伙級锛岄潤缃嚑绉掑悗涓€璧锋贰鍑恒€?*/
 
-/* 画面右上角的 ⛶ 全屏图标：只在触屏模式的常规布局里出现 */
+/* 鐢婚潰鍙充笂瑙掔殑 鉀?鍏ㄥ睆鍥炬爣锛氬彧鍦ㄨЕ灞忔ā寮忕殑甯歌甯冨眬閲屽嚭鐜?*/
 .fs-fab {
   display: none;
   position: absolute;
@@ -1406,13 +1395,10 @@ body.is-touch .fs-fab { display: flex; }
 body.is-touch .fs-fab:active { background: rgba(40, 48, 66, .85); }
 body.is-immersive .fs-fab { display: none !important; }
 
-/* 播放页左右两侧：切上一个 / 下一个**动画**（切资产在底部那条 ◀◀/▶▶ 上）。
-   显示条件故意分成两层，各自只写一处（见 ARCHITECTURE.md 的「不变量 R1 可见性归属」）：
-     · 随**模式**变化的条件（沉不沉浸）在这里的 CSS 里；
-     · 随**数据**变化的条件（当前资产有没有第二个动画可切）由 JS 挂 body 上的 .stage-nav-avail。
-   父级 .stage 是 flex 列：上面是画布、下面是进度条，所以纵向中心要扣掉进度条那一行，
-   不然箭头会比画面中心低一截。 */
-.stage { --seek-h: 28px; }         /* 进度条那一行的高度（range 约 22px + margin-top 6px） */
+/* 鎾斁椤靛乏鍙充袱渚э細鍒囦笂涓€涓?/ 涓嬩竴涓?*鍔ㄧ敾**锛堝垏璧勪骇鍦ㄥ簳閮ㄩ偅鏉?鈼€鈼€/鈻垛柖 涓婏級銆?   鏄剧ず鏉′欢鏁呮剰鍒嗘垚涓ゅ眰锛屽悇鑷彧鍐欎竴澶勶紙瑙?ARCHITECTURE.md 鐨勩€屼笉鍙橀噺 R1 鍙鎬у綊灞炪€嶏級锛?     路 闅?*妯″紡**鍙樺寲鐨勬潯浠讹紙娌変笉娌夋蹈锛夊湪杩欓噷鐨?CSS 閲岋紱
+     路 闅?*鏁版嵁**鍙樺寲鐨勬潯浠讹紙褰撳墠璧勪骇鏈夋病鏈夌浜屼釜鍔ㄧ敾鍙垏锛夌敱 JS 鎸?body 涓婄殑 .stage-nav-avail銆?   鐖剁骇 .stage 鏄?flex 鍒楋細涓婇潰鏄敾甯冦€佷笅闈㈡槸杩涘害鏉★紝鎵€浠ョ旱鍚戜腑蹇冭鎵ｆ帀杩涘害鏉￠偅涓€琛岋紝
+   涓嶇劧绠ご浼氭瘮鐢婚潰涓績浣庝竴鎴€?*/
+.stage { --seek-h: 28px; }         /* 杩涘害鏉￠偅涓€琛岀殑楂樺害锛坮ange 绾?22px + margin-top 6px锛?*/
 .stage-nav {
   display: none;
   position: absolute;
@@ -1440,7 +1426,7 @@ body.is-immersive .fs-fab { display: none !important; }
 .stage-nav.prev { left: 10px; }
 .stage-nav.next { right: 10px; }
 body.stage-nav-avail:not(.view-grid) .stage-nav { display: flex; }
-/* 沉浸模式顶部条里已经有同一对「切资产」按钮，这里不重复占位 */
+/* 娌夋蹈妯″紡椤堕儴鏉￠噷宸茬粡鏈夊悓涓€瀵广€屽垏璧勪骇銆嶆寜閽紝杩欓噷涓嶉噸澶嶅崰浣?*/
 body.is-immersive .stage-nav { display: none !important; }
 
 .fsbar {
@@ -1458,7 +1444,7 @@ body.is-immersive .stage-nav { display: none !important; }
 }
 .fsbar.dim { opacity: .1; }
 
-/* 底部动画切换条：◀ 动画名 ▶ */
+/* 搴曢儴鍔ㄧ敾鍒囨崲鏉★細鈼€ 鍔ㄧ敾鍚?鈻?*/
 .fs-anim-bar {
   position: fixed;
   left: 50%;
@@ -1515,7 +1501,7 @@ body.is-immersive .stage-nav { display: none !important; }
   text-overflow: ellipsis;
 }
 
-/* 全局轻提示（保存顺序 / 删除资产 / 切资产都走它，不限于全屏） */
+/* 鍏ㄥ眬杞绘彁绀猴紙淇濆瓨椤哄簭 / 鍒犻櫎璧勪骇 / 鍒囪祫浜ч兘璧板畠锛屼笉闄愪簬鍏ㄥ睆锛?*/
 .toast {
   position: fixed;
   left: 50%;
@@ -1531,7 +1517,7 @@ body.is-immersive .stage-nav { display: none !important; }
   text-align: center;
   pointer-events: none;
 }
-/* 手机上底部还压着「快捷播放条 + 四个标签」，默认的 30px 会被它们盖住 */
+/* 鎵嬫満涓婂簳閮ㄨ繕鍘嬬潃銆屽揩鎹锋挱鏀炬潯 + 鍥涗釜鏍囩銆嶏紝榛樿鐨?30px 浼氳瀹冧滑鐩栦綇 */
 body.is-touch .toast {
   bottom: calc(150px + env(safe-area-inset-bottom, 0px));
 }
@@ -1544,18 +1530,17 @@ body.is-immersive .mtabs,
 body.is-immersive .seek,
 body.is-immersive .side-left { display: none !important; }
 
-/* 隐藏界面（只看画面）：顶栏和底部动画条一起收起，
-   点一下画面临时唤出 4 秒，方便再点一次图标恢复。
-   切动画时的 toast 由 switchAnimation 在 cleanUI 下直接跳过（文案同底栏，会像 chrome）。 */
+/* 闅愯棌鐣岄潰锛堝彧鐪嬬敾闈級锛氶《鏍忓拰搴曢儴鍔ㄧ敾鏉′竴璧锋敹璧凤紝
+   鐐逛竴涓嬬敾闈复鏃跺敜鍑?4 绉掞紝鏂逛究鍐嶇偣涓€娆″浘鏍囨仮澶嶃€?   鍒囧姩鐢绘椂鐨?toast 鐢?switchAnimation 鍦?cleanUI 涓嬬洿鎺ヨ烦杩囷紙鏂囨鍚屽簳鏍忥紝浼氬儚 chrome锛夈€?*/
 body.is-cleanui:not(.fs-reveal) .fsbar,
 body.is-cleanui:not(.fs-reveal) .fs-anim-bar { display: none !important; }
-#fsHide .eye-off { display: none; }            /* 常规：图标带斜杠 = 点它隐藏界面 */
-body.is-cleanui #fsHide .eye-off { display: inline; }   /* 隐藏态：斜杠消失 = 点它恢复 */
+#fsHide .eye-off { display: none; }            /* 甯歌锛氬浘鏍囧甫鏂滄潬 = 鐐瑰畠闅愯棌鐣岄潰 */
+body.is-cleanui #fsHide .eye-off { display: inline; }   /* 闅愯棌鎬侊細鏂滄潬娑堝け = 鐐瑰畠鎭㈠ */
 
-/* 全屏时舞台必须铺满整屏：窄屏媒体查询给 .stage 的固定 50vh/44vh 在这里全部作废，
-   否则手机竖屏全屏后内容只占上面一小块，下面一片空（2026-09-23 用户截图实测）。 */
+/* 鍏ㄥ睆鏃惰垶鍙板繀椤婚摵婊℃暣灞忥細绐勫睆濯掍綋鏌ヨ缁?.stage 鐨勫浐瀹?50vh/44vh 鍦ㄨ繖閲屽叏閮ㄤ綔搴燂紝
+   鍚﹀垯鎵嬫満绔栧睆鍏ㄥ睆鍚庡唴瀹瑰彧鍗犱笂闈竴灏忓潡锛屼笅闈竴鐗囩┖锛?026-09-23 鐢ㄦ埛鎴浘瀹炴祴锛夈€?*/
 body.is-immersive .body {
-  flex-direction: row;   /* 900px 断点改成了 column + 整页滚动，全屏不需要 */
+  flex-direction: row;   /* 900px 鏂偣鏀规垚浜?column + 鏁撮〉婊氬姩锛屽叏灞忎笉闇€瑕?*/
   overflow: hidden;
   display: flex;
 }
@@ -1567,13 +1552,13 @@ body.is-immersive .stage {
 }
 body.is-immersive .stage-inner { border-radius: 0; height: 100%; }
 
-/* 可收起的文件侧栏：全屏时从右侧滑出，点文件后自动收起 */
+/* 鍙敹璧风殑鏂囦欢渚ф爮锛氬叏灞忔椂浠庡彸渚ф粦鍑猴紝鐐规枃浠跺悗鑷姩鏀惰捣 */
 body.is-immersive .side-right {
   display: flex !important;
   position: fixed !important;
   top: 0;
   bottom: 0;
-  left: auto;   /* is-touch 的底部抽屉写了 left:0，不顶掉它面板会被钉在屏幕左边 */
+  left: auto;   /* is-touch 鐨勫簳閮ㄦ娊灞夊啓浜?left:0锛屼笉椤舵帀瀹冮潰鏉夸細琚拤鍦ㄥ睆骞曞乏杈?*/
   right: 0;
   width: min(78vw, 340px) !important;
   height: auto !important;
@@ -1589,21 +1574,19 @@ body.is-immersive .side-right.fs-open { transform: translateX(0) !important; }
 body.is-immersive .side-right::before { display: none; }
 body.is-immersive .sheet-scrim { z-index: 65; }
 
-/* ------------------------------------------------------------ 按分辨率做针对性适配
-   前端 boot 时会读物理分辨率 / 屏幕比例，往 body 上打标记类：
-     .scr-narrow  短边 < 400 或视口 < 420（竖屏手机）
-     .scr-tall    长:短 >= 1.95（现代全面屏 20:9 / 21:9）
-   布局关键差异以检测类 + 媒体查询双保险驱动，旋转 / 分屏时 resize 自动重估。 */
+/* ------------------------------------------------------------ 鎸夊垎杈ㄧ巼鍋氶拡瀵规€ч€傞厤
+   鍓嶇 boot 鏃朵細璇荤墿鐞嗗垎杈ㄧ巼 / 灞忓箷姣斾緥锛屽線 body 涓婃墦鏍囪绫伙細
+     .scr-narrow  鐭竟 < 400 鎴栬鍙?< 420锛堢珫灞忔墜鏈猴級
+     .scr-tall    闀?鐭?>= 1.95锛堢幇浠ｅ叏闈㈠睆 20:9 / 21:9锛?   甯冨眬鍏抽敭宸紓浠ユ娴嬬被 + 濯掍綋鏌ヨ鍙屼繚闄╅┍鍔紝鏃嬭浆 / 鍒嗗睆鏃?resize 鑷姩閲嶄及銆?*/
 
-/* 竖屏手机：右侧窄条只能显示半截文件名，全屏的文件面板改成从底部升起的全宽面板 */
+/* 绔栧睆鎵嬫満锛氬彸渚х獎鏉″彧鑳芥樉绀哄崐鎴枃浠跺悕锛屽叏灞忕殑鏂囦欢闈㈡澘鏀规垚浠庡簳閮ㄥ崌璧风殑鍏ㄥ闈㈡澘 */
 @media (max-width: 640px), (orientation: portrait) and (max-width: 900px) {
   body.is-immersive .side-right {
     top: auto;
     left: 0;
     right: 0;
     width: 100% !important;
-    /* !important 顶掉上面 immersive 规则里的 height:auto !important：
-       抽屉高度必须封顶，否则被列表内容撑到一万多 px（2026-09-23 实测翻车） */
+    /* !important 椤舵帀涓婇潰 immersive 瑙勫垯閲岀殑 height:auto !important锛?       鎶藉眽楂樺害蹇呴』灏侀《锛屽惁鍒欒鍒楄〃鍐呭鎾戝埌涓€涓囧 px锛?026-09-23 瀹炴祴缈昏溅锛?*/
     height: min(64vh, 520px) !important;
     max-height: 64vh !important;
     border-left: none;
@@ -1615,12 +1598,12 @@ body.is-immersive .sheet-scrim { z-index: 65; }
   body.is-immersive .side-right::before { display: block; }
 }
 
-/* 竖屏手机：顶部/底部操作区占掉大半屏，抽屉加高一点才放得下几行列表 */
+/* 绔栧睆鎵嬫満锛氶《閮?搴曢儴鎿嶄綔鍖哄崰鎺夊ぇ鍗婂睆锛屾娊灞夊姞楂樹竴鐐规墠鏀惧緱涓嬪嚑琛屽垪琛?*/
 @media (max-width: 640px), (orientation: portrait) {
   body.is-touch .side { height: 74%; max-height: 74%; }
 }
 
-/* 全面屏/竖屏手机：全屏顶栏收窄，别让文件名把资产切换挤下屏 */
+/* 鍏ㄩ潰灞?绔栧睆鎵嬫満锛氬叏灞忛《鏍忔敹绐勶紝鍒鏂囦欢鍚嶆妸璧勪骇鍒囨崲鎸や笅灞?*/
 body.scr-narrow .fsbar { gap: 8px; }
 @media (max-width: 640px) {
   body .fsbar { gap: 8px; padding: calc(6px + env(safe-area-inset-top, 0px)) 8px 8px; }
@@ -1631,10 +1614,10 @@ body.scr-narrow .fsbar { gap: 8px; }
   body .fs-mid { min-width: 0; }
   body .fs-anim-bar { gap: 8px; padding: 7px 10px; bottom: calc(10px + env(safe-area-inset-bottom, 0px)); }
 }
-/* 长屏机型顶部多为挖孔/刘海区，顶栏再让一截（safe-area 之外多加 6px） */
+/* 闀垮睆鏈哄瀷椤堕儴澶氫负鎸栧瓟/鍒樻捣鍖猴紝椤舵爮鍐嶈涓€鎴紙safe-area 涔嬪澶氬姞 6px锛?*/
 body.scr-tall .fsbar { padding-top: calc(12px + env(safe-area-inset-top, 0px)); }
 
-/* 手机端资产列表：文件名最多两行，副行单行省略，不再出现「每行断两字」的换行 */
+/* 鎵嬫満绔祫浜у垪琛細鏂囦欢鍚嶆渶澶氫袱琛岋紝鍓鍗曡鐪佺暐锛屼笉鍐嶅嚭鐜般€屾瘡琛屾柇涓ゅ瓧銆嶇殑鎹㈣ */
 body.is-touch .asset-item { min-width: 0; }
 body.is-touch .asset-item .ai-name {
   display: -webkit-box;
@@ -1644,10 +1627,8 @@ body.is-touch .asset-item .ai-name {
 }
 body.is-touch .asset-item .ai-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-/* 手机抽屉里的列表必须被抽屉自身裁剪、在抽屉内部滚动。
-   2026-09-23 实测：≤900px 媒体查询给的 .pane{overflow:visible} +
-   .asset-list{min-height:180px;max-height:54vh} 会把列表顶出抽屉底边，
-   资产名直接叠到底部快捷条上。这里全部作废，滚动权交给 pane。 */
+/* 鎵嬫満鎶藉眽閲岀殑鍒楄〃蹇呴』琚娊灞夎嚜韬鍓€佸湪鎶藉眽鍐呴儴婊氬姩銆?   2026-09-23 瀹炴祴锛氣墹900px 濯掍綋鏌ヨ缁欑殑 .pane{overflow:visible} +
+   .asset-list{min-height:180px;max-height:54vh} 浼氭妸鍒楄〃椤跺嚭鎶藉眽搴曡竟锛?   璧勪骇鍚嶇洿鎺ュ彔鍒板簳閮ㄥ揩鎹锋潯涓娿€傝繖閲屽叏閮ㄤ綔搴燂紝婊氬姩鏉冧氦缁?pane銆?*/
 body.is-touch .pane {
   overflow-y: auto !important;
   flex: 1 1 0 !important;
@@ -1663,9 +1644,8 @@ body.is-touch .layer-list {
   overflow: visible !important;
 }
 
-/* 右侧资产抽屉不是 .pane 结构（没有别的东西分担滚动），滚动权必须留给列表自己。
-   2026-09-24 实测：把 .asset-list 也改成 flex:0 0 auto + overflow:visible 后，
-   列表被内容撑高、超出抽屉被裁剪，手指怎么划都翻不动。 */
+/* 鍙充晶璧勪骇鎶藉眽涓嶆槸 .pane 缁撴瀯锛堟病鏈夊埆鐨勪笢瑗垮垎鎷呮粴鍔級锛屾粴鍔ㄦ潈蹇呴』鐣欑粰鍒楄〃鑷繁銆?   2026-09-24 瀹炴祴锛氭妸 .asset-list 涔熸敼鎴?flex:0 0 auto + overflow:visible 鍚庯紝
+   鍒楄〃琚唴瀹规拺楂樸€佽秴鍑烘娊灞夎瑁佸壀锛屾墜鎸囨€庝箞鍒掗兘缈讳笉鍔ㄣ€?*/
 body.is-touch .side-right .asset-list {
   flex: 1 1 0 !important;
   min-height: 0 !important;
@@ -1675,11 +1655,11 @@ body.is-touch .side-right .asset-list {
   overscroll-behavior: contain;
 }
 
-/* 顶栏在窄屏上被挤成三四行：压回「品牌一行 + 操作一行（横向滚动）」 */
+/* 椤舵爮鍦ㄧ獎灞忎笂琚尋鎴愪笁鍥涜锛氬帇鍥炪€屽搧鐗屼竴琛?+ 鎿嶄綔涓€琛岋紙妯悜婊氬姩锛夈€?*/
 @media (max-width: 640px) {
   body.is-touch .nav { flex-wrap: nowrap; padding: 5px 8px; gap: 6px; }
   body.is-touch .brand { flex: none; }
-  body.is-touch .brand > span:not(.logo) { display: none; }   /* 只留 🎬，文字标题让位给按钮 */
+  body.is-touch .brand > span:not(.logo) { display: none; }   /* 鍙暀 馃幀锛屾枃瀛楁爣棰樿浣嶇粰鎸夐挳 */
   body.is-touch .nav-actions {
     flex: 1;
     min-width: 0;
@@ -1693,10 +1673,10 @@ body.is-touch .side-right .asset-list {
   body.is-touch .nav-actions .select { max-width: 42vw; }
 }
 
-/* 底部标签：文字一律单行，标签名改短（见 index.html），不再折成两行 */
+/* 搴曢儴鏍囩锛氭枃瀛椾竴寰嬪崟琛岋紝鏍囩鍚嶆敼鐭紙瑙?index.html锛夛紝涓嶅啀鎶樻垚涓よ */
 .mtab { white-space: nowrap; font-size: 13.5px; }
 
-/* 目录状态条收起提示文字后，路径单行省略，不再三行铺满 */
+/* 鐩綍鐘舵€佹潯鏀惰捣鎻愮ず鏂囧瓧鍚庯紝璺緞鍗曡鐪佺暐锛屼笉鍐嶄笁琛岄摵婊?*/
 body.is-touch .storage-bar .sb-path {
   flex: 1 1 auto;
   min-width: 0;
@@ -1712,11 +1692,9 @@ body.is-touch .storage-bar .sb-toggle {
   user-select: none;
 }
 
-/* ------------------------------------------------------------ 手机首页占比
-   ≤900px 断点给 .stage 钉了 50vh/44vh 固定高度，而触屏模式下左右两栏
-   都改成了 absolute 抽屉（不占流式空间），结果舞台下面到快捷条之间
-   剩一大块谁也不填的空白（2026-09-24 用户截图实测）。
-   触屏非全屏时让舞台吃掉 .body 的全部剩余高度，进度条贴着快捷条。 */
+/* ------------------------------------------------------------ 鎵嬫満棣栭〉鍗犳瘮
+   鈮?00px 鏂偣缁?.stage 閽変簡 50vh/44vh 鍥哄畾楂樺害锛岃€岃Е灞忔ā寮忎笅宸﹀彸涓ゆ爮
+   閮芥敼鎴愪簡 absolute 鎶藉眽锛堜笉鍗犳祦寮忕┖闂达級锛岀粨鏋滆垶鍙颁笅闈㈠埌蹇嵎鏉′箣闂?   鍓╀竴澶у潡璋佷篃涓嶅～鐨勭┖鐧斤紙2026-09-24 鐢ㄦ埛鎴浘瀹炴祴锛夈€?   瑙﹀睆闈炲叏灞忔椂璁╄垶鍙板悆鎺?.body 鐨勫叏閮ㄥ墿浣欓珮搴︼紝杩涘害鏉¤创鐫€蹇嵎鏉°€?*/
 @media (max-width: 900px) {
   body.is-touch .body { flex-direction: column; overflow: hidden; }
   body.is-touch .stage {
@@ -1726,12 +1704,12 @@ body.is-touch .storage-bar .sb-toggle {
   }
 }
 
-/* 设置弹窗里的「文件目录」块：路径可换行，按钮自动折行 */
+/* 璁剧疆寮圭獥閲岀殑銆屾枃浠剁洰褰曘€嶅潡锛氳矾寰勫彲鎹㈣锛屾寜閽嚜鍔ㄦ姌琛?*/
 #setStoragePath { font-family: ui-monospace, Menlo, Consolas, monospace; color: #e6edf7; }
 #setStorageActions { margin-top: 2px; }
 
 
-/* ---- 需求 2：真实进度条（解包 / 扫描 / 缩略图 / 单资产加载） ---- */
+/* ---- 闇€姹?2锛氱湡瀹炶繘搴︽潯锛堣В鍖?/ 鎵弿 / 缂╃暐鍥?/ 鍗曡祫浜у姞杞斤級 ---- */
 .work-progress {
   display: flex;
   flex-direction: column;
@@ -1804,7 +1782,7 @@ body.is-touch .storage-bar .sb-toggle {
   opacity: .85;
 }
 .card.pending-unpack .card-thumb.pending::after {
-  content: '…';
+  content: '鈥?;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1813,9 +1791,7 @@ body.is-touch .storage-bar .sb-toggle {
   font-size: 20px;
 }
 
-/* 全屏：姿势条 + 皮肤下拉（BD2Viewer-fs-pose-skin.md §6）
-   放在底部动画条**上面**（它自己在 bottom:14px+safe-area，所以这里用 78px 错开）。
-   容器本身不吃点击，避免挡住画面拖拽；按钮和下拉自己 pointer-events:auto。 */
+/* 鍏ㄥ睆锛氬Э鍔挎潯 + 鐨偆涓嬫媺锛圔D2Viewer-fs-pose-skin.md 搂6锛?   鏀惧湪搴曢儴鍔ㄧ敾鏉?*涓婇潰**锛堝畠鑷繁鍦?bottom:14px+safe-area锛屾墍浠ヨ繖閲岀敤 78px 閿欏紑锛夈€?   瀹瑰櫒鏈韩涓嶅悆鐐瑰嚮锛岄伩鍏嶆尅浣忕敾闈㈡嫋鎷斤紱鎸夐挳鍜屼笅鎷夎嚜宸?pointer-events:auto銆?*/
 .fs-extra {
   position: fixed;
   left: 50%;
@@ -1883,5 +1859,14 @@ body.is-touch .storage-bar .sb-toggle {
   font: 14px/1.2 inherit;
   padding: 0 8px;
 }
-/* 「只看画面」时和顶栏、底栏一样藏起来 */
+/* 銆屽彧鐪嬬敾闈€嶆椂鍜岄《鏍忋€佸簳鏍忎竴鏍疯棌璧锋潵 */
 body.is-cleanui:not(.fs-reveal) .fs-extra { display: none !important; }
+
+/* ---------------- 更新日志弹窗（v1.1 起） ----------------
+   用现成的 .modal / .modal-body 骨架，这里只补「一段一段」的排版：
+   左侧一条竖线 + 版本号，右边是条目列表。列表用 padding-left 缩进，别用 list-style
+   （安卓 WebView 上默认圆点和文字基线对不齐）。 */
+.log-item { padding-left: 10px; border-left: 2px solid var(--g600); }
+.log-ver { font-size: 13px; font-weight: 600; color: var(--g200); margin-bottom: 4px; }
+.log-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+.log-list li { font-size: 13px; line-height: 1.55; color: var(--g300); }

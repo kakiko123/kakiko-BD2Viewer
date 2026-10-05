@@ -13,6 +13,12 @@
   <script src="/lib/spine-player-4.0.js"></script>
   <script src="/lib/spine-player-4.2.js"></script>
   <script src="/lib/jszip.min.js"></script>
+  <!-- 碧蓝航线：Cubism 4 核心（图鉴自带）→ pixi 6 → pixi-live2d-display → pixi-spine 3.8。
+       顺序不能换：cubism4 要 Live2DCubismCore 和 PIXI，pixi-spine 要 PIXI。 -->
+  <script src="/lib/live2dcubismcore.min.js"></script>
+  <script src="/lib/pixi.min.js"></script>
+  <script src="/lib/cubism4.min.js"></script>
+  <script src="/lib/pixi-spine-3.8.umd.js"></script>
   <script>
     /* 语言钉子：在样式表和 app.js 之前就把 <html lang> 定下来。
        理由和下面 body 上那个首屏类名一样 —— 语言是**首屏属性**，
@@ -295,13 +301,17 @@
                这是**全局单一切换**（不分目录），所以放在资产页标题行 —— 它就是
                「资产目录界面」本身，切完立刻按新规则重扫。
                游戏名是专名：中英界面都写原文，打 data-i18n-keep 只标记不翻译。 -->
-          <div class="gal-mode" id="galMode" role="group" data-i18n-aria="资产类型" aria-label="资产类型">
-            <button type="button" class="gm-btn" data-asset-mode="bd" aria-pressed="true" data-i18n-keep>BD2</button>
-            <button type="button" class="gm-btn" data-asset-mode="lostsword" aria-pressed="false" data-i18n-keep>Lost Sword</button>
-            <button type="button" class="gm-btn" data-asset-mode="nikke" aria-pressed="false" data-i18n-keep>NIKKE</button>
-            <button type="button" class="gm-btn" data-asset-mode="jczx" aria-pressed="false" data-i18n-keep>JCZX</button>
-            <button type="button" class="gm-btn" data-asset-mode="ark" aria-pressed="false" data-i18n-keep>星陨计划</button>
-          </div>
+          <!-- 六段资产类型改成**下拉条**：6 个按钮并排在小屏上把标题行挤爆了，
+               选择条既省地方、在手机上又是原生选择器（交互天然匹配触屏）。
+               状态仍然只有 S.mode 一个来源，控件只是它的显示（R1）。 -->
+          <select class="gal-mode-sel" id="galMode" data-i18n-aria="资产类型" aria-label="资产类型">
+            <option value="bd" data-i18n-keep>BD2</option>
+            <option value="lostsword" data-i18n-keep>Lost Sword</option>
+            <option value="nikke" data-i18n-keep>NIKKE</option>
+            <option value="jczx" data-i18n-keep>JCZX</option>
+            <option value="ark" data-i18n-keep>星陨计划</option>
+            <option value="al" data-i18n-keep>碧蓝航线</option>
+          </select>
           <!-- 播放顺序：手动（拖动） / 按名称 / 按日期 -->
           <div class="gal-sort" id="galSort" role="group" data-i18n-aria="播放顺序" aria-label="播放顺序">
             <span class="gs-pill" aria-hidden="true"></span>
@@ -470,6 +480,9 @@
         <button type="button" class="btn" id="btnExportLog" data-i18n="导出错误日志">导出错误日志</button>
       </div>
       <div class="muted small" data-i18n="把这次打开期间的载入和解包错误存成 bd2viewer-error-log.txt。">把这次打开期间的载入和解包错误存成 bd2viewer-error-log.txt。</div>
+      <div class="row">
+        <button type="button" class="btn" id="btnChangelog" data-i18n="更新日志">更新日志</button>
+      </div>
       <div class="muted small" id="envInfo"></div>
     </div>
     <div class="modal-foot">
@@ -561,6 +574,40 @@
     </div>
     <div class="modal-foot">
       <button class="btn primary" data-close="helpModal" data-i18n="知道了">知道了</button>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= 更新日志 =======================
+     版本号只有两个来源：桌面版读 app.js 里的 APP_VERSION，APK 读原生 BuildConfig.VERSION_NAME
+     （见 NativeBridge.appVersion）。这里**不写死版本号**，由 syncChangelogVersion() 填。 -->
+<div class="modal-mask" id="changelogModal" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <h3><span data-i18n="更新日志">更新日志</span> <span class="muted small" id="changelogVer"></span></h3>
+      <button class="icon-btn" data-close="changelogModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="log-item">
+        <div class="log-ver">1.1</div>
+        <ul class="log-list">
+          <li data-i18n="图层选择模式现在支持碧蓝航线的 Spine 3.8 与 Live2D：点画面即可选中该处真正画出来的那一层，高亮框跟着缩放平移走。">图层选择模式现在支持碧蓝航线的 Spine 3.8 与 Live2D：点画面即可选中该处真正画出来的那一层，高亮框跟着缩放平移走。</li>
+          <li data-i18n="碧蓝航线的多层骨架（同目录 _B / _M / _T）合并成一张卡并叠着渲染，不再只显示背景层。">碧蓝航线的多层骨架（同目录 _B / _M / _T）合并成一张卡并叠着渲染，不再只显示背景层。</li>
+          <li data-i18n="修复部分 Live2D 动作出现多余的手/手臂（动作里的部件不透明度曲线以前被运行时丢弃）。">修复部分 Live2D 动作出现多余的手/手臂（动作里的部件不透明度曲线以前被运行时丢弃）。</li>
+          <li data-i18n="恢复双击画面定点放大：2.6× → 6.8× → 12.4×，到顶再双击回到适配窗口。">恢复双击画面定点放大：2.6× → 6.8× → 12.4×，到顶再双击回到适配窗口。</li>
+        </ul>
+      </div>
+      <div class="log-item">
+        <div class="log-ver">1.09</div>
+        <ul class="log-list">
+          <li data-i18n="新增碧蓝航线档：Spine 3.8 二进制与 Live2D（moc3）播放，按角色/皮肤/形态归组。">新增碧蓝航线档：Spine 3.8 二进制与 Live2D（moc3）播放，按角色/皮肤/形态归组。</li>
+          <li data-i18n="资产类型改成下拉条；切模式不再重扫（会话快照 + 缓存）。">资产类型改成下拉条；切模式不再重扫（会话快照 + 缓存）。</li>
+        </ul>
+      </div>
+      <div class="muted small" data-i18n="完整历史见 APK 源码里的 CHANGELOG.md。">完整历史见 APK 源码里的 CHANGELOG.md。</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn primary" data-close="changelogModal" data-i18n="知道了">知道了</button>
     </div>
   </div>
 </div>

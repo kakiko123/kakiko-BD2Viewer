@@ -7,7 +7,7 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 
-export const MODE_SOURCE_FOLDERS = new Set(['bd2', 'nikke', 'lostsword', 'jczx'])
+export const MODE_SOURCE_FOLDERS = new Set(['bd2', 'nikke', 'lostsword', 'jczx', 'al'])
 
 export function isInside(rootAbs, fileAbs) {
   const root = path.resolve(rootAbs)

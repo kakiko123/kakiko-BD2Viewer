@@ -85,6 +85,28 @@ const writeLs = (dir, base, skelName, withThumb) => {
   if (withThumb) fs.writeFileSync(path.join(full, 'thumb.png'), PNG)
 }
 
+/** 碧蓝航线 Live2D：model3.json + 贴图（放子目录 textures/，真实数据就是这样）。
+ *  thumb: 'fresh' 缩略图比模型新 / 'stale' 比模型旧 / 'none' 没有缩略图。
+ *  三种都要造 —— 「同目录有 thumb.png」正是 2026-10-04 那次 al 整档扫不出来的触发条件。 */
+const writeAl = (dir, base, thumb) => {
+  const full = path.join(dataRoot, dir)
+  fs.mkdirSync(path.join(full, 'textures'), { recursive: true })
+  const model = path.join(full, `${base}.model3.json`)
+  fs.writeFileSync(model, JSON.stringify({
+    Version: 3,
+    FileReferences: { Textures: [`textures/${base}_0.png`], Motions: { idle: [{ File: 'motions/idle.motion3.json' }] } },
+  }), 'utf-8')
+  const tex = path.join(full, 'textures', `${base}_0.png`)
+  fs.writeFileSync(tex, PNG)
+  // 显式钉住 mtime，别指望「两个 write 之间时间会走」——NTFS 上可能落在同一毫秒
+  const T = (p, s) => fs.utimesSync(p, s, s)
+  if (thumb === 'none') { T(model, 1700000000); T(tex, 1700000000); return }
+  const t = path.join(full, 'thumb.png')
+  fs.writeFileSync(t, PNG)
+  if (thumb === 'fresh') { T(model, 1700000000); T(tex, 1700000100); T(t, 1700000200) }
+  else { T(t, 1700000200); T(model, 1700000300); T(tex, 1700000400) }
+}
+
 const exists = p => fs.existsSync(p)
 const kill = child => new Promise(res => {
   if (!child || child.exitCode !== null) return res()
@@ -102,6 +124,10 @@ try {
   writeLs('lsprefix', 'skull_Soldier_Green', 'skull_Soldier.skel.bytes', false)
   // 裸 .bytes = JSON 骨架
   writeLs('lsjson', 'beirin', null, false)
+  // 碧蓝航线 Live2D（al）：三条覆盖 relThumb 的三种结局
+  writeAl('alset', 'char_a', 'fresh')
+  writeAl('alnotmb', 'char_b', 'none')
+  writeAl('alstale', 'char_c', 'stale')
 
   const port = await freePort()
   fs.writeFileSync(cfgPath, JSON.stringify({
@@ -166,6 +192,43 @@ try {
     rt.ok && tb[0] === 0x89 && tb[1] === 0x50 &&
     (rt.headers.get('content-type') || '').startsWith('image/png'),
     `HTTP ${rt.status} ${rt.headers.get('content-type')} ${tb.length}B`)
+
+  /* ---------------------------------------------------- 碧蓝航线 Live2D（al）
+     2026-10-04 回归：`freshThumbRel` 的第 4 个参数（atlas 名）在 Live2D 这条路上是 null，
+     而它无条件 `path.join(dir, atlasName)` → TypeError(`Received null`) → **整个 al 扫描 500，
+     界面一条都不出**。触发条件是「model3.json 同目录有 thumb.png」（真实素材 1097 个模型里
+     有 19 个命中）。al_mode 套件的镜像里没放 thumb.png，所以一直没走到这行、假绿到今天。
+     这里必须**同时**造出「有 thumb / 无 thumb / thumb 过期」三种，才锁得住。 */
+  const alRes = await fetch(`${base}/api/scan?root=tmp&mode=al&refresh=1`)
+  const al = await alRes.json()
+  const l2d = (al.items || []).filter(i => i.kind === 'live2d').map(i => i.relAtlas).sort()
+  check('al 模式带 thumb.png 的 Live2D 不会把扫描带崩（HTTP 200 而不是 500）',
+    alRes.status === 200 && !al.error,
+    `HTTP ${alRes.status}${al.error ? ' error=' + al.error : ''}`)
+  check('al 模式三个 model3.json 全认出来、都标 kind=live2d', l2d.length === 3,
+    l2d.join(', ') || '（0 条）')
+  const alBy = new Map((al.items || []).filter(i => i.kind === 'live2d').map(i => [i.relAtlas, i]))
+  const aOk = alBy.get('alset/char_a.model3.json')
+  check('Live2D 贴图收在子目录 textures/ 也进 relImages，并带 motions 表',
+    !!aOk && aOk.relImages.join(',') === 'alset/textures/char_a_0.png' &&
+    aOk.skeletonKind === 'live2d' && (aOk.live2dMotions || []).join(',') === 'idle',
+    aOk ? `${aOk.relImages.join(',')} · motions=${(aOk.live2dMotions || []).join(',')}` : '（没这条）')
+  check('thumb.png 比模型新 → relThumb 指向它（卡面直接用落盘缩略图，不用离屏重渲）',
+    !!aOk && aOk.relThumb === 'alset/thumb.png', String(aOk && aOk.relThumb))
+  check('没有 thumb.png → relThumb 为 null（交给前端 makeLive2dThumb 离屏渲）',
+    alBy.get('alnotmb/char_b.model3.json')?.relThumb === null,
+    String(alBy.get('alnotmb/char_b.model3.json')?.relThumb))
+  check('thumb.png 比模型/贴图旧 → relThumb 为 null（过期缩略图不许贴到卡面）',
+    alBy.get('alstale/char_c.model3.json')?.relThumb === null,
+    String(alBy.get('alstale/char_c.model3.json')?.relThumb))
+  check('al 模式不会把标准导出的资产也当成 Live2D（kind 判得清）',
+    // ⚠️ 别只写 `.every()` —— 空数组恒真，扫描 500 时这条会假绿（变异测试逮到过）。
+    // 所以先钉住条数，再要求它**同时也**认出了标准导出的那套（bdset/hero.atlas）。
+    l2d.length === 3 &&
+    (al.items || []).filter(i => i.kind === 'live2d').every(i => i.relAtlas.endsWith('.model3.json')) &&
+    (al.items || []).some(i => i.kind !== 'live2d' && i.relAtlas === 'bdset/hero.atlas'),
+    `live2d 条数=${l2d.length} 总条数=${al.itemCount} 空数组恒真=` +
+    String((al.items || []).filter(i => i.kind === 'live2d').every(i => i.relAtlas.endsWith('.model3.json'))))
 
   /* ---------------------------------------------------- 传输 MIME */
   const mimeOf = async rel => (await fetch(`${base}/spine/tmp/${rel.split('/').map(encodeURIComponent).join('/')}`))

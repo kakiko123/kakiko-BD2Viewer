@@ -172,6 +172,145 @@ try {
     check('模型：继续点 → 再往下穿透', modelRes.third === modelRes.hits[2],
       `${modelRes.third} vs ${modelRes.hits[2]}`)
   }
+  /* ------------------------------------------------- 几何正确性 + 换算一致性
+     2026-10-04 定案：以前对**所有**附件都用射线法（把它当成一个环绕多边形），
+     而 mesh 的顶点是按**网格**排布的 —— 算出来的「内外」完全错，于是「点脸上选到衣服、
+     点身体选到背景」，高亮框也画成一团乱线。判据用**几何事实**：三角形重心必然在该层内。 */
+  const geo = await cdp.evaluate(`
+    const v = window.__bd2viewer
+    const p = v.player
+    if (!p || !p.skeleton) return { err: 'no-skeleton' }
+    const sk = p.skeleton
+    const rt = p.__spineRt
+    const canvasEl = p.canvas
+    const cw = canvasEl.clientWidth, ch = canvasEl.clientHeight
+    const rcam = p.sceneRenderer.camera
+    const host = document.getElementById('stageInner').getBoundingClientRect()
+
+    /* 采样**只取「射线法会漏」的点**：两种判定一致的点没有区分度（变异测试测不出来 ——
+       第一版就是这么假绿的：样本恰好都落在射线法也判对的区域）。这些点也正是用户会点错的地方。 */
+    const samples = []
+    let meshSeen = 0, skippedSame = 0
+    for (let si = sk.slots.length - 1; si >= 0 && samples.length < 30; si--) {
+      const slot = sk.slots[si]
+      const name = slot.data && slot.data.name
+      if (!name || v.state.hidden.has(name)) continue
+      const att = slot.getAttachment && slot.getAttachment()
+      if (!att || !att.triangles || att.triangles.length < 3) continue
+      meshSeen++
+      const n = att.worldVerticesLength
+      const verts = new Float32Array(n)
+      try { att.computeWorldVertices(slot, 0, n, verts, 0, 2) } catch { continue }
+      const t = att.triangles
+      for (let k = 0; k + 2 < t.length && samples.length < 30; k += 3) {
+        const a = t[k] * 2, b = t[k + 1] * 2, c = t[k + 2] * 2
+        const cxx = (verts[a] + verts[b] + verts[c]) / 3
+        const cyy = (verts[a + 1] + verts[b + 1] + verts[c + 1]) / 3
+        if (!Number.isFinite(cxx) || !Number.isFinite(cyy)) continue
+        // 用「没有 triangles 的附件」= 纯射线法复算同一点；它判中了就说明这题没区分度，跳过
+        if (v.isPointInAttachment(cxx, cyy, verts, {})) { skippedSame++; continue }
+        const pt = v.worldToClient(cxx, cyy)
+        if (!pt) continue
+        const hits = v.pickLayersAt(pt.x, pt.y)
+        samples.push({ layer: name, hit: hits.indexOf(name) >= 0, stack: hits.length })
+      }
+    }
+
+    // 真实数据上「射线法」会漏判多少：对每个可见附件的每个三角形取重心，
+    // 三角形法必然为 true，看射线法有多少次判 false（= 以前点这里选不中）
+    let rayMiss = 0, rayTotal = 0
+    const missByLayer = {}
+    for (let si = 0; si < sk.slots.length; si++) {
+      const slot = sk.slots[si]
+      const name = slot.data && slot.data.name
+      if (!name || v.state.hidden.has(name)) continue
+      const att = slot.getAttachment && slot.getAttachment()
+      if (!att || !att.triangles || att.triangles.length < 3) continue
+      const n = att.worldVerticesLength
+      const verts = new Float32Array(n)
+      try { att.computeWorldVertices(slot, 0, n, verts, 0, 2) } catch { continue }
+      const t = att.triangles
+      for (let k = 0; k + 2 < t.length; k += 3) {
+        const a = t[k] * 2, b = t[k + 1] * 2, c = t[k + 2] * 2
+        const px = (verts[a] + verts[b] + verts[c]) / 3
+        const py = (verts[a + 1] + verts[b + 1] + verts[c + 1]) / 3
+        if (!Number.isFinite(px) || !Number.isFinite(py)) continue
+        rayTotal++
+        const tri = v.isPointInAttachment(px, py, verts, att)
+        // 用射线法复算同一点：临时构造一个「没有 triangles」的附件对象
+        const ray = v.isPointInAttachment(px, py, verts, {})
+        if (tri && !ray) { rayMiss++; missByLayer[name] = (missByLayer[name] || 0) + 1 }
+      }
+    }
+
+    let diff = null
+    try {
+      const V3 = rt.Vector3
+      const w = v.state.bounds
+      const pts = [[w.offset.x, w.offset.y], [w.offset.x + w.size.x, w.offset.y + w.size.y]]
+      diff = pts.map(pair => {
+        const mine = v.worldToClient(pair[0], pair[1])
+        const r = rcam.worldToScreen(new V3(pair[0], pair[1], 0), cw, ch)
+        return {
+          dx: Math.round(Math.abs(mine.x - (host.left + r.x)) * 100) / 100,
+          dy: Math.round(Math.abs(mine.y - (host.top + (ch - r.y))) * 100) / 100,
+        }
+      })
+    } catch (e) { diff = { err: String(e && e.message) } }
+    return { samples, meshSeen, skippedSame, diff, rayMiss, rayTotal, missTop: Object.entries(missByLayer).sort((a, b) => b[1] - a[1]).slice(0, 5) }
+  `, 180000)
+  if (geo && geo.samples) {
+    const okN = geo.samples.filter(x => x.hit).length
+    const bad = geo.samples.filter(x => !x.hit).slice(0, 4).map(x => x.layer)
+    check('网格密集处（射线法会漏的那些点）点选必须命中它所在的图层',
+      geo.samples.length >= 10 && okN === geo.samples.length,
+      `${okN}/${geo.samples.length} 命中（扫到 ${geo.meshSeen} 个网格附件，另有 ${geo.skippedSame} 个点两法一致已跳过）` +
+      (bad.length ? ' · 漏掉：' + bad.join('/') : ''))
+  } else {
+    check('网格密集处（射线法会漏的那些点）点选必须命中它所在的图层', false, JSON.stringify(geo))
+  }
+  if (geo) {
+    console.log('    [诊断] 真实数据上射线法的漏判：' + geo.rayMiss + '/' + geo.rayTotal +
+      ' 个三角形重心（漏得最多的层：' + JSON.stringify(geo.missTop || []) + '）')
+  }
+  /* 纯函数锁：**构造一个 3×3 网格**（顶点按 row-major 排布、triangles 按标准切分）——
+     这是 mesh 的典型形状。射线法把 0→1→2→…→8→0 连成一条蛇形折线，判定结果与真实网格
+     差很多（离线算过：441 个采样点里 277 个分歧）。真实素材不一定含这种网格，
+     所以这条必须喂构造数据，否则断言不敏感（实测第一版就是假绿的）。 */
+  const pure = await cdp.evaluate(`
+    const v = window.__bd2viewer
+    const V = new Float32Array([
+      0,2, 1,2, 2,2,
+      0,1, 1,1, 2,1,
+      0,0, 1,0, 2,0,
+    ])
+    const TRI = [0,3,1, 1,3,4, 1,4,2, 2,4,5, 3,6,4, 4,6,7, 4,7,5, 5,7,8]
+    const mesh = { triangles: TRI }
+    const poly = {}   // 没有 triangles → 走旧的射线法
+    const inside = [[0.5,1.5],[1.5,1.5],[0.5,0.5],[1.5,0.5],[0.2,0.2],[1.8,1.8],[1.0,1.0]]
+    const outside = [[-0.5,1],[2.5,1],[1,-0.5],[1,2.5],[3,3]]
+    return {
+      hitInside: inside.map(p => v.isPointInAttachment(p[0], p[1], V, mesh)),
+      hitOutside: outside.map(p => v.isPointInAttachment(p[0], p[1], V, mesh)),
+      rayInside: inside.map(p => v.isPointInAttachment(p[0], p[1], V, poly)),
+    }
+  `, 30000)
+  check('网格附件：网格内的点必须命中（按三角形判定，不是拿顶点连成多边形）',
+    (pure.hitInside || []).every(Boolean) && (pure.hitInside || []).length >= 7,
+    `网格内 ${(pure.hitInside || []).filter(Boolean).length}/${(pure.hitInside || []).length} 命中 · ` +
+    `网格外误命中 ${(pure.hitOutside || []).filter(Boolean).length}/${(pure.hitOutside || []).length} · ` +
+    `同一批点用射线法只有 ${(pure.rayInside || []).filter(Boolean).length}/${(pure.rayInside || []).length}`)
+  check('网格附件：网格外的点不许命中', (pure.hitOutside || []).every(x => x === false),
+    JSON.stringify(pure.hitOutside))
+
+  if (geo && geo.diff && Array.isArray(geo.diff)) {
+    const maxD = Math.max(...geo.diff.map(d => Math.max(d.dx, d.dy)))
+    check('自建的「世界→屏幕」与 Spine 官方 worldToScreen 一致（差 < 1px）',
+      Number.isFinite(maxD) && maxD < 1,
+      `最大差 ${maxD}px（${JSON.stringify(geo.diff)}）`)
+  } else {
+    check('自建的「世界→屏幕」与 Spine 官方 worldToScreen 一致（差 < 1px）', false, JSON.stringify(geo && geo.diff))
+  }
 } catch (e) {
   check('执行', false, e && e.message)
 } finally {

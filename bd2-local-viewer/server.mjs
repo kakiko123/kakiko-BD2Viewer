@@ -84,6 +84,8 @@ function resolveLib(route) {
 const LIB_ROUTES = [
   '/lib/spine-player.js', '/lib/spine-player-4.0.js', '/lib/spine-player-4.2.js',
   '/lib/spine-player.css', '/lib/jszip.min.js',
+  '/lib/live2dcubismcore.min.js', '/lib/pixi.min.js', '/lib/cubism4.min.js',
+  '/lib/pixi-spine-3.8.umd.js',
 ]
 
 
@@ -100,6 +102,7 @@ const MIME = {
   '.gif': 'image/gif',
   '.atlas': 'text/plain; charset=utf-8',
   '.skel': 'application/octet-stream',
+  '.moc3': 'application/octet-stream',
   // Ark（星陨计划）档的语音。必须给真 MIME：<audio> 拿到 octet-stream 时
   // 浏览器不知道该走哪条解码路径，表现为「点了没反应」而不是报错。
   '.wav': 'audio/wav',
@@ -225,6 +228,28 @@ const FORMATS = {
     id: 'ark',
     classify(name) { return FORMATS.bd.classify(name) },
   },
+
+  /**
+   * 碧蓝航线。文件名仍是标准三件套（`<名>.atlas` + `<名>.skel` + `<名>.png`），
+   * 所以归桶复用 bd。差别在目录：就地整理后的三层
+   *   角色/<id>__<中文名>/<皮肤N>/{原皮|modN}/<形态>/
+   *   图鉴/<头像|背景|漫画|插画>/原皮/
+   * 归组在前端按路径完成。骨架多为 Spine 3.8.99 二进制（前端用 pixi-spine 播）。
+   * 同目录的 Cubism `*.model3.json` 另出一条 kind=live2d，不进 Spine 骨架桶。
+   */
+  al: {
+    id: 'al',
+    classify(name) {
+      const l = name.toLowerCase()
+      // Live2D 的 model3 / 物理 / 动作表不是 Spine 骨架。若按 .json 收进骨架桶，
+      // 目录里没有 .skel 时会被当成唯一骨架，和 .atlas 错配。
+      if (l.endsWith('.model3.json') || l.endsWith('.physics3.json')
+        || l.endsWith('.motions.json') || l.endsWith('.motion3.json')
+        || l === 'manifest.json' || l === 'animator-controller.json'
+        || l === 'prefab-runtime.json') return null
+      return FORMATS.bd.classify(name)
+    },
+  },
 }
 
 const DEFAULT_FORMAT = 'bd'
@@ -234,10 +259,49 @@ function formatOf(id) {
 }
 
 /**
- * 从二进制骨架文件头读出 minor（'4.0' / '4.1'）。
- * 布局：8 字节 hash → 1 字节长度 → "4.x.y\0"。读前 32 字节足够。
+ * Spine 3.8 二进制：开头是变长字符串（正优化 varint，0=null、1=空、否则长度=值-1）。
+ * 第一串是 hash，第二串才是 "3.8.99"。碧蓝航线的 .skel 实测 byte0=28、版本从第 29 字节开始，
+ * 只读 32 字节会把 "3.8.99" 切掉。读 64 字节再按这个布局取。
+ * 返回 '3.8' 这类 minor；对不上返回 null。不要在 hash 字节里搜版本号。
+ */
+function spine38MinorFromHead(buf) {
+  const readStr = (offset) => {
+    if (offset < 0 || offset >= buf.length) return null
+    let i = offset
+    let b = buf[i++]
+    let result = b & 0x7f
+    let shift = 7
+    while (b & 0x80) {
+      if (shift > 21 || i >= buf.length) return null
+      b = buf[i++]
+      result |= (b & 0x7f) << shift
+      shift += 7
+    }
+    if (result === 0 || result === 1) return { text: '', next: i }
+    const len = result - 1
+    if (len <= 0 || len > 64 || i + len > buf.length) return null
+    let s = ''
+    for (let k = 0; k < len; k++) {
+      const c = buf[i + k]
+      if (c < 32 || c > 126) return null
+      s += String.fromCharCode(c)
+    }
+    return { text: s, next: i + len }
+  }
+  const hash = readStr(0)
+  if (!hash || hash.text.length < 8) return null
+  const ver = readStr(hash.next)
+  if (!ver) return null
+  const m = /^3\.(\d+)\.\d+$/.exec(ver.text)
+  return m ? `3.${m[1]}` : null
+}
+
+/**
+ * 从二进制骨架文件头读出 minor（'4.0' / '4.1' / '4.2' / '3.8'）。
+ * 4.x 布局：8 字节 hash → 1 字节长度 → "4.x.y"。
+ * 3.x 布局见 spine38MinorFromHead。读前 64 字节。
  * 优先按布局偏移读版本串，避免 hash 字节里碰巧的 "4.0.x" 误导（与前端 / Android 同口径）。
- * JSON 骨架（.json / 裸 .bytes）不读文件，返回 null（按 4.1 线处理）。
+ * JSON 骨架（.json / 裸 .bytes）不走这里。
  */
 function spineMinorFromHead(buf) {
   if (!buf || !buf.length) return null
@@ -254,8 +318,10 @@ function spineMinorFromHead(buf) {
       if (vm) return `4.${vm[1]}`
     }
   }
+  const v3 = spine38MinorFromHead(buf)
+  if (v3) return v3
   let text = ''
-  const n = Math.min(buf.length, 32)
+  const n = Math.min(buf.length, 64)
   for (let i = 0; i < n; i++) text += String.fromCharCode(buf[i])
   const m = /4\.(\d)\.\d+/.exec(text)
   return m ? `4.${m[1]}` : null
@@ -274,8 +340,8 @@ async function spineMinorOfFile(absPath, kind) {
         return m ? `4.${m[1]}` : null
       }
       if (kind !== 'skel') return null
-      const buf = Buffer.alloc(32)
-      const { bytesRead } = await fh.read(buf, 0, 32, 0)
+      const buf = Buffer.alloc(64)
+      const { bytesRead } = await fh.read(buf, 0, 64, 0)
       return spineMinorFromHead(buf.subarray(0, bytesRead))
     } finally {
       await fh.close()
@@ -742,9 +808,15 @@ async function freshThumbRel(dir, rootPath, thumbName, atlasName, skelName, imag
   const thumbAbs = path.join(dir, thumbName)
   const tm = await mtimeOf(thumbAbs)
   if (!tm) return null
-  let newest = await mtimeOf(path.join(dir, atlasName))
+  // atlasName 可能**没有**：碧蓝航线的 Live2D 是 model3.json + 贴图，压根没有 atlas 文件
+  // （调用处传的就是 null）。以前这里无条件 `path.join(dir, atlasName)`，
+  // atlasName=null 时 `path.join` 直接 TypeError(`Received null`) → **整个 al 扫描 500、
+  // 一条都出不来**，而扫到「同目录带 thumb.png」的模型才会命中（2026-10-04 实测 1097 个
+  // model3.json 里有 19 个带 thumb.png）。没有 atlas 就跳过这一项，只比骨架与贴图。
+  let newest = atlasName ? await mtimeOf(path.join(dir, atlasName)) : 0
   if (skelName) newest = Math.max(newest, await mtimeOf(path.join(dir, skelName)))
   for (const n of imageNames || []) {
+    if (!n) continue
     newest = Math.max(newest, await mtimeOf(path.join(dir, n)))
   }
   if (tm < newest) return null
@@ -809,6 +881,82 @@ function jczxFormLabel(bundle) {
   if (m) return m[2]
   const t = s.replace(/^prefabs_spine_/i, '').replace(/_spine$/i, '').replace(/_/g, ' · ')
   return t || String(bundle || '')
+}
+
+/**
+ * 碧蓝航线 Live2D：每个 *.model3.json 一条。贴图写在 FileReferences.Textures，
+ * 相对模型所在目录（常常在子目录 textures/，walk 不会把它当成另一套 Spine）。
+ *
+ * ⚠️ 单个模型解析失败**不许拖垮整档**（2026-10-04：refreshThumbRel 里一个 null 参数
+ * 让整次 al 扫描 500，界面一条都不出）。所以逐条兜住并**在 stderr 报警** —— R26：
+ * 不许静默失败，宁可吵一点也不能悄悄吞掉。
+ */
+async function appendAlLive2d(dir, rootPath, entries, out) {
+  for (const entry of entries) {
+    if (!entry.isFile()) continue
+    if (!entry.name.toLowerCase().endsWith('.model3.json')) continue
+    try {
+      await appendAlLive2dOne(dir, rootPath, entry, entries, out)
+    } catch (err) {
+      console.error(`[scan al] ${path.join(dir, entry.name)} 解析失败，已跳过：${err && err.message}`)
+    }
+  }
+}
+
+async function appendAlLive2dOne(dir, rootPath, entry, entries, out) {
+  const rootAbs = path.resolve(rootPath)
+  const abs = path.join(dir, entry.name)
+  let doc = null
+  try {
+    doc = JSON.parse(stripBom(await fsp.readFile(abs, 'utf8')))
+  } catch {
+    return
+  }
+  const refs = doc && doc.FileReferences || {}
+  const textures = Array.isArray(refs.Textures) ? refs.Textures : []
+  const relImages = []
+  for (const tex of textures) {
+    const relTex = String(tex || '').replace(/\\/g, '/')
+    if (!relTex || relTex.includes('..')) continue
+    const absTex = path.resolve(dir, relTex)
+    if (!isInside(rootAbs, absTex)) continue
+    relImages.push(path.relative(rootPath, absTex).split(path.sep).join('/'))
+  }
+  const relModel = path.relative(rootPath, abs).split(path.sep).join('/')
+  const base = entry.name.replace(/\.model3\.json$/i, '')
+  const motions = refs.Motions && typeof refs.Motions === 'object' ? Object.keys(refs.Motions) : []
+  // ⚠️ relThumb **只能**是「离屏渲出来并落盘的 thumb.png」。以前这里拿 relImages[0] 顶上，
+  // 那是 Cubism 的贴图集（眼睛/头发/身体拆开铺在一张图上），前端 builtinThumbUrl 直接
+  // 贴到卡面上 → 卡片是零件图而不是拼好的人（docs/AL-PLAYBACK.md §2）。
+  // 没有 thumb.png 就返回 null，让前端走离屏渲染（makeLive2dThumb）。
+  const thumbEntry = entries.find(e => e.isFile() && e.name.toLowerCase() === 'thumb.png')
+  const relThumb = thumbEntry
+    ? await freshThumbRel(dir, rootPath, thumbEntry.name, null, entry.name,
+      textures.map(t => String(t || '').replace(/\\/g, '/').split('/').pop()))
+    : null
+  out.push({
+    id: relModel,
+    kind: 'live2d',
+    dir,
+    group: relModel.includes('/') ? relModel.split('/')[0] : '（根目录）',
+    folder: path.basename(dir),
+    base,
+    atlas: null,
+    relAtlas: relModel,
+    relModel,
+    relSkeleton: null,
+    skeleton: entry.name,
+    skeletonKind: 'live2d',
+    spineMinor: null,
+    live2dMotions: motions,
+    images: relImages.map(r => r.split('/').pop()),
+    relImages,
+    relThumb,
+    missingImages: [],
+    ok: relImages.length > 0,
+    mtime: await mtimeOf(abs),
+    problems: relImages.length ? [] : ['缺少贴图'],
+  })
 }
 
 async function walk(dir, depth, maxDepth, out, rootPath, fmt, arkMetaCache, jczxAux) {
@@ -1091,6 +1239,8 @@ async function walk(dir, depth, maxDepth, out, rootPath, fmt, arkMetaCache, jczx
       }
     }
   }
+
+  if (fmt.id === 'al') await appendAlLive2d(dir, rootPath, entries, out)
 
   for (const sub of subdirs) {
     await walk(sub, depth + 1, maxDepth, out, rootPath, fmt, arkMetaCache, jczxAux)

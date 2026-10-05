@@ -50,7 +50,10 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class ScanEngine {
     private static final String TAG = "BD2Scan";
     public static final int MAX_DEPTH = 6;
-    private static final int MAX_ITEMS = 2000;
+    /* 条目上限。2026-10-04 从 2000 提到 10000：碧蓝航线档实测已有 1711 条（还会随角色/皮肤增加），
+       离 2000 只剩不到 300 的余量 —— 一旦顶到就会在中途**截断**把排在后面的真实资产挤掉，
+       而且不报错。桌面端没有这个上限，截断还会造成两端内容不一致。 */
+    private static final int MAX_ITEMS = 10000;
 
     private static final Set<String> SKIP_DIRS = new HashSet<>(Arrays.asList(
             "node_modules", ".git", ".svn", "__pycache__", "$recycle.bin", "cache", "code_cache",
@@ -74,6 +77,7 @@ public final class ScanEngine {
 
     static final String K_ATLAS = "@atlas";
     static final String K_JSON = "@json";
+    static final String K_LIVE2D = "live2d";
     static final String K_SKEL = "@skel";
     static final String K_THUMB = "@thumb";
 
@@ -87,6 +91,9 @@ public final class ScanEngine {
      *  归桶直接复用 bd 那套。差别全在前端：读 meta.json 拿中文名/稀有度、一角色多形态归组、
      *  立绘与语音（.wav 不进资产桶，只当静态资源按需取）。 */
     static final String MODE_ARK = "ark";
+    /** 碧蓝航线：文件名与 bd 相同（.atlas + .skel + .png）。归组在前端按整理后的路径做。
+     *  骨架是 Spine 3.8.99 二进制，4.x 运行时播不了。 */
+    static final String MODE_AL = "al";
 
     /** classify() 的结果：这个文件在资产里扮演什么角色 */
     static final class Role {
@@ -112,9 +119,14 @@ public final class ScanEngine {
             if (IMG_EXT.contains(extOf(name))) return new Role(extOf(name), null);
             return null;
         }
-        // bd / nikke / jczx（抽出后）/ ark 共用同一套归桶规则。
+        // bd / nikke / jczx（抽出后）/ ark / al 共用同一套归桶规则。
         // NIKKE 差别在前端归组与骨架世代；JCZX 差别在扫描前先解包 AB；
         // Ark 差别在 meta.json 解析 + 一角色多形态归组（全在前端）。
+        // 碧蓝航线的 Live2D 副文件不是 Spine 骨架。model3 单独成桶。
+        if (MODE_AL.equals(mode) && alSidecarJson(l)) {
+            if (l.endsWith(".model3.json")) return new Role(K_LIVE2D, model3Base(name));
+            return null;
+        }
         if (l.endsWith(".atlas")) return new Role(K_ATLAS, baseName(name));
         if (l.endsWith(".skel")) return new Role(K_SKEL, baseName(name));
         if (l.endsWith(".json")) return new Role(K_JSON, baseName(name));
@@ -163,9 +175,175 @@ public final class ScanEngine {
         return baseName(name);
     }
 
-        /** 二进制骨架头 → '4.0' / '4.1' / null（与前端 spineMinorFor / server spineMinorFromHead 同一口径）。
-     *  优先按 Spine 布局读：[0..7] hash、[8] 长度、[9..] "4.x.y\0"；全头正则可能被 hash
-     *  字节里碰巧的 "4.0.x" 误导（NIKKE 解包实为 4.1 却判成 4.0 → 空动画）。 */
+    /** Live2D 配套 json，不能进 Spine 骨架桶。 */
+    private static boolean alSidecarJson(String lowerName) {
+        return lowerName.endsWith(".model3.json")
+                || lowerName.endsWith(".physics3.json")
+                || lowerName.endsWith(".motions.json")
+                || lowerName.endsWith(".motion3.json")
+                || lowerName.equals("manifest.json")
+                || lowerName.equals("animator-controller.json")
+                || lowerName.equals("prefab-runtime.json");
+    }
+
+    private static String model3Base(String name) {
+        String l = name.toLowerCase(Locale.ROOT);
+        if (l.endsWith(".model3.json")) return name.substring(0, name.length() - ".model3.json".length());
+        return baseName(name);
+    }
+
+    private static List<String> model3Textures(String json) {
+        List<String> textures = new ArrayList<>();
+        if (json == null || json.isEmpty()) return textures;
+        try {
+            JSONObject root = new JSONObject(json);
+            JSONObject refs = root.optJSONObject("FileReferences");
+            JSONArray tex = refs == null ? null : refs.optJSONArray("Textures");
+            if (tex == null) return textures;
+            for (int i = 0; i < tex.length(); i++) {
+                String t = tex.optString(i, "").replace('\\', '/');
+                if (t.isEmpty() || t.contains("..")) continue;
+                textures.add(t);
+            }
+        } catch (Exception ignored) {
+        }
+        return textures;
+    }
+
+    /**
+     * al 的卡面：只有**落盘过的** `thumb.png` 才算数，而且必须比模型和贴图都新。
+     * 与桌面 `server.mjs` 的 `appendAlLive2d` + `freshThumbRel` **同一口径**（R30 ⑤）：
+     * thumb 不存在 / mtime 拿不到（0，SAF 常见）/ 比源文件旧 → 一律 null，交给前端离屏重渲。
+     * @return 相对 root 的 thumb 路径，或 null
+     */
+    private static String freshLive2dThumb(Map<String, List<Entry>> byExt, String dirRel,
+                                           long modelMtime, List<String> textures) {
+        List<Entry> thumbs = byExt.getOrDefault(K_THUMB, new ArrayList<>());
+        if (thumbs.isEmpty()) return null;
+        Entry thumb = thumbs.get(0);
+        long tm = mtimeOf(thumb);
+        if (tm <= 0) return null;
+        long newest = modelMtime;
+        for (String t : textures) {
+            String base = new File(t).getName();
+            for (String ext : IMG_EXT) {
+                for (Entry f : byExt.getOrDefault(ext, new ArrayList<>())) {
+                    if (f.name.equals(base) || f.name.equalsIgnoreCase(base)) {
+                        newest = Math.max(newest, mtimeOf(f));
+                    }
+                }
+            }
+        }
+        return tm >= newest ? relOf(dirRel, thumb.name) : null;
+    }
+
+    /** SAF 版（同一口径）。SAF 的 mtime 常见为 0，拿不到就不认这个 thumb。 */
+    private static String freshLive2dThumbSaf(Map<String, List<SafEntry>> byExt, String relDir,
+                                              long modelMtime, List<String> textures) {
+        List<SafEntry> thumbs = byExt.getOrDefault(K_THUMB, new ArrayList<>());
+        if (thumbs.isEmpty()) return null;
+        SafEntry thumb = thumbs.get(0);
+        long tm = mtimeOf(thumb);
+        if (tm <= 0) return null;
+        long newest = modelMtime;
+        for (String t : textures) {
+            String base = new File(t).getName();
+            for (String ext : IMG_EXT) {
+                for (SafEntry f : byExt.getOrDefault(ext, new ArrayList<>())) {
+                    if (f.name.equals(base) || f.name.equalsIgnoreCase(base)) {
+                        newest = Math.max(newest, mtimeOf(f));
+                    }
+                }
+            }
+        }
+        return tm >= newest ? join(relDir, thumb.name) : null;
+    }
+
+    private static void putLive2d(JSONArray out, String dirRel, String fileName, String relModel,
+                                   List<String> textures, long mtime, String relThumb) throws Exception {
+        if (out.length() >= MAX_ITEMS) return;
+        JSONObject o = new JSONObject();
+        o.put("id", relModel);
+        o.put("kind", "live2d");
+        o.put("dir", dirRel == null || dirRel.isEmpty() ? "/" : dirRel);
+        o.put("group", relModel.contains("/") ? relModel.split("/")[0] : "（根目录）");
+        o.put("folder", folderOf(dirRel, "根目录"));
+        o.put("base", model3Base(fileName));
+        o.put("atlas", JSONObject.NULL);
+        o.put("relAtlas", relModel);
+        o.put("relModel", relModel);
+        o.put("relSkeleton", JSONObject.NULL);
+        o.put("skeleton", fileName);
+        o.put("skeletonKind", "live2d");
+        o.put("spineMinor", JSONObject.NULL);
+        JSONArray im = new JSONArray();
+        JSONArray rim = new JSONArray();
+        if (textures != null) {
+            for (String tex : textures) {
+                im.put(tex.substring(tex.lastIndexOf('/') + 1));
+                rim.put(dirRel == null || dirRel.isEmpty() ? tex : dirRel + "/" + tex);
+            }
+        }
+        o.put("images", im);
+        o.put("relImages", rim);
+        // ⚠️ 以前这里是 `relThumb = 贴图[0]`（Cubism 的**贴图集**：眼睛/头发/身体拆开铺在一张图上），
+        //    手机端 al 卡面一直显示的是「零件图」而不是拼好的人。桌面端 R30 ⑤ 早就改成
+        //    「同一运行时渲一帧并落盘 thumb.png」，安卓这边漏了。现在只认**落盘过的 thumb.png**，
+        //    没有就 null，让前端走离屏渲染（渲完会调 writeThumb 落盘，下次扫描直接命中）。
+        o.put("relThumb", relThumb == null ? JSONObject.NULL : relThumb);
+        o.put("missingImages", new JSONArray());
+        o.put("ok", rim.length() > 0);
+        JSONArray problems = new JSONArray();
+        if (rim.length() == 0) problems.put("缺少贴图");
+        o.put("problems", problems);
+        o.put("mtime", mtime);
+        out.put(o);
+    }
+
+        /** Spine 3.8 二进制：变长字符串 hash 之后才是 "3.8.99"。与前端 / server 同一口径。 */
+    static String spine38MinorFromHead(byte[] head) {
+        if (head == null || head.length < 8) return null;
+        int[] next = new int[1];
+        String hash = readSpineString(head, 0, next);
+        if (hash == null || hash.length() < 8) return null;
+        String ver = readSpineString(head, next[0], next);
+        if (ver == null) return null;
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("^3\\.(\\d+)\\.\\d+$").matcher(ver);
+        return m.find() ? ("3." + m.group(1)) : null;
+    }
+
+    /** 正优化 varint 字符串。0/1 当成空串；失败返回 null。nextOut[0] 写读完后的偏移。 */
+    static String readSpineString(byte[] buf, int offset, int[] nextOut) {
+        if (buf == null || offset < 0 || offset >= buf.length) return null;
+        int i = offset;
+        int b = buf[i++] & 0xff;
+        int result = b & 0x7f;
+        int shift = 7;
+        while ((b & 0x80) != 0) {
+            if (shift > 21 || i >= buf.length) return null;
+            b = buf[i++] & 0xff;
+            result |= (b & 0x7f) << shift;
+            shift += 7;
+        }
+        if (result == 0 || result == 1) {
+            nextOut[0] = i;
+            return "";
+        }
+        int len = result - 1;
+        if (len <= 0 || len > 64 || i + len > buf.length) return null;
+        StringBuilder sb = new StringBuilder(len);
+        for (int k = 0; k < len; k++) {
+            int c = buf[i + k] & 0xff;
+            if (c < 32 || c > 126) return null;
+            sb.append((char) c);
+        }
+        nextOut[0] = i + len;
+        return sb.toString();
+    }
+
+        /** 二进制骨架头 → '4.0' / '4.1' / '4.2' / '3.8' / null（与前端 spineMinorFor / server spineMinorFromHead 同一口径）。
+     *  优先按 Spine 4.x 布局读：[0..7] hash、[8] 长度、[9..] "4.x.y"；对不上再读 3.8 变长字符串。
+     *  全头正则可能被 hash 字节里碰巧的 "4.0.x" 误导（NIKKE 解包实为 4.1 却判成 4.0 → 空动画）。 */
     static String spineMinorFromHead(byte[] head) {
         if (head == null || head.length == 0) return null;
         if (head.length > 10) {
@@ -181,8 +359,10 @@ public final class ScanEngine {
                 if (vm.find()) return "4." + vm.group(1);
             }
         }
-        StringBuilder sb = new StringBuilder(32);
-        int n = Math.min(head.length, 32);
+        String v3 = spine38MinorFromHead(head);
+        if (v3 != null) return v3;
+        StringBuilder sb = new StringBuilder(64);
+        int n = Math.min(head.length, 64);
         for (int i = 0; i < n; i++) sb.append((char) (head[i] & 0xff));
         java.util.regex.Matcher m = java.util.regex.Pattern.compile("4\\.(\\d)\\.\\d+").matcher(sb.toString());
         return m.find() ? ("4." + m.group(1)) : null;
@@ -192,7 +372,7 @@ public final class ScanEngine {
         if (e == null || !K_SKEL.equals(kindBucket)) return null;
         if (e.file != null) {
             try (FileInputStream in = new FileInputStream(e.file)) {
-                byte[] buf = new byte[32];
+                byte[] buf = new byte[64];
                 int n = in.read(buf);
                 if (n <= 0) return null;
                 if (n < buf.length) {
@@ -208,13 +388,13 @@ public final class ScanEngine {
         return null;
     }
 
-    /** SAF：通过 DocumentsContract Uri 读骨架头前 32 字节 */
+    /** SAF：通过 DocumentsContract Uri 读骨架头前 64 字节 */
     static String spineMinorOfSafEntry(Context ctx, Uri tree, SafEntry e, String kindBucket) {
         if (ctx == null || tree == null || e == null || !K_SKEL.equals(kindBucket) || e.docId == null) return null;
         Uri uri = DocumentsContract.buildDocumentUriUsingTree(tree, e.docId);
         try (InputStream in = ctx.getContentResolver().openInputStream(uri)) {
             if (in == null) return null;
-            byte[] buf = new byte[32];
+            byte[] buf = new byte[64];
             int n = in.read(buf);
             if (n <= 0) return null;
             if (n < buf.length) {
@@ -271,7 +451,8 @@ public final class ScanEngine {
     private static final List<Root> ROOTS = new ArrayList<>();
 
     /* 扫描预算：选中 /sdcard 根目录时会面对几万个目录，没有上限就会一直跑 */
-    private static final int MAX_DIRS = 4000;
+    /* 目录上限。al 档目录层级本来就深且多（角色/皮肤/形态/mod 四层起步），4000 的余量偏小。 */
+    private static final int MAX_DIRS = 12000;
     private static final long SCAN_BUDGET_MS = 45000;
     private static int dirCount = 0;
     private static long deadline = 0;
@@ -314,6 +495,7 @@ public final class ScanEngine {
     public static final String SUB_LOSTSWORD = "lostsword";
     public static final String SUB_JCZX = "jczx";
     public static final String SUB_ARK = "ark";
+    public static final String SUB_AL = "al";
     /** 最近一次扫描/绑定的 mode，storageStatus / writeImport 用它挑子目录 */
     private static volatile String boundMode = MODE_BD;
 
@@ -322,11 +504,12 @@ public final class ScanEngine {
         if (MODE_LOSTSWORD.equals(mode)) return SUB_LOSTSWORD;
         if (MODE_JCZX.equals(mode)) return SUB_JCZX;
         if (MODE_ARK.equals(mode)) return SUB_ARK;
+        if (MODE_AL.equals(mode)) return SUB_AL;
         return SUB_BD;
     }
 
     public static String[] allModeFolders() {
-        return new String[]{SUB_BD, SUB_NIKKE, SUB_LOSTSWORD, SUB_JCZX, SUB_ARK};
+        return new String[]{SUB_BD, SUB_NIKKE, SUB_LOSTSWORD, SUB_JCZX, SUB_ARK, SUB_AL};
     }
 
     /** MediaStore 里拿到的一个文件条目（没有「全部文件访问」时只能这么读） */
@@ -591,6 +774,7 @@ public final class ScanEngine {
         if (SUB_LOSTSWORD.equals(folder)) return MODE_LOSTSWORD;
         if (SUB_JCZX.equals(folder)) return MODE_JCZX;
         if (SUB_ARK.equals(folder)) return MODE_ARK;
+        if (SUB_AL.equals(folder)) return MODE_AL;
         return MODE_BD;
     }
 
@@ -612,6 +796,8 @@ public final class ScanEngine {
                 + "    BD2Viewer/nikke/      ← NIKKE 模式\r\n"
                 + "    BD2Viewer/lostsword/  ← Lost Sword 模式\r\n"
                 + "    BD2Viewer/jczx/       ← 交错战线 JCZX（可直接放打包 AB）\r\n"
+                + "    BD2Viewer/ark/        ← 星陨计划\r\n"
+                + "    BD2Viewer/al/         ← 碧蓝航线\r\n"
                 + "\r\n"
                 + "BD2 / NIKKE / Lost Sword：一套 Spine 一个子文件夹（atlas + json/skel + png）。\r\n"
                 + "JCZX：把 prefabs_spine_* / UnityFS 包丢进 jczx/，App 扫描时自动解包到\r\n"
@@ -1289,6 +1475,20 @@ public final class ScanEngine {
             }
         }
         if (atlases.isEmpty() && MODE_JCZX.equals(mode)) emitCgStill(root, dirRel, byExt, out);
+        if (MODE_AL.equals(mode)) {
+            for (Entry e : byExt.getOrDefault(K_LIVE2D, new ArrayList<>())) {
+                if (out.length() >= MAX_ITEMS) break;
+                try {
+                    String rel = relOf(dirRel, e.name);
+                    long mm = mtimeOf(e);
+                    List<String> tex = model3Textures(readTextEntry(ctx, e));
+                    putLive2d(out, dirRel, e.name, rel, tex, mm, freshLive2dThumb(byExt, dirRel, mm, tex));
+                    indexEntry(root, e, rel);
+                } catch (Exception ex) {
+                    Log.w(TAG, "live2d: " + ex.getMessage());
+                }
+            }
+        }
     }
 
     /** JCZX 纯 CG：缓存目录里只有 png、没有 atlas。 */
@@ -1849,6 +2049,19 @@ public final class ScanEngine {
                 for (SafEntry f : images) indexSaf(root, tree, f.docId, join(relDir, f.name));
             } catch (Exception e) {
                 Log.w(TAG, "json: " + e.getMessage());
+            }
+        }
+        if (MODE_AL.equals(mode)) {
+            for (SafEntry e : byExt.getOrDefault(K_LIVE2D, new ArrayList<>())) {
+                if (out.length() >= MAX_ITEMS) break;
+                try {
+                    String rel = join(relDir, e.name);
+                    List<String> tex = model3Textures(readTextSaf(ctx, e.docId, tree));
+                    putLive2d(out, relDir, e.name, rel, tex, 0, freshLive2dThumbSaf(byExt, relDir, 0, tex));
+                    indexSaf(root, tree, e.docId, rel);
+                } catch (Exception ex) {
+                    Log.w(TAG, "live2d saf: " + ex.getMessage());
+                }
             }
         }
     }

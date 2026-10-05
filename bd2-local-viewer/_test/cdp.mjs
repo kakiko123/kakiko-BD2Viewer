@@ -175,6 +175,18 @@ export class Cdp {
   async close() {
     try { this.ws.close() } catch { /* ignore */ }
     try { this.proc.kill() } catch { /* ignore */ }
+    // kill() 是异步的：不等它真退干净就动 --user-data-dir 会出两种事 ——
+    // ① 紧接着用同一目录再起一个 Chrome，会撞上 SingletonLock（要么被旧进程接管、
+    //    要么读到一个写了一半的目录）；② rmSync 因为文件还被占着而删不掉，
+    //    「该删的没删」反过来变成「该留的被删一半」。所以这里一律等到 exit。
+    const proc = this.proc
+    if (proc && proc.exitCode === null && proc.signalCode === null) {
+      await new Promise(res => {
+        const done = () => res()
+        proc.once('exit', done)
+        setTimeout(done, 5000)      // 兜底：卡住也不能把整个套件挂死
+      })
+    }
     if (this.profileOwned) {
       try { fs.rmSync(this.profile, { recursive: true, force: true }) } catch { /* ignore */ }
     }

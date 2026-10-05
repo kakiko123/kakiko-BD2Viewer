@@ -13,7 +13,7 @@ public final class UnpackCacheHome {
     private UnpackCacheHome() {}
 
     public static final Set<String> MODE_SOURCE_FOLDERS = new HashSet<>(Arrays.asList(
-            "bd2", "nikke", "lostsword", "jczx", "ark"));
+            "bd2", "nikke", "lostsword", "jczx", "ark", "al"));
 
     /** 扫描模式 → 它在 /sdcard/BD2Viewer 下的文件夹名。 */
     public static String folderOfMode(String mode) {

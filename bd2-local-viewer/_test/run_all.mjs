@@ -49,6 +49,10 @@ const SUITES = [
   // 图层点选：重复点同一图层往下挪一层（列表 + 模型两个入口）。同样用 Chrome，
   // 所以必须排在 native_mode 之后。需 BD2_JCZX_ROOT（真实骨架才有够多图层可点）。
   { name: 'layer_pick',        file: 'layer_pick.mjs',        needs: null,        data: true,  desc: '图层点选：再次选中同一图层 → 往下一层（需 BD2_JCZX_ROOT，否则跳过）' },
+  // 碧蓝航线：卡面缩略图（不许拿贴图当卡面）+ Live2D 不许被挂两次 Ticker。同样用 Chrome。
+  { name: 'al_mode',           file: 'al_mode.mjs',           needs: null,        data: true,  desc: '碧蓝航线档：3.8/Live2D 卡面离屏渲染、Live2D 播放速度（需 BD2_AL_ROOT，否则跳过）' },
+  // 扫描缓存：冷启动先垫上次的结果（需 BD2_JCZX_ROOT，1625 条才有可观测的扫描耗时）
+  { name: 'scan_cache',        file: 'scan_cache.mjs',        needs: null,        data: true,  desc: '扫描结果缓存：冷启动先贴上次条目，真扫描收尾后替换（需 BD2_JCZX_ROOT，否则跳过）' },
 ]
 
 /** 服务端口 → 启动参数 */
